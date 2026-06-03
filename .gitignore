@@ -34,3 +34,4 @@ data/slm_training/*.jsonl
 
 # Logs
 *.log
+.claude/worktrees/
