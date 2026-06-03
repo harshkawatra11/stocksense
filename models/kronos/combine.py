@@ -18,16 +18,18 @@ async def refresh_weights_from_db():
     global _lgbm_weight, _kronos_weight
     try:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
-        rows = await conn.fetch(
-            """
-            SELECT model_name, AVG(accuracy) AS avg_acc
-            FROM model_accuracy
-            WHERE created_at >= NOW() - INTERVAL '7 days'
-              AND model_name IN ('lgbm', 'kronos')
-            GROUP BY model_name
-            """,
-        )
-        await conn.close()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT model_name, AVG(accuracy) AS avg_acc
+                FROM model_accuracy
+                WHERE created_at >= NOW() - INTERVAL '7 days'
+                  AND model_name IN ('lgbm', 'kronos')
+                GROUP BY model_name
+                """,
+            )
+        finally:
+            await conn.close()
 
         accs = {r["model_name"]: float(r["avg_acc"]) for r in rows if r["avg_acc"]}
         lgbm_acc = accs.get("lgbm")
