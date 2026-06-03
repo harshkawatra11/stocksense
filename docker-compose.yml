@@ -1,0 +1,65 @@
+version: "3.9"
+
+# NOTE: Ollama is NOT in Docker — it runs directly on the host to use the GPU.
+# Set OLLAMA_URL=http://host-gateway:11434 if you need containers to reach it,
+# or keep the default http://localhost:11434 when running the backend outside Docker.
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: stocksense
+      POSTGRES_PASSWORD: stocksense
+      POSTGRES_DB: stocksense
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./data/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stocksense -d stocksense"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: python:3.11-slim
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      sh -c "pip install -r requirements.txt -q &&
+             uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    volumes:
+      - /home/user/stocksense:/app
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stocksense:stocksense@db:5432/stocksense
+      DATABASE_DSN: postgresql://stocksense:stocksense@db:5432/stocksense
+    depends_on:
+      db:
+        condition: service_healthy
+
+  scheduler:
+    image: python:3.11-slim
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      sh -c "pip install -r requirements.txt -q &&
+             python -m scheduler.market_runner"
+    volumes:
+      - /home/user/stocksense:/app
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stocksense:stocksense@db:5432/stocksense
+      DATABASE_DSN: postgresql://stocksense:stocksense@db:5432/stocksense
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

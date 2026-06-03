@@ -1,1 +1,36 @@
 .claude/worktrees/
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
+
+# Model artefacts (large binaries — train locally)
+*.pkl
+models/ml/saved/*.pkl
+models/kronos/weights/
+models/slm/adapters/
+
+# Raw NSE data downloads (large, re-downloadable)
+data/nse_raw/
+
+# SLM training data (generated, not source-controlled)
+data/slm_training/*.jsonl
+
+# Logs
+*.log
