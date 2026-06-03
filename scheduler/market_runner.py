@@ -74,6 +74,37 @@ async def task_eod_review():
         log.error(f"EOD review failed: {e}", exc_info=True)
 
 
+async def task_refresh_weights():
+    """Refresh combine.py model weights from rolling DB accuracy."""
+    try:
+        from models.kronos.combine import refresh_weights_from_db
+        await refresh_weights_from_db()
+    except Exception as e:
+        log.warning(f"Weight refresh failed: {e}")
+
+
+async def task_accuracy_tracker():
+    """Compute rolling 7-day accuracy + dynamic weight adjustment."""
+    log.info("Starting accuracy tracker...")
+    try:
+        from intelligence.accuracy_tracker import run_accuracy_tracker
+        await run_accuracy_tracker()
+        log.info("Accuracy tracker complete.")
+    except Exception as e:
+        log.error(f"Accuracy tracker failed: {e}", exc_info=True)
+
+
+async def task_weekend_review():
+    """Saturday deep review via Claude Opus."""
+    log.info("Starting weekend review...")
+    try:
+        from scheduler.weekend_job import run_weekend_review
+        await run_weekend_review()
+        log.info("Weekend review complete.")
+    except Exception as e:
+        log.error(f"Weekend review failed: {e}", exc_info=True)
+
+
 async def task_ticker_sync():
     """Sync NSE equity ticker list to DB."""
     log.info("Syncing NSE ticker list...")
@@ -132,12 +163,39 @@ def build_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # EOD review: Mon-Fri at 7:00 PM IST
+    # EOD review: Mon-Fri at 3:45 PM IST (15 min after market close)
     scheduler.add_job(
         task_eod_review,
-        CronTrigger(day_of_week="mon-fri", hour=19, minute=0),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=45),
         id="eod_review",
         name="EOD Claude review",
+        replace_existing=True,
+    )
+
+    # Refresh combine weights every hour during market hours
+    scheduler.add_job(
+        task_refresh_weights,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute=5),
+        id="refresh_weights",
+        name="Refresh model combine weights",
+        replace_existing=True,
+    )
+
+    # Accuracy tracker: Mon-Fri at 8:00 PM IST (after EOD review)
+    scheduler.add_job(
+        task_accuracy_tracker,
+        CronTrigger(day_of_week="mon-fri", hour=20, minute=0),
+        id="accuracy_tracker",
+        name="Rolling accuracy + weight adjustment",
+        replace_existing=True,
+    )
+
+    # Weekend deep review: Saturday 9:00 AM IST
+    scheduler.add_job(
+        task_weekend_review,
+        CronTrigger(day_of_week="sat", hour=9, minute=0),
+        id="weekend_review",
+        name="Weekend Claude Opus deep review",
         replace_existing=True,
     )
 
