@@ -35,3 +35,5 @@ data/slm_training/*.jsonl
 # Logs
 *.log
 .claude/worktrees/
+frontend/dist
+frontend/node_modules

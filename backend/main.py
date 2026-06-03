@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from data.db.database import init_db, get_session
 from backend.routers import signals, portfolio, logs, accuracy
-from data.pipeline.fetch_historical import NSE_TICKERS
+from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS as NSE_TICKERS
 from intelligence.signal_pipeline import run_pipeline_batch, save_signal
 from intelligence.claude_cli import intraday_signal_check
 

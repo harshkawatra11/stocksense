@@ -51,11 +51,13 @@ def slm_enrich(
         }
 
     system_prompt = _build_system_prompt()
+    position_str = "HELD" if portfolio_held else "NOT HELD"
+    learnings_block = ("Recent Market Learnings:\n" + learnings_context) if learnings_context else ""
     user_prompt = f"""
 Stock: {ticker}
 Current Price: ₹{price:.2f}
 Signal from models: {signal} (confidence: {confidence*100:.1f}%)
-Portfolio position: {"HELD" if portfolio_held else "NOT HELD"}
+Portfolio position: {position_str}
 
 ML Model Reasoning:
 {ml_reasoning}
@@ -63,7 +65,7 @@ ML Model Reasoning:
 Kronos Forecast Reasoning:
 {kronos_reasoning}
 
-{"Recent Market Learnings:\n" + learnings_context if learnings_context else ""}
+{learnings_block}
 
 Based on NSE market patterns, provide:
 1. Your assessment (CONFIRM/REJECT/MODIFY the signal)

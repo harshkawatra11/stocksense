@@ -10,7 +10,9 @@ from sqlalchemy import (
     Column, Integer, String, Numeric, Boolean, Text,
     ARRAY, DateTime, BigInteger, ForeignKey,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMPTZ
+from sqlalchemy.dialects.postgresql import JSONB
+
+TIMESTAMPTZ = DateTime(timezone=True)
 
 from config import settings
 

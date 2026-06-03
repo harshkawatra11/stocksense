@@ -1,254 +1,261 @@
 """
-Feature engineering for LightGBM. Takes OHLCV DataFrame, returns feature DataFrame.
-All features computed in-place, no lookahead.
+Feature engineering for LightGBM. Pure pandas/numpy — no external TA library required.
+All features computed in-place, no lookahead bias.
 Includes F&O features: delivery_pct, oi_change_pct, pcr (put-call ratio).
 """
 from __future__ import annotations
 
-import pandas as pd
 import numpy as np
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.trend import MACD, EMAIndicator, SMAIndicator
-from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import OnBalanceVolumeIndicator, VolumeWeightedAveragePrice
+import pandas as pd
 
 
-# Expanded SECTOR_MAP covering 200+ NSE stocks as fallback
+# ---------------------------------------------------------------------------
+# Sector map — 200+ NSE stocks
+# ---------------------------------------------------------------------------
 SECTOR_MAP = {
-    # Energy / Oil & Gas
     "RELIANCE": "Energy", "ONGC": "Energy", "BPCL": "Energy", "IOC": "Energy",
-    "HPCL": "Energy", "GAIL": "Energy", "PETRONET": "Energy", "GSPL": "Energy",
-    "ADANIGAS": "Energy", "IGL": "Energy", "MGL": "Energy", "GUJGASLTD": "Energy",
-    "MRPL": "Energy", "CPCL": "Energy",
-    # Banking
-    "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking", "KOTAKBANK": "Banking",
-    "AXISBANK": "Banking", "INDUSINDBK": "Banking", "BANKBARODA": "Banking", "PNB": "Banking",
-    "CANBK": "Banking", "UNIONBANK": "Banking", "IDFCFIRSTB": "Banking", "FEDERALBNK": "Banking",
-    "BANDHANBNK": "Banking", "RBLBANK": "Banking", "YESBANK": "Banking", "INDIANB": "Banking",
-    "BANKINDIA": "Banking", "IOB": "Banking", "UCOBANK": "Banking", "CENTRALBK": "Banking",
-    "MAHABANK": "Banking", "PSB": "Banking",
-    # IT / Technology
+    "HPCL": "Energy", "GAIL": "Energy", "PETRONET": "Energy", "IGL": "Energy",
+    "MGL": "Energy", "GUJGASLTD": "Energy", "MRPL": "Energy",
+    "HDFCBANK": "Banking", "ICICIBANK": "Banking", "SBIN": "Banking",
+    "KOTAKBANK": "Banking", "AXISBANK": "Banking", "INDUSINDBK": "Banking",
+    "BANKBARODA": "Banking", "PNB": "Banking", "CANBK": "Banking",
+    "UNIONBANK": "Banking", "IDFCFIRSTB": "Banking", "FEDERALBNK": "Banking",
+    "BANDHANBNK": "Banking", "RBLBANK": "Banking", "YESBANK": "Banking",
+    "INDIANB": "Banking", "BANKINDIA": "Banking",
     "TCS": "IT", "INFY": "IT", "WIPRO": "IT", "HCLTECH": "IT", "TECHM": "IT",
     "LTIM": "IT", "PERSISTENT": "IT", "COFORGE": "IT", "MPHASIS": "IT",
-    "KPITTECH": "IT", "TATAELXSI": "IT", "CYIENT": "IT", "NIIT": "IT",
-    "TANLA": "IT", "ROUTE": "IT", "STLTECH": "IT", "HFCL": "IT", "TEJASNET": "IT",
-    "MASTEK": "IT", "HEXAWARE": "IT", "L&TTECH": "IT", "BIRLASOFT": "IT",
-    # Pharma / Healthcare
-    "SUNPHARMA": "Pharma", "DRREDDY": "Pharma", "CIPLA": "Pharma", "DIVISLAB": "Pharma",
-    "AUROPHARMA": "Pharma", "TORNTPHARM": "Pharma", "IPCALAB": "Pharma", "ALKEM": "Pharma",
-    "SYNGENE": "Pharma", "BIOCON": "Pharma", "LUPIN": "Pharma", "ZYDUSLIFE": "Pharma",
-    "MANKIND": "Pharma", "ABBOTINDIA": "Pharma", "PFIZER": "Pharma", "AJANTPHARM": "Pharma",
-    "LAURUSLABS": "Pharma", "GRANULES": "Pharma", "NATCOPHARM": "Pharma",
-    "LALPATHLAB": "Healthcare", "METROPOLIS": "Healthcare", "THYROCARE": "Healthcare",
-    "APOLLOHOSP": "Healthcare", "FORTIS": "Healthcare", "NARAYANAHRUL": "Healthcare",
-    # Auto / Auto Ancillary
-    "TATAMOTORS": "Auto", "MARUTI": "Auto", "HEROMOTOCO": "Auto", "BAJAJ-AUTO": "Auto",
-    "EICHERMOT": "Auto", "MOTHERSON": "Auto", "BOSCHLTD": "Auto", "BHARATFORG": "Auto",
-    "CUMMINSIND": "Auto", "SCHAEFFLER": "Auto", "MAHINDCIE": "Auto", "EXIDEIND": "Auto",
-    "AMARAJABAT": "Auto", "SUNDARMFIN": "Auto", "TIINDIA": "Auto", "MRF": "Auto",
-    "APOLLOTYRE": "Auto", "CEATLTD": "Auto", "BALKRISIND": "Auto",
-    # FMCG / Consumer
-    "HINDUNILVR": "FMCG", "ITC": "FMCG", "NESTLEIND": "FMCG", "BRITANNIA": "FMCG",
-    "DABUR": "FMCG", "MARICO": "FMCG", "TATACONSUM": "FMCG", "EMAMILTD": "FMCG",
-    "GODREJCP": "FMCG", "COLPAL": "FMCG", "PGHH": "FMCG", "GILLETTE": "FMCG",
-    "VBL": "FMCG", "RADICO": "FMCG", "UNITEDBRW": "FMCG",
-    # Retail / Consumer Discretionary
-    "TRENT": "Retail", "DMART": "Retail", "PAGEIND": "Retail", "RELAXO": "Retail",
-    "BATA": "Retail", "VMART": "Retail", "SHOPERSTOP": "Retail", "NYKAA": "Retail",
-    # Telecom
-    "BHARTIARTL": "Telecom", "INDIAMART": "Telecom",
-    # Infrastructure / Capital Goods
+    "KPITTECH": "IT", "TATAELXSI": "IT", "CYIENT": "IT", "TANLA": "IT",
+    "ROUTE": "IT", "MASTEK": "IT", "BIRLASOFT": "IT",
+    "SUNPHARMA": "Pharma", "DRREDDY": "Pharma", "CIPLA": "Pharma",
+    "DIVISLAB": "Pharma", "AUROPHARMA": "Pharma", "TORNTPHARM": "Pharma",
+    "IPCALAB": "Pharma", "ALKEM": "Pharma", "SYNGENE": "Pharma",
+    "BIOCON": "Pharma", "LUPIN": "Pharma", "ZYDUSLIFE": "Pharma",
+    "MANKIND": "Pharma", "LAURUSLABS": "Pharma", "GRANULES": "Pharma",
+    "LALPATHLAB": "Healthcare", "METROPOLIS": "Healthcare",
+    "APOLLOHOSP": "Healthcare", "FORTIS": "Healthcare",
+    "TATAMOTORS": "Auto", "MARUTI": "Auto", "HEROMOTOCO": "Auto",
+    "BAJAJ-AUTO": "Auto", "EICHERMOT": "Auto", "MOTHERSON": "Auto",
+    "BOSCHLTD": "Auto", "BHARATFORG": "Auto", "EXIDEIND": "Auto",
+    "MRF": "Auto", "APOLLOTYRE": "Auto", "CEATLTD": "Auto", "BALKRISIND": "Auto",
+    "HINDUNILVR": "FMCG", "ITC": "FMCG", "NESTLEIND": "FMCG",
+    "BRITANNIA": "FMCG", "DABUR": "FMCG", "MARICO": "FMCG",
+    "TATACONSUM": "FMCG", "EMAMILTD": "FMCG", "GODREJCP": "FMCG",
+    "COLPAL": "FMCG", "VBL": "FMCG",
+    "TRENT": "Retail", "DMART": "Retail", "PAGEIND": "Retail",
+    "RELAXO": "Retail", "BATA": "Retail", "NYKAA": "Retail",
+    "BHARTIARTL": "Telecom",
     "LT": "Infra", "SIEMENS": "Infra", "ABB": "Infra", "BHEL": "Infra",
-    "THERMAX": "Infra", "CUMMINSIND": "Infra", "APLAPOLLO": "Infra",
-    "JINDALSAW": "Infra", "WELCORP": "Infra",
-    # Power / Utilities
-    "NTPC": "Power", "POWERGRID": "Power", "ADANIGREEN": "Power", "ADANITRANS": "Power",
+    "NTPC": "Power", "POWERGRID": "Power", "ADANIGREEN": "Power",
     "TATAPOWER": "Power", "TORNTPOWER": "Power", "CESC": "Power",
-    "NHPC": "Power", "SJVN": "Power", "INOXWIND": "Power",
-    # Cement
     "ULTRACEMCO": "Cement", "AMBUJACEM": "Cement", "ACC": "Cement",
-    "SHREECEM": "Cement", "DALMIACEM": "Cement", "JKCEMENT": "Cement",
-    "RAMCOCEM": "Cement", "HEIDELBERG": "Cement", "BIRLACORPN": "Cement",
-    # Metals / Mining
+    "SHREECEM": "Cement", "DALMIACEM": "Cement",
     "TATASTEEL": "Metals", "JSWSTEEL": "Metals", "HINDALCO": "Metals",
-    "VEDL": "Metals", "NMDC": "Metals", "SAIL": "Metals", "JINDALSTEL": "Metals",
-    "COALINDIA": "Metals", "MOIL": "Metals", "NATIONALUM": "Metals",
-    # Real Estate
+    "VEDL": "Metals", "NMDC": "Metals", "SAIL": "Metals", "COALINDIA": "Metals",
     "DLF": "RealEstate", "GODREJPROP": "RealEstate", "OBEROIRLTY": "RealEstate",
-    "PRESTIGE": "RealEstate", "BRIGADE": "RealEstate", "PHOENIXLTD": "RealEstate",
-    "MAHLIFE": "RealEstate",
-    # NBFC / Financial Services
+    "PRESTIGE": "RealEstate", "BRIGADE": "RealEstate",
     "BAJFINANCE": "NBFC", "BAJAJFINSV": "NBFC", "CHOLAFIN": "NBFC",
-    "MUTHOOTFIN": "NBFC", "MANAPPURAM": "NBFC", "SHRIRAMFIN": "NBFC",
-    "LTFH": "NBFC", "RECLTD": "NBFC", "PFC": "NBFC", "IRFC": "NBFC",
-    # Insurance
+    "MUTHOOTFIN": "NBFC", "SHRIRAMFIN": "NBFC", "RECLTD": "NBFC", "PFC": "NBFC",
     "HDFCLIFE": "Insurance", "SBILIFE": "Insurance", "LICI": "Insurance",
-    "MFSL": "Insurance", "ICICIGI": "Insurance", "ICICIPRULI": "Insurance",
-    # Asset Management / Capital Markets
-    "HDFCAMC": "AssetMgmt", "NIPPONLIFE": "AssetMgmt", "UTIAMC": "AssetMgmt",
-    "CDSL": "AssetMgmt", "BSE": "AssetMgmt", "MCX": "AssetMgmt",
-    "ANGELONE": "AssetMgmt", "CAMS": "AssetMgmt", "KFINTECH": "AssetMgmt",
-    # Paints
+    "ICICIGI": "Insurance",
+    "HDFCAMC": "AssetMgmt", "NIPPONLIFE": "AssetMgmt", "CDSL": "AssetMgmt",
+    "ANGELONE": "AssetMgmt",
     "ASIANPAINT": "Paints", "BERGEPAINT": "Paints", "KANSAINER": "Paints",
-    "INDIGO": "Paints",  # actually aviation but misplaced here — overridden below
-    # Aviation / Logistics
-    "INDIGO": "Aviation", "BLUEDART": "Logistics", "CONCOR": "Logistics",
-    "DELHIVERY": "Logistics", "IRCTC": "Logistics", "RVNL": "Logistics",
-    # Consumer Electronics
     "HAVELLS": "ConsumerElec", "VOLTAS": "ConsumerElec", "CROMPTON": "ConsumerElec",
-    "DIXON": "ConsumerElec", "AMBER": "ConsumerElec", "BLUESTARCO": "ConsumerElec",
-    # Gems & Jewelry
-    "TITAN": "Gems", "RAJESHEXPO": "Gems", "KALYANKJIL": "Gems",
-    # Specialty Chemicals
-    "PIDILITIND": "Chemicals", "ASTRAL": "Chemicals", "SUPREMEIND": "Chemicals",
-    "POLYCAB": "Chemicals", "SRF": "Chemicals", "DEEPAKNTR": "Chemicals",
-    "NAVINFLUOR": "Chemicals", "AARTI": "Chemicals", "VINATIORG": "Chemicals",
-    # Media / Entertainment
-    "SUNTVNETWORK": "Media", "ZEEL": "Media", "PVRINOX": "Media",
-    # E-commerce / New Age
-    "ZOMATO": "ECommerce", "PAYTM": "ECommerce", "POLICYBZR": "ECommerce",
-    "NAUKRI": "ECommerce",
-    # Ports / Adani Group
+    "DIXON": "ConsumerElec", "AMBER": "ConsumerElec",
+    "TITAN": "Gems", "KALYANKJIL": "Gems",
+    "PIDILITIND": "Chemicals", "SRF": "Chemicals", "DEEPAKNTR": "Chemicals",
+    "NAVINFLUOR": "Chemicals", "AARTI": "Chemicals",
+    "ZOMATO": "ECommerce", "PAYTM": "ECommerce", "NAUKRI": "ECommerce",
     "ADANIPORTS": "Ports", "ADANIENT": "Conglomerate",
+    "INDIGO": "Aviation", "BLUEDART": "Logistics", "IRCTC": "Logistics",
+    "SUNTVNETWORK": "Media", "PVRINOX": "Media",
 }
 
 SECTOR_ENCODING = {s: i for i, s in enumerate(sorted(set(SECTOR_MAP.values())))}
 
 
-def compute_features(df: pd.DataFrame, ticker: str = "", fo_df: pd.DataFrame = None) -> pd.DataFrame:
+# ---------------------------------------------------------------------------
+# Pure pandas/numpy indicator helpers
+# ---------------------------------------------------------------------------
+
+def _ema(series: pd.Series, window: int) -> pd.Series:
+    return series.ewm(span=window, adjust=False).mean()
+
+
+def _sma(series: pd.Series, window: int) -> pd.Series:
+    return series.rolling(window).mean()
+
+
+def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(window).mean()
+    loss = (-delta.clip(upper=0)).rolling(window).mean()
+    rs = gain / (loss + 1e-10)
+    return 100 - (100 / (1 + rs))
+
+
+def _macd(close: pd.Series):
+    ema12 = _ema(close, 12)
+    ema26 = _ema(close, 26)
+    macd_line = ema12 - ema26
+    signal_line = _ema(macd_line, 9)
+    return macd_line, signal_line, macd_line - signal_line
+
+
+def _bollinger(close: pd.Series, window: int = 20):
+    mid = _sma(close, window)
+    std = close.rolling(window).std()
+    upper = mid + 2 * std
+    lower = mid - 2 * std
+    return upper, mid, lower
+
+
+def _atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(window).mean()
+
+
+def _stochastic(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14):
+    lowest_low = low.rolling(window).min()
+    highest_high = high.rolling(window).max()
+    k = 100 * (close - lowest_low) / (highest_high - lowest_low + 1e-10)
+    d = k.rolling(3).mean()
+    return k, d
+
+
+def _obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    direction = np.sign(close.diff()).fillna(0)
+    return (direction * volume).cumsum()
+
+
+# ---------------------------------------------------------------------------
+# Main feature computation
+# ---------------------------------------------------------------------------
+
+def compute_features(
+    df: pd.DataFrame,
+    ticker: str = "",
+    fo_df: pd.DataFrame = None,
+) -> pd.DataFrame:
     """
-    Input: df with columns [open, high, low, close, volume], DatetimeIndex
-           fo_df: optional DataFrame with F&O features indexed by date
-                  (columns: total_oi, oi_change, put_oi, call_oi, pcr)
-    Output: feature DataFrame aligned to same index
+    Input:
+        df     — OHLCV DataFrame with DatetimeIndex
+        ticker — NSE ticker symbol (for sector lookup)
+        fo_df  — optional F&O DataFrame (total_oi, oi_change, put_oi, call_oi, pcr)
+    Output:
+        Feature DataFrame aligned to same index (includes target columns for training)
     """
     df = df.copy().sort_index()
-    close = df["close"]
-    high = df["high"]
-    low = df["low"]
-    volume = df["volume"].replace(0, np.nan)
+    close = df["close"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    volume = df["volume"].astype(float).replace(0, np.nan)
 
     feat = pd.DataFrame(index=df.index)
 
     # RSI
-    feat["rsi_14"] = RSIIndicator(close, window=14).rsi()
-    feat["rsi_7"] = RSIIndicator(close, window=7).rsi()
-    feat["rsi_21"] = RSIIndicator(close, window=21).rsi()
+    feat["rsi_14"] = _rsi(close, 14)
+    feat["rsi_7"] = _rsi(close, 7)
+    feat["rsi_21"] = _rsi(close, 21)
     feat["rsi_14_slope"] = feat["rsi_14"].diff(3)
 
     # MACD
-    macd = MACD(close)
-    feat["macd"] = macd.macd()
-    feat["macd_signal"] = macd.macd_signal()
-    feat["macd_diff"] = macd.macd_diff()
-    feat["macd_cross"] = (feat["macd"] > feat["macd_signal"]).astype(int)
+    macd, macd_sig, macd_hist = _macd(close)
+    feat["macd"] = macd
+    feat["macd_signal"] = macd_sig
+    feat["macd_diff"] = macd_hist
+    feat["macd_cross"] = (macd > macd_sig).astype(int)
 
     # Bollinger Bands
-    bb = BollingerBands(close, window=20)
-    feat["bb_upper"] = bb.bollinger_hband()
-    feat["bb_lower"] = bb.bollinger_lband()
-    feat["bb_mid"] = bb.bollinger_mavg()
-    feat["bb_width"] = (feat["bb_upper"] - feat["bb_lower"]) / feat["bb_mid"]
-    feat["bb_position"] = (close - feat["bb_lower"]) / (feat["bb_upper"] - feat["bb_lower"] + 1e-8)
+    bb_upper, bb_mid, bb_lower = _bollinger(close, 20)
+    feat["bb_upper"] = bb_upper
+    feat["bb_lower"] = bb_lower
+    feat["bb_mid"] = bb_mid
+    feat["bb_width"] = (bb_upper - bb_lower) / (bb_mid + 1e-8)
+    feat["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-8)
 
     # Moving averages
     for w in [5, 10, 20, 50, 100, 200]:
-        sma = SMAIndicator(close, window=w).sma_indicator()
+        sma = _sma(close, w)
         feat[f"sma_{w}"] = sma
-        feat[f"dist_sma_{w}"] = (close - sma) / sma
+        feat[f"dist_sma_{w}"] = (close - sma) / (sma + 1e-8)
 
-    feat["ema_9"] = EMAIndicator(close, window=9).ema_indicator()
-    feat["ema_21"] = EMAIndicator(close, window=21).ema_indicator()
+    feat["ema_9"] = _ema(close, 9)
+    feat["ema_21"] = _ema(close, 21)
     feat["ema_cross_9_21"] = (feat["ema_9"] > feat["ema_21"]).astype(int)
 
     # ATR
-    atr = AverageTrueRange(high, low, close, window=14)
-    feat["atr_14"] = atr.average_true_range()
-    feat["atr_pct"] = feat["atr_14"] / close
+    atr = _atr(high, low, close, 14)
+    feat["atr_14"] = atr
+    feat["atr_pct"] = atr / (close + 1e-8)
 
     # OBV
-    feat["obv"] = OnBalanceVolumeIndicator(close, volume).on_balance_volume()
-    feat["obv_slope"] = feat["obv"].diff(5) / (feat["obv"].abs() + 1e-8)
+    obv = _obv(close, volume.fillna(0))
+    feat["obv"] = obv
+    feat["obv_slope"] = obv.diff(5) / (obv.abs() + 1e-8)
 
-    # Volume features
-    feat["volume"] = volume
-    feat["volume_sma20"] = volume.rolling(20).mean()
-    feat["volume_ratio"] = volume / feat["volume_sma20"]
+    # Volume
+    vol_sma20 = _sma(volume, 20)
+    feat["volume_ratio"] = volume / (vol_sma20 + 1e-8)
     feat["volume_spike"] = (feat["volume_ratio"] > 2.0).astype(int)
 
-    # Price returns
+    # Returns
     for d in [1, 3, 5, 10, 20, 60]:
         feat[f"return_{d}d"] = close.pct_change(d)
 
     # Candle patterns
-    feat["candle_body"] = (df["close"] - df["open"]) / df["open"]
-    feat["candle_upper_shadow"] = (high - df[["close", "open"]].max(axis=1)) / (high - low + 1e-8)
-    feat["candle_lower_shadow"] = (df[["close", "open"]].min(axis=1) - low) / (high - low + 1e-8)
+    feat["candle_body"] = (df["close"] - df["open"]) / (df["open"].astype(float) + 1e-8)
+    candle_range = (high - low).replace(0, 1e-8)
+    feat["candle_upper_shadow"] = (high - df[["close", "open"]].astype(float).max(axis=1)) / candle_range
+    feat["candle_lower_shadow"] = (df[["close", "open"]].astype(float).min(axis=1) - low) / candle_range
 
-    # 52-week high/low
+    # 52-week
     feat["high_52w"] = high.rolling(252).max()
     feat["low_52w"] = low.rolling(252).min()
-    feat["dist_52w_high"] = (close - feat["high_52w"]) / feat["high_52w"]
-    feat["dist_52w_low"] = (close - feat["low_52w"]) / feat["low_52w"]
+    feat["dist_52w_high"] = (close - feat["high_52w"]) / (feat["high_52w"] + 1e-8)
+    feat["dist_52w_low"] = (close - feat["low_52w"]) / (feat["low_52w"] + 1e-8)
 
     # Stochastic
-    stoch = StochasticOscillator(high, low, close)
-    feat["stoch_k"] = stoch.stoch()
-    feat["stoch_d"] = stoch.stoch_signal()
+    stoch_k, stoch_d = _stochastic(high, low, close)
+    feat["stoch_k"] = stoch_k
+    feat["stoch_d"] = stoch_d
 
-    # Calendar effects
+    # Calendar
     feat["day_of_week"] = df.index.dayofweek
     feat["month"] = df.index.month
     feat["quarter"] = df.index.quarter
-    feat["week_of_year"] = df.index.isocalendar().week.astype(int)
 
-    # Sector encoding (fallback to SECTOR_MAP if no DB sector available)
+    # Sector
     sector = SECTOR_MAP.get(ticker, "Other")
     feat["sector"] = SECTOR_ENCODING.get(sector, len(SECTOR_ENCODING))
 
-    # F&O features — fill with NaN if not provided
+    # F&O features
     if fo_df is not None and not fo_df.empty:
         fo_aligned = fo_df.reindex(df.index)
-        total_oi = fo_aligned.get("total_oi", pd.Series(dtype=float, index=df.index))
-        oi_change = fo_aligned.get("oi_change", pd.Series(dtype=float, index=df.index))
-        call_oi = fo_aligned.get("call_oi", pd.Series(dtype=float, index=df.index))
-        pcr = fo_aligned.get("pcr", pd.Series(dtype=float, index=df.index))
-        # delivery_pct: estimated from volume vs OI (placeholder when not directly available)
-        delivery = fo_aligned.get("delivery_pct", pd.Series(dtype=float, index=df.index))
-
-        feat["oi_change_pct"] = oi_change / (total_oi.replace(0, np.nan))
+        total_oi = fo_aligned.get("total_oi", pd.Series(dtype=float))
+        oi_change = fo_aligned.get("oi_change", pd.Series(dtype=float))
+        pcr = fo_aligned.get("pcr", pd.Series(dtype=float))
+        feat["oi_change_pct"] = oi_change / (total_oi.shift(1) + 1e-8)
         feat["pcr"] = pcr
-        feat["delivery_pct"] = delivery
+        feat["oi_rising"] = (oi_change > 0).astype(int)
     else:
-        feat["oi_change_pct"] = np.nan
-        feat["pcr"] = np.nan
-        feat["delivery_pct"] = np.nan
+        feat["oi_change_pct"] = 0.0
+        feat["pcr"] = 1.0
+        feat["oi_rising"] = 0
 
-    # Target: next-day return (for training only, drop before inference)
+    # Targets (drop before inference, used for training only)
     feat["target_1d_return"] = close.pct_change(1).shift(-1)
     feat["target_buy"] = (feat["target_1d_return"] > 0.015).astype(int)
 
     return feat
 
 
-def compute_features_with_sector(
-    df: pd.DataFrame,
-    ticker: str = "",
-    sector: str | None = None,
-    fo_df: pd.DataFrame = None,
-) -> pd.DataFrame:
-    """
-    Same as compute_features but allows passing sector from DB directly,
-    bypassing the static SECTOR_MAP.
-    """
-    feat = compute_features(df, ticker=ticker, fo_df=fo_df)
-    if sector is not None:
-        feat["sector"] = SECTOR_ENCODING.get(sector, len(SECTOR_ENCODING))
-    return feat
-
-
 def get_feature_columns() -> list[str]:
-    """All feature column names (exclude targets, no F&O)."""
+    """Core feature columns (no F&O)."""
     return [
         "rsi_14", "rsi_7", "rsi_21", "rsi_14_slope",
         "macd", "macd_signal", "macd_diff", "macd_cross",
@@ -267,9 +274,5 @@ def get_feature_columns() -> list[str]:
 
 
 def get_all_feature_columns() -> list[str]:
-    """All feature columns including F&O features."""
-    return get_feature_columns() + [
-        "oi_change_pct",
-        "pcr",
-        "delivery_pct",
-    ]
+    """All features including F&O."""
+    return get_feature_columns() + ["oi_change_pct", "pcr", "oi_rising"]
