@@ -6,14 +6,13 @@ import asyncpg
 import asyncio
 import yfinance as yf
 import logging
-import os
 from datetime import date, datetime, timezone
 
 from intelligence.claude_cli import eod_review_call
 from data.pipeline.fetch_historical import ticker_to_yf
+from config import settings
 
 log = logging.getLogger(__name__)
-DB_DSN = os.getenv("DATABASE_DSN", "postgresql://stocksense:stocksense@localhost:5432/stocksense")
 
 
 async def fetch_todays_signals(conn) -> list[dict]:
@@ -79,7 +78,7 @@ async def save_learnings(conn, review_result: dict, today: date):
 
 
 async def run_eod_review():
-    conn = await asyncpg.connect(DB_DSN)
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
     today = date.today()
     log.info(f"Starting EOD review for {today}")
 
@@ -102,16 +101,27 @@ async def run_eod_review():
 
         predicted_close = float(s.get("target_price") or s.get("price_at_signal", 0))
         signal_type = s.get("signal_type", "BUY")
+        entry = float(s["price_at_signal"])
+        target = float(s["target_price"]) if s.get("target_price") else None
+        stop = float(s["stop_loss"]) if s.get("stop_loss") else None
 
-        # Determine outcome
+        # Determine outcome using target/stop thresholds (EOD approximation)
         if signal_type == "BUY":
-            correct = actual > float(s["price_at_signal"])
+            if target and actual >= target:
+                status = "hit_target"
+            elif stop and actual <= stop:
+                status = "hit_stop"
+            else:
+                status = "expired"
         elif signal_type == "SELL":
-            correct = actual < float(s["price_at_signal"])
+            if stop and actual >= stop:
+                status = "hit_stop"
+            elif target and actual <= target:
+                status = "hit_target"
+            else:
+                status = "expired"
         else:
-            correct = True
-
-        status = "hit_target" if correct else "expired"
+            status = "expired"
         await update_signal_actuals(conn, s["id"], actual, status)
 
         predictions.append({

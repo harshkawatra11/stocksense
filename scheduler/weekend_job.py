@@ -20,8 +20,8 @@ async def build_weekly_summary(conn) -> dict:
         """
         SELECT signal_type, COUNT(*) AS n,
                AVG(final_confidence) AS avg_conf,
-               SUM(CASE WHEN outcome = 'win' THEN 1 ELSE 0 END) AS wins,
-               SUM(CASE WHEN outcome = 'loss' THEN 1 ELSE 0 END) AS losses
+               SUM(CASE WHEN status = 'hit_target' THEN 1 ELSE 0 END) AS wins,
+               SUM(CASE WHEN status = 'hit_stop' THEN 1 ELSE 0 END) AS losses
         FROM signals
         WHERE fired_at >= $1
         GROUP BY signal_type
@@ -31,7 +31,7 @@ async def build_weekly_summary(conn) -> dict:
 
     learning_rows = await conn.fetch(
         """
-        SELECT title, body, model_at_fault, tags
+        SELECT title, body, tags
         FROM learnings
         WHERE created_at >= $1
         ORDER BY created_at DESC
@@ -87,7 +87,7 @@ async def run_weekend_review():
         ) or "  No signals this week"
 
         learnings_text = "\n".join(
-            f"  [{r.get('model_at_fault', 'unknown')}] {r['title']}: {r['body'][:150]}"
+            f"  {r['title']}: {r['body'][:150]}"
             for r in summary["learnings"]
         ) or "  No learnings this week"
 
@@ -104,12 +104,16 @@ async def run_weekend_review():
         )
 
         log.info("Calling Claude Opus for weekend deep review")
-        review_results = weekend_deep_review(context)
+        result = weekend_deep_review(summary["learnings"], {"accuracy": summary["accuracy"]})
 
-        for result in review_results:
-            body = result.get("regime_assessment", "") or result.get("raw", "")
-            if body:
-                await save_weekly_review(conn, body)
+        body = (
+            result.get("regime_assessment")
+            or result.get("raw_review")
+            or result.get("raw")
+            or str(result)
+        )
+        if body:
+            await save_weekly_review(conn, body)
 
         log.info("Weekend review complete")
 

@@ -15,7 +15,6 @@ from datetime import datetime, time as dtime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 from config import settings
 
@@ -154,10 +153,15 @@ def build_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # Signal pipeline: every N minutes during market hours (9:15-15:30 IST, Mon-Fri)
+    # Signal pipeline: every 30 min during market hours (9:15-15:45 IST, Mon-Fri)
     scheduler.add_job(
         task_signal_pipeline,
-        IntervalTrigger(minutes=settings.PIPELINE_INTERVAL_MINUTES),
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="15,45",
+            timezone="Asia/Kolkata",
+        ),
         id="signal_pipeline",
         name="Signal pipeline",
         replace_existing=True,

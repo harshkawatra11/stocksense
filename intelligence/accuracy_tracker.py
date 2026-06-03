@@ -24,14 +24,14 @@ async def compute_rolling_accuracy(conn, days: int = 7) -> dict:
             sr.model_name,
             COUNT(*) AS total,
             SUM(CASE
-                WHEN s.signal_type = 'BUY' AND s.outcome = 'win' THEN 1
-                WHEN s.signal_type = 'SELL' AND s.outcome = 'win' THEN 1
+                WHEN s.signal_type = 'BUY' AND s.status = 'hit_target' THEN 1
+                WHEN s.signal_type = 'SELL' AND s.status = 'hit_target' THEN 1
                 ELSE 0
             END) AS correct
         FROM signal_reasoning sr
         JOIN signals s ON sr.signal_id = s.id
         WHERE s.fired_at >= $1
-          AND s.outcome IS NOT NULL
+          AND s.status != 'active'
         GROUP BY sr.model_name
         """,
         since,
@@ -100,11 +100,11 @@ async def run_accuracy_tracker():
                     SELECT
                         $1, 'combined', '7day',
                         NOW() - INTERVAL '7 days', NOW(),
-                        COUNT(*), SUM(CASE WHEN outcome='win' THEN 1 ELSE 0 END),
+                        COUNT(*), SUM(CASE WHEN status='hit_target' THEN 1 ELSE 0 END),
                         $2, AVG(final_confidence), NOW()
                     FROM signals
                     WHERE fired_at >= NOW() - INTERVAL '7 days'
-                      AND outcome IS NOT NULL
+                      AND status != 'active'
                     """,
                     model_name, acc,
                 )
@@ -131,6 +131,9 @@ async def run_accuracy_tracker():
 
         lgbm_w, kronos_w = await get_current_weights(conn)
         log.info(f"Dynamic weights — LightGBM: {lgbm_w:.2f}, Kronos: {kronos_w:.2f}")
+
+        from models.ml.retrain_trigger import check_and_trigger_retrain
+        await check_and_trigger_retrain(conn, auto_retrain=False)
 
     finally:
         await conn.close()

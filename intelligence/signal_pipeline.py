@@ -286,6 +286,26 @@ async def run_pipeline_batch_streaming(
         await conn.close()
 
 
+async def run_pipeline():
+    """
+    Scheduler entry point. Runs full pipeline batch and saves all signals to DB.
+    Called by market_runner.py every 30 min during market hours.
+    """
+    import asyncpg
+    from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        tickers = [t["ticker"] for t in FALLBACK_TICKERS][:settings.MAX_TICKERS_PER_RUN]
+        async for signal in run_pipeline_batch(tickers):
+            try:
+                await save_signal(conn, signal)
+                log.info(f"Saved signal for {signal['ticker']} ({signal.get('signal')})")
+            except Exception as e:
+                log.warning(f"Failed to save signal for {signal.get('ticker')}: {e}")
+    finally:
+        await conn.close()
+
+
 async def save_signal(conn, signal: dict) -> int:
     """Persist signal + reasoning to DB. Returns signal ID."""
     signal_id = await conn.fetchval(
