@@ -43,10 +43,19 @@ CREATE TABLE IF NOT EXISTS model_accuracy (
 CREATE TABLE IF NOT EXISTS slm_training_pairs (
     id                  SERIAL PRIMARY KEY,
     ticker              VARCHAR(20) REFERENCES stocks(ticker),
-    situation_date      DATE NOT NULL,
+    trade_date          DATE NOT NULL,
     situation_context   TEXT NOT NULL,
     claude_response     TEXT NOT NULL,
+    decision            VARCHAR(10),
+    confidence          NUMERIC(5, 4),
+    reasoning           TEXT,
     created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_slm_training_ticker ON slm_training_pairs(ticker, situation_date DESC);
+CREATE INDEX IF NOT EXISTS idx_slm_training_ticker ON slm_training_pairs(ticker, trade_date DESC);
+
+-- Patch for pre-existing deployments where the older column set was created.
+ALTER TABLE slm_training_pairs ADD COLUMN IF NOT EXISTS trade_date DATE;
+ALTER TABLE slm_training_pairs ADD COLUMN IF NOT EXISTS decision VARCHAR(10);
+ALTER TABLE slm_training_pairs ADD COLUMN IF NOT EXISTS confidence NUMERIC(5, 4);
+ALTER TABLE slm_training_pairs ADD COLUMN IF NOT EXISTS reasoning TEXT;
