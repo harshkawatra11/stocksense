@@ -1,0 +1,6 @@
+# Local override (not committed) — avoids clashing with the host's native
+# PostgreSQL 18 already listening on 5432. Maps the StockSense DB to 5433.
+services:
+  db:
+    ports:
+      - "5433:5432"
