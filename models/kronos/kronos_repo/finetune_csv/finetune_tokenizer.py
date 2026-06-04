@@ -280,7 +280,8 @@ def train_tokenizer(model, device, config, save_dir, logger):
 
 def main():
     import argparse
-    
+    import os  # hoist to avoid UnboundLocalError from branch-scoped import below
+
     parser = argparse.ArgumentParser(description='Kronos Tokenizer Fine-tuning Training')
     parser.add_argument('--config', type=str, default='config.yaml', 
                        help='Configuration file path (default: config.yaml)')

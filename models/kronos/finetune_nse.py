@@ -97,36 +97,40 @@ async def export_nse_csv(
             )
         tickers_used = [ticker]
     else:
-        log.info("Fetching all tickers with >= %d rows...", min_rows)
-        ticker_rows = await conn.fetch(
+        # Cap to most-recent max_rows_per_ticker rows per ticker so the full
+        # export fits comfortably in RAM (~3772 × 2000 × 6 cols ≈ 350MB).
+        # 2000 daily candles = ~8 years per ticker, giving ~1900 valid training
+        # windows per ticker (lookback+predict = 100 candles each).
+        max_rows_per_ticker = 2000
+        log.info(
+            "Bulk export: tickers with >= %d rows, capped at %d rows each...",
+            min_rows, max_rows_per_ticker,
+        )
+        rows = await conn.fetch(
             """
-            SELECT ticker FROM (
-                SELECT ticker, COUNT(*) as cnt
+            SELECT time, open, high, low, close, volume
+            FROM (
+                SELECT
+                    ticker, time, open, high, low, close, volume,
+                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY time DESC) AS rn
                 FROM ohlcv_daily
                 WHERE close IS NOT NULL AND open IS NOT NULL AND volume IS NOT NULL
-                GROUP BY ticker
-            ) t WHERE cnt >= $1
-            ORDER BY ticker
+            ) ranked
+            WHERE rn <= $2
+              AND ticker IN (
+                  SELECT ticker
+                  FROM ohlcv_daily
+                  WHERE close IS NOT NULL AND open IS NOT NULL AND volume IS NOT NULL
+                  GROUP BY ticker
+                  HAVING COUNT(*) >= $1
+              )
+            ORDER BY time ASC
             """,
             min_rows,
+            max_rows_per_ticker,
         )
-        tickers_used = [r["ticker"] for r in ticker_rows]
-        log.info("Exporting %d tickers...", len(tickers_used))
-
-        all_rows = []
-        for tk in tickers_used:
-            r = await conn.fetch(
-                """
-                SELECT time, open, high, low, close, volume
-                FROM ohlcv_daily
-                WHERE ticker = $1 AND close IS NOT NULL
-                  AND open IS NOT NULL AND volume IS NOT NULL
-                ORDER BY time ASC
-                """,
-                tk,
-            )
-            all_rows.extend(r)
-        rows = all_rows
+        log.info("Bulk export: %d rows fetched across all tickers", len(rows))
+        tickers_used = ["all"]
 
     df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
     df["time"] = pd.to_datetime(df["time"])
@@ -270,7 +274,7 @@ def generate_config(
 
     finetuned_dir.mkdir(parents=True, exist_ok=True)
     config_path = finetuned_dir / f"config_{exp_name}.yaml"
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, indent=2)
 
     log.info("Config written to %s", config_path)
@@ -362,12 +366,17 @@ async def run(
     exp_name = f"nse_{ticker or 'all'}_{model_size}"
     csv_path = CSV_DIR / f"{exp_name}.csv"
 
-    log.info("Connecting to DB...")
-    conn = await asyncpg.connect(settings.DATABASE_DSN)
-    try:
-        n_rows = await export_nse_csv(conn, ticker, csv_path)
-    finally:
-        await conn.close()
+    if csv_path.exists() and csv_path.stat().st_size > 1_000_000:
+        log.info("Reusing cached CSV: %s (%.0f MB)", csv_path, csv_path.stat().st_size / 1e6)
+        n_rows = lookback_window + predict_window + 10  # known-good, size check is sufficient
+    else:
+        log.info("Connecting to DB...")
+        pool = await asyncpg.create_pool(settings.DATABASE_DSN, min_size=1, max_size=3)
+        try:
+            async with pool.acquire() as conn:
+                n_rows = await export_nse_csv(conn, ticker, csv_path)
+        finally:
+            await pool.close()
 
     if n_rows < lookback_window + predict_window + 1:
         log.error(
