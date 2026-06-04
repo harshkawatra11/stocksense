@@ -150,7 +150,7 @@ def load_training_data(data_path: str, tokenizer):
     """
     Load training pairs from JSONL file.
     Each line must be: {"instruction": "...", "output": "..."}
-    Formats as alpaca-style prompt for Phi-3 fine-tuning.
+    Formats as alpaca-style prompt for Qwen2.5 fine-tuning.
     """
     import json
 
@@ -181,7 +181,7 @@ def load_training_data(data_path: str, tokenizer):
 
     print(f"[INFO] Loaded {len(records)} training pairs from {data_path}")
 
-    # Alpaca-style formatting for Qwen2.5
+    # Alpaca-style formatting for Qwen2.5-7B-Instruct
     ALPACA_PROMPT = (
         "### Instruction:\n"
         "{instruction}\n\n"
