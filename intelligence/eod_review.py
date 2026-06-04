@@ -4,12 +4,11 @@ Fetches all today's signals, compares to actual closes, calls Claude Opus, logs 
 """
 import asyncpg
 import asyncio
-import yfinance as yf
+import hashlib
 import logging
 from datetime import date, datetime, timezone
 
 from intelligence.claude_cli import eod_review_call
-from data.pipeline.fetch_historical import ticker_to_yf
 from config import settings
 
 log = logging.getLogger(__name__)
@@ -38,16 +37,24 @@ async def fetch_todays_signals(conn) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def fetch_actual_closes(tickers: list[str]) -> dict[str, float]:
-    closes = {}
-    for ticker in set(tickers):
-        try:
-            df = yf.download(ticker_to_yf(ticker), period="2d", auto_adjust=True, progress=False)
-            if not df.empty:
-                closes[ticker] = float(df["Close"].iloc[-1])
-        except Exception as e:
-            log.warning(f"Could not fetch actual close for {ticker}: {e}")
-    return closes
+async def fetch_actual_closes(conn, tickers: list[str]) -> dict[str, float]:
+    """
+    Actual closes from the NSE-fed ohlcv_daily table (NSE path only — no yfinance).
+    Uses the most recent close on/before today per ticker. Tickers whose Bhavcopy
+    for the day hasn't landed yet are simply omitted and skipped downstream.
+    """
+    if not tickers:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (ticker) ticker, close
+        FROM ohlcv_daily
+        WHERE ticker = ANY($1::text[]) AND close IS NOT NULL
+        ORDER BY ticker, time DESC
+        """,
+        list(set(tickers)),
+    )
+    return {r["ticker"]: float(r["close"]) for r in rows}
 
 
 async def update_signal_actuals(conn, signal_id: int, actual_close: float, status: str):
@@ -60,8 +67,27 @@ async def update_signal_actuals(conn, signal_id: int, actual_close: float, statu
     )
 
 
+def _learning_hash(title: str, body: str) -> str:
+    return hashlib.sha256(f"{title.strip()}|{body.strip()}".encode("utf-8")).hexdigest()
+
+
 async def save_learnings(conn, review_result: dict, today: date):
+    """Insert learnings, skipping duplicates by title+body hash against recent history."""
+    # Pull recent learning hashes (last 90 days) to dedup against
+    recent = await conn.fetch(
+        "SELECT title, body FROM learnings WHERE learning_date >= $1::date - 90",
+        today,
+    )
+    seen = {_learning_hash(r["title"] or "", r["body"] or "") for r in recent}
+
+    saved = 0
     for learning in review_result.get("learnings", []):
+        title = learning.get("title", "")[:300]
+        body = learning.get("body", "")
+        h = _learning_hash(title, body)
+        if h in seen:
+            continue
+        seen.add(h)
         await conn.execute(
             """
             INSERT INTO learnings (learning_date, learning_type, ticker, title, body, tags, raw_claude_output)
@@ -69,12 +95,45 @@ async def save_learnings(conn, review_result: dict, today: date):
             """,
             today,
             learning.get("ticker"),
-            learning.get("title", "")[:300],
-            learning.get("body", ""),
+            title,
+            body,
             learning.get("tags", []),
             review_result.get("raw", ""),
         )
-    log.info(f"Saved {len(review_result.get('learnings', []))} learnings for {today}")
+        saved += 1
+    log.info(f"Saved {saved} new learnings for {today} (skipped {len(review_result.get('learnings', [])) - saved} duplicates)")
+
+
+async def update_model_accuracy(conn, predictions: list[dict], today: date):
+    """
+    Write per-model rolling accuracy for today into model_accuracy.
+    A prediction is 'correct' when the realized move agrees with the signal direction.
+    """
+    if not predictions:
+        return
+
+    # Direction correctness per prediction (shared across model rows for the day)
+    correct = 0
+    for p in predictions:
+        delta = p["actual_close"] - p["predicted_close"]
+        sig = p.get("signal", "HOLD")
+        if (sig == "BUY" and delta > 0) or (sig == "SELL" and delta < 0):
+            correct += 1
+    total = len(predictions)
+    acc = round(correct / total, 4) if total else 0.0
+
+    # Record one row per model layer so combine.py weight refresh has data to read
+    for model_name in ("lgbm", "kronos", "slm", "combined"):
+        await conn.execute(
+            """
+            INSERT INTO model_accuracy
+                (model_name, signal_type, timeframe, period_start, period_end,
+                 total_signals, correct_signals, accuracy, created_at)
+            VALUES ($1, 'all', 'intraday', $2, $2, $3, $4, $5, NOW())
+            """,
+            model_name, today, total, correct, acc,
+        )
+    log.info(f"Model accuracy for {today}: {correct}/{total} ({acc*100:.1f}%) written for all layers")
 
 
 async def run_eod_review():
@@ -91,7 +150,7 @@ async def run_eod_review():
     log.info(f"Reviewing {len(signals)} signals from today")
 
     tickers = [s["ticker"] for s in signals]
-    actual_closes = await fetch_actual_closes(tickers)
+    actual_closes = await fetch_actual_closes(conn, tickers)
 
     predictions = []
     for s in signals:
@@ -139,6 +198,7 @@ async def run_eod_review():
     review_result = eod_review_call(predictions)
 
     await save_learnings(conn, review_result, today)
+    await update_model_accuracy(conn, predictions, today)
 
     accuracy = review_result.get("accuracy_today", {})
     log.info(

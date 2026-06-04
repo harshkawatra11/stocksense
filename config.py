@@ -70,11 +70,26 @@ class Settings:
 
     @property
     def CLAUDE_SONNET_MODEL(self) -> str:
-        return os.getenv("CLAUDE_SONNET_MODEL", "claude-sonnet-4-5")
+        return os.getenv("CLAUDE_SONNET_MODEL", "claude-sonnet-4-6")
 
     @property
     def CLAUDE_OPUS_MODEL(self) -> str:
-        return os.getenv("CLAUDE_OPUS_MODEL", "claude-opus-4-5")
+        return os.getenv("CLAUDE_OPUS_MODEL", "claude-opus-4-8")
+
+    # ------------------------------------------------------------------ #
+    # Kronos forecast                                                      #
+    # ------------------------------------------------------------------ #
+    @property
+    def KRONOS_FORECAST_STEPS(self) -> int:
+        return int(os.getenv("KRONOS_FORECAST_STEPS", "5"))
+
+    @property
+    def KRONOS_MIN_CANDLES(self) -> int:
+        return int(os.getenv("KRONOS_MIN_CANDLES", "30"))
+
+    @property
+    def KRONOS_MODEL_SIZE(self) -> str:
+        return os.getenv("KRONOS_MODEL_SIZE", "base")
 
     # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #

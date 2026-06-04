@@ -140,12 +140,15 @@ def compute_features(
     df: pd.DataFrame,
     ticker: str = "",
     fo_df: pd.DataFrame = None,
+    sector: str | None = None,
 ) -> pd.DataFrame:
     """
     Input:
         df     — OHLCV DataFrame with DatetimeIndex
-        ticker — NSE ticker symbol (for sector lookup)
+        ticker — NSE ticker symbol (for sector lookup fallback)
         fo_df  — optional F&O DataFrame (total_oi, oi_change, put_oi, call_oi, pcr)
+        sector — sector name from the stocks DB table; falls back to SECTOR_MAP,
+                 then "Other", when not supplied. Keeps this function I/O-free.
     Output:
         Feature DataFrame aligned to same index (includes target columns for training)
     """
@@ -229,9 +232,9 @@ def compute_features(
     feat["month"] = df.index.month
     feat["quarter"] = df.index.quarter
 
-    # Sector
-    sector = SECTOR_MAP.get(ticker, "Other")
-    feat["sector"] = SECTOR_ENCODING.get(sector, len(SECTOR_ENCODING))
+    # Sector — prefer DB-provided value, fall back to static map, then "Other"
+    sector_name = sector or SECTOR_MAP.get(ticker, "Other")
+    feat["sector"] = SECTOR_ENCODING.get(sector_name, len(SECTOR_ENCODING))
 
     # F&O features
     if fo_df is not None and not fo_df.empty:

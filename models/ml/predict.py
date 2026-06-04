@@ -167,14 +167,15 @@ def _feature_to_text(feat_name: str, value: float, shap_val: float) -> str:
     return f"{ctx} ({direction} signal, weight: {pct:.1f}%)"
 
 
-def predict_with_reasoning(df: pd.DataFrame, ticker: str) -> dict:
+def predict_with_reasoning(df: pd.DataFrame, ticker: str, sector: str | None = None) -> dict:
     """
     df: raw OHLCV DataFrame for a single ticker
+    sector: sector name from the stocks DB table (optional; falls back to static map)
     Returns: {confidence, signal, reasoning_text, shap_values, features}
     """
     model, explainer, feature_cols, threshold = get_model()
 
-    feat_df = compute_features(df, ticker=ticker)
+    feat_df = compute_features(df, ticker=ticker, sector=sector)
     feat_df = feat_df.dropna(subset=feature_cols)
 
     if feat_df.empty:

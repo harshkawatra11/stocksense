@@ -43,6 +43,27 @@ async def fetch_ohlcv(conn, ticker: str, limit: int = 300) -> pd.DataFrame:
     return df
 
 
+def compute_atr(df: pd.DataFrame, period: int = 14) -> float | None:
+    """14-day Average True Range in absolute price terms. None if insufficient data."""
+    if len(df) < period + 1:
+        return None
+    high = df["high"]
+    low = df["low"]
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [(high - low), (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(period).mean().iloc[-1]
+    return float(atr) if pd.notna(atr) else None
+
+
+async def fetch_sector_map(conn) -> dict[str, str]:
+    """ticker -> sector from the stocks DB table. Loaded once per run."""
+    rows = await conn.fetch("SELECT ticker, sector FROM stocks WHERE sector IS NOT NULL")
+    return {r["ticker"]: r["sector"] for r in rows}
+
+
 async def fetch_recent_learnings(conn, limit: int = 20) -> str:
     rows = await conn.fetch(
         """
@@ -56,7 +77,9 @@ async def fetch_recent_learnings(conn, limit: int = 20) -> str:
     return "\n".join(f"- {r['title']}: {r['body'][:200]}" for r in rows)
 
 
-async def run_single_ticker_streaming(conn, ticker: str, portfolio_tickers: set) -> AsyncGenerator[dict, None]:
+async def run_single_ticker_streaming(
+    conn, ticker: str, portfolio_tickers: set, sector_map: dict[str, str] | None = None
+) -> AsyncGenerator[dict, None]:
     """
     Async generator. Yields one dict per model stage as it completes.
     Frontend can render each stage immediately via SSE.
@@ -67,10 +90,11 @@ async def run_single_ticker_streaming(conn, ticker: str, portfolio_tickers: set)
 
     current_price = float(df["close"].iloc[-1])
     held = ticker in portfolio_tickers
+    sector = (sector_map or {}).get(ticker)
 
     # Stage 1: ML LightGBM
     try:
-        ml_result = predict_with_reasoning(df, ticker)
+        ml_result = predict_with_reasoning(df, ticker, sector=sector)
         yield {
             "type": "ml_result",
             "ticker": ticker,
@@ -129,6 +153,7 @@ async def run_single_ticker_streaming(conn, ticker: str, portfolio_tickers: set)
         return
 
     learnings = await fetch_recent_learnings(conn)
+    atr = compute_atr(df)
     try:
         slm_result = slm_enrich(
             ticker=ticker,
@@ -138,6 +163,7 @@ async def run_single_ticker_streaming(conn, ticker: str, portfolio_tickers: set)
             kronos_reasoning=kronos_result.get("reasoning", ""),
             portfolio_held=held,
             learnings_context=learnings,
+            atr=atr,
         )
     except Exception as e:
         log.warning(f"SLM enrich failed for {ticker}: {e}")
@@ -173,7 +199,9 @@ async def run_single_ticker_streaming(conn, ticker: str, portfolio_tickers: set)
     }
 
 
-async def run_single_ticker(conn, ticker: str, portfolio_tickers: set) -> dict | None:
+async def run_single_ticker(
+    conn, ticker: str, portfolio_tickers: set, sector_map: dict[str, str] | None = None
+) -> dict | None:
     """Full pipeline for one ticker (non-streaming). Returns final signal dict or None."""
     df = await fetch_ohlcv(conn, ticker)
     if df.empty or len(df) < 60:
@@ -181,10 +209,11 @@ async def run_single_ticker(conn, ticker: str, portfolio_tickers: set) -> dict |
 
     current_price = float(df["close"].iloc[-1])
     held = ticker in portfolio_tickers
+    sector = (sector_map or {}).get(ticker)
 
     # Step 1: LightGBM
     try:
-        ml_result = predict_with_reasoning(df, ticker)
+        ml_result = predict_with_reasoning(df, ticker, sector=sector)
     except Exception as e:
         log.warning(f"ML predict failed for {ticker}: {e}")
         return None
@@ -210,6 +239,7 @@ async def run_single_ticker(conn, ticker: str, portfolio_tickers: set) -> dict |
 
     # Step 4: SLM enrichment + portfolio guard
     learnings = await fetch_recent_learnings(conn)
+    atr = compute_atr(df)
     slm_result = slm_enrich(
         ticker=ticker,
         price=current_price,
@@ -218,6 +248,7 @@ async def run_single_ticker(conn, ticker: str, portfolio_tickers: set) -> dict |
         kronos_reasoning=kronos_result.get("reasoning", ""),
         portfolio_held=held,
         learnings_context=learnings,
+        atr=atr,
     )
 
     if slm_result.get("signal") == "SKIP":
@@ -251,12 +282,13 @@ async def run_pipeline_batch(tickers: list[str]) -> AsyncGenerator[dict, None]:
     """
     conn = await asyncpg.connect(settings.DATABASE_DSN)
     portfolio_tickers = await get_portfolio_tickers(conn)
+    sector_map = await fetch_sector_map(conn)
 
     semaphore = asyncio.Semaphore(10)
 
     async def bounded(ticker):
         async with semaphore:
-            return await run_single_ticker(conn, ticker, portfolio_tickers)
+            return await run_single_ticker(conn, ticker, portfolio_tickers, sector_map)
 
     tasks = [bounded(t) for t in tickers]
     for coro in asyncio.as_completed(tasks):
@@ -277,10 +309,11 @@ async def run_pipeline_batch_streaming(
     """
     conn = await asyncpg.connect(settings.DATABASE_DSN)
     portfolio_tickers = await get_portfolio_tickers(conn)
+    sector_map = await fetch_sector_map(conn)
 
     try:
         for ticker in tickers:
-            async for event in run_single_ticker_streaming(conn, ticker, portfolio_tickers):
+            async for event in run_single_ticker_streaming(conn, ticker, portfolio_tickers, sector_map):
                 yield event
     finally:
         await conn.close()

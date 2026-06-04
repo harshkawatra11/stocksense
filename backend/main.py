@@ -65,7 +65,18 @@ async def stream_signals():
     async def generate() -> AsyncGenerator[str, None]:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
         portfolio_tickers = await get_portfolio_tickers(conn)
-        tickers = NSE_TICKERS[: settings.MAX_TICKERS_PER_RUN]
+        from intelligence.signal_pipeline import fetch_sector_map
+        sector_map = await fetch_sector_map(conn)
+
+        # Prefer the active tickers loaded in the DB; fall back to the static list.
+        db_rows = await conn.fetch(
+            "SELECT ticker FROM stocks WHERE active = TRUE ORDER BY ticker LIMIT $1",
+            settings.MAX_TICKERS_PER_RUN,
+        )
+        if db_rows:
+            tickers = [r["ticker"] for r in db_rows]
+        else:
+            tickers = [t["ticker"] for t in NSE_TICKERS][: settings.MAX_TICKERS_PER_RUN]
 
         claude_candidates = []
         # track final slm_result events for DB save and Claude batching
@@ -76,7 +87,7 @@ async def stream_signals():
                 from intelligence.signal_pipeline import run_single_ticker_streaming
 
                 last_slm_event = None
-                async for event in run_single_ticker_streaming(conn, ticker, portfolio_tickers):
+                async for event in run_single_ticker_streaming(conn, ticker, portfolio_tickers, sector_map):
                     yield f"data: {json.dumps(event)}\n\n"
 
                     if event.get("type") == "slm_result":

@@ -6,13 +6,72 @@ import subprocess
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional
 
+from config import settings
+
 log = logging.getLogger(__name__)
 
-CLAUDE_SONNET = "claude-sonnet-4-5"
-CLAUDE_OPUS = "claude-opus-4-5"
+CLAUDE_SONNET = settings.CLAUDE_SONNET_MODEL
+CLAUDE_OPUS = settings.CLAUDE_OPUS_MODEL
+
+
+def _extract_json(raw: str, expect: str = "object"):
+    """
+    Robustly extract the first valid JSON object/array from a model response.
+    Handles ```json fences, leading prose, and trailing commentary.
+    expect: "object" -> dict, "array" -> list. Returns None on failure.
+    """
+    if not raw:
+        return None
+
+    # Strip markdown code fences if present
+    fence = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
+    if fence:
+        raw = fence.group(1)
+
+    open_ch, close_ch = ("{", "}") if expect == "object" else ("[", "]")
+
+    # Try direct parse first (clean responses)
+    try:
+        parsed = json.loads(raw.strip())
+        return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Bracket-matching scan to isolate the first balanced JSON span
+    start = raw.find(open_ch)
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                candidate = raw[start : i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError as e:
+                    log.warning(f"JSON candidate parse failed: {e}. Span: {candidate[:300]}")
+                    return None
+    return None
 
 
 def _run_claude(prompt: str, model: str, system: Optional[str] = None, retries: int = 3) -> str:
@@ -95,37 +154,31 @@ and Indian corporate earnings cycles. You think fast and sharp. Under 2 minutes 
         return signals
 
     # Parse JSON from response
-    try:
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
-        if start >= 0 and end > start:
-            claude_outputs = json.loads(raw[start:end])
-            claude_map = {c["ticker"]: c for c in claude_outputs}
+    claude_outputs = _extract_json(raw, expect="array")
+    if isinstance(claude_outputs, list):
+        claude_map = {c["ticker"]: c for c in claude_outputs if isinstance(c, dict) and "ticker" in c}
 
-            enriched = []
-            for s in signals:
-                c = claude_map.get(s["ticker"], {})
-                action = c.get("action", "CONFIRM")
-                adj_conf = c.get("confidence", s.get("confidence", 0.5))
-                note = c.get("note", "")
+        enriched = []
+        for s in signals:
+            c = claude_map.get(s["ticker"], {})
+            action = c.get("action", "CONFIRM")
+            adj_conf = c.get("confidence", s.get("confidence", 0.5))
+            note = c.get("note", "")
 
-                s["claude_action"] = action
-                s["claude_confidence"] = adj_conf
-                s["claude_reasoning"] = (
-                    f"Claude Sonnet ({action}):\n"
-                    f"  • {note}\n"
-                    f"  • Final confidence: {adj_conf*100:.1f}%"
-                )
-                s["final_confidence"] = adj_conf
-                if action == "REJECT":
-                    s["signal"] = "HOLD"
-                enriched.append(s)
-            return enriched
-        else:
-            log.warning(f"Could not parse Claude JSON. Raw: {raw[:500]}")
-    except json.JSONDecodeError as e:
-        log.warning(f"JSON parse error from Claude: {e}. Raw: {raw[:500]}")
+            s["claude_action"] = action
+            s["claude_confidence"] = adj_conf
+            s["claude_reasoning"] = (
+                f"Claude Sonnet ({action}):\n"
+                f"  • {note}\n"
+                f"  • Final confidence: {adj_conf*100:.1f}%"
+            )
+            s["final_confidence"] = adj_conf
+            if action == "REJECT":
+                s["signal"] = "HOLD"
+            enriched.append(s)
+        return enriched
 
+    log.warning(f"Could not parse Claude JSON array. Raw: {raw[:500]}")
     return signals
 
 
@@ -195,14 +248,11 @@ Be specific about what pattern failed, not generic platitudes."""
     if not raw:
         return {"learnings": [], "summary": "Claude Opus review failed — no response."}
 
-    try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
-    except json.JSONDecodeError as e:
-        log.error(f"Failed to parse EOD review: {e}")
+    parsed = _extract_json(raw, expect="object")
+    if isinstance(parsed, dict):
+        return parsed
 
+    log.error(f"Failed to parse EOD review JSON. Raw: {raw[:500]}")
     return {"learnings": [], "summary": raw[:1000], "raw": raw}
 
 
@@ -247,12 +297,8 @@ JSON response:
     if not raw:
         return {"insights": [], "recommendations": []}
 
-    try:
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
-    except Exception:
-        pass
+    parsed = _extract_json(raw, expect="object")
+    if isinstance(parsed, dict):
+        return parsed
 
     return {"raw_review": raw}

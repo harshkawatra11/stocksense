@@ -1,8 +1,12 @@
 """
 Kronos foundation model integration.
-Clones the repo on first run, runs inference for OHLCV forecasting.
+Wraps the upstream Kronos repo (shiyu-coder/Kronos) — KronosTokenizer + Kronos +
+KronosPredictor — and exposes a single reasoning-enriched forecast() for the pipeline.
+
+Install once:
+    git clone https://github.com/shiyu-coder/Kronos.git models/kronos/kronos_repo
+    pip install -r models/kronos/kronos_repo/requirements.txt
 """
-import subprocess
 import sys
 import os
 import numpy as np
@@ -10,43 +14,75 @@ import pandas as pd
 import logging
 import torch
 
+from config import settings
+
 log = logging.getLogger(__name__)
 
 KRONOS_DIR = os.path.join(os.path.dirname(__file__), "kronos_repo")
 KRONOS_REPO = "https://github.com/shiyu-coder/Kronos.git"
+# Local NSE-finetuned model checkpoint (produced by finetune_nse.py). Optional.
+KRONOS_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights", "nse_26yr_finetuned")
+
+# model_size -> (model HF id, tokenizer HF id, max_context)
+_MODEL_SPECS = {
+    "mini": ("NeoQuasar/Kronos-mini", "NeoQuasar/Kronos-Tokenizer-2k", 2048),
+    "small": ("NeoQuasar/Kronos-small", "NeoQuasar/Kronos-Tokenizer-base", 512),
+    "base": ("NeoQuasar/Kronos-base", "NeoQuasar/Kronos-Tokenizer-base", 512),
+}
 
 
 def ensure_kronos():
-    if not os.path.exists(KRONOS_DIR):
-        log.info("Cloning Kronos repository...")
-        subprocess.run(["git", "clone", KRONOS_REPO, KRONOS_DIR], check=True)
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", os.path.join(KRONOS_DIR, "requirements.txt")],
-            check=True,
+    """
+    Verify the Kronos repo is installed and importable. Does NOT auto-clone —
+    a silent multi-hundred-MB clone + pip install mid-pipeline is the wrong default.
+    """
+    if not os.path.isdir(KRONOS_DIR):
+        raise RuntimeError(
+            f"Kronos repo not found at {KRONOS_DIR}.\nInstall it once with:\n"
+            f"  git clone {KRONOS_REPO} \"{KRONOS_DIR}\"\n"
+            f"  pip install -r \"{os.path.join(KRONOS_DIR, 'requirements.txt')}\""
         )
     if KRONOS_DIR not in sys.path:
         sys.path.insert(0, KRONOS_DIR)
 
 
-def load_kronos_model(model_size: str = "small"):
+def load_kronos_model(model_size: str | None = None):
     """
-    model_size: 'mini' (4.1M), 'small' (24.7M), 'base' (102.3M)
-    On RTX 3050 4GB: base fits comfortably.
+    Build a KronosPredictor. Prefers the NSE-finetuned checkpoint when present,
+    otherwise pulls the pretrained model/tokenizer from HuggingFace.
+    Falls back to MockKronosForecaster if Kronos is unavailable.
     """
-    ensure_kronos()
+    model_size = model_size or settings.KRONOS_MODEL_SIZE
+    model_id, tokenizer_id, max_context = _MODEL_SPECS.get(model_size, _MODEL_SPECS["base"])
+
     try:
-        from kronos import KronosForecaster
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = KronosForecaster.from_pretrained(f"kronos-{model_size}", device=device)
-        log.info(f"Kronos-{model_size} loaded on {device}")
-        return model
-    except ImportError:
-        log.warning("Kronos not yet available — using mock forecaster for dev mode")
+        ensure_kronos()
+        from model import Kronos, KronosTokenizer, KronosPredictor
+
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        if device == "cpu":
+            log.warning("CUDA not available — Kronos on CPU (slow). Forecasts will lag.")
+
+        tokenizer = KronosTokenizer.from_pretrained(tokenizer_id)
+        if os.path.isdir(KRONOS_WEIGHTS_DIR):
+            log.info(f"Loading NSE-finetuned Kronos weights from {KRONOS_WEIGHTS_DIR}")
+            kmodel = Kronos.from_pretrained(KRONOS_WEIGHTS_DIR)
+        else:
+            log.info(f"Loading pretrained {model_id}")
+            kmodel = Kronos.from_pretrained(model_id)
+
+        predictor = KronosPredictor(kmodel, tokenizer, device=device, max_context=max_context)
+        log.info(f"Kronos ({model_size}) ready on {device}, max_context={max_context}")
+        return predictor
+    except Exception as e:
+        log.warning(f"Kronos unavailable ({e}) — using mock forecaster for dev mode")
         return MockKronosForecaster()
 
 
 class MockKronosForecaster:
-    """Dev fallback when Kronos isn't installed yet."""
+    """Dev fallback when Kronos isn't installed yet. Mimics a random-walk forecast."""
+
+    is_mock = True
 
     def forecast(self, df: pd.DataFrame, steps: int = 5) -> pd.DataFrame:
         last = df["close"].iloc[-1]
@@ -68,30 +104,69 @@ _kronos_model = None
 def get_kronos():
     global _kronos_model
     if _kronos_model is None:
-        _kronos_model = load_kronos_model("base")
+        _kronos_model = load_kronos_model()
     return _kronos_model
 
 
-def prepare_kronos_input(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
-    """Prepare last N candles for Kronos input."""
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def prepare_kronos_input(df: pd.DataFrame, lookback: int = 512) -> pd.DataFrame:
+    """Last N candles with the OHLCV columns Kronos expects."""
     required = ["open", "high", "low", "close", "volume"]
     df = df[required].copy().tail(lookback)
-    df = df.dropna()
-    return df
+    return df.dropna()
 
 
-def forecast(df: pd.DataFrame, steps: int = 5) -> dict:
+def _future_timestamps(last_ts: pd.Timestamp, steps: int) -> pd.Series:
+    """Next `steps` business days after the last observed timestamp (daily NSE data)."""
+    future = pd.bdate_range(start=last_ts + pd.Timedelta(days=1), periods=steps)
+    return pd.Series(future)
+
+
+def _run_predictor(predictor, inp: pd.DataFrame, steps: int) -> pd.DataFrame:
+    """Call the real KronosPredictor.predict with constructed timestamps."""
+    x_df = inp.reset_index(drop=True)[["open", "high", "low", "close", "volume"]]
+    x_timestamp = pd.Series(inp.index)
+    y_timestamp = _future_timestamps(pd.Timestamp(inp.index[-1]), steps)
+    return predictor.predict(
+        df=x_df,
+        x_timestamp=x_timestamp,
+        y_timestamp=y_timestamp,
+        pred_len=steps,
+        T=1.0,
+        top_p=0.9,
+        sample_count=1,
+        verbose=False,
+    )
+
+
+def forecast(df: pd.DataFrame, steps: int | None = None) -> dict:
     """
-    Forecast next `steps` candles using Kronos.
-    Returns reasoning-enriched dict.
+    Forecast next `steps` candles using Kronos. Returns a reasoning-enriched dict.
+    steps defaults to config.KRONOS_FORECAST_STEPS.
     """
+    steps = steps or settings.KRONOS_FORECAST_STEPS
     model = get_kronos()
     inp = prepare_kronos_input(df)
 
-    if len(inp) < 20:
-        return {"error": "Insufficient data for Kronos forecast"}
+    if len(inp) < settings.KRONOS_MIN_CANDLES:
+        return {
+            "error": (
+                f"Insufficient data for Kronos forecast "
+                f"({len(inp)} candles, need {settings.KRONOS_MIN_CANDLES})"
+            )
+        }
 
-    forecast_df = model.forecast(inp, steps=steps)
+    try:
+        if getattr(model, "is_mock", False):
+            forecast_df = model.forecast(inp, steps=steps)
+        else:
+            forecast_df = _run_predictor(model, inp, steps)
+    except Exception as e:
+        log.warning(f"Kronos predict failed ({e}) — returning HOLD")
+        return {"error": f"Kronos predict failed: {e}"}
 
     current_price = float(df["close"].iloc[-1])
     predicted_close = float(forecast_df["close"].iloc[-1])
@@ -99,15 +174,16 @@ def forecast(df: pd.DataFrame, steps: int = 5) -> dict:
     predicted_low = float(forecast_df["low"].min())
     move_pct = (predicted_close - current_price) / current_price * 100
 
-    # Build candle path string
     candle_path = " → ".join(f"₹{c:.0f}" for c in forecast_df["close"].values)
 
+    # Sigmoid confidence: maps move magnitude smoothly to (0.5, 0.95).
+    k = 0.45
     if move_pct > 1.5:
         signal = "BUY"
-        confidence = min(0.5 + move_pct * 0.03, 0.92)
+        confidence = min(0.5 + 0.45 * (2 * _sigmoid(k * move_pct) - 1), 0.95)
     elif move_pct < -1.5:
         signal = "SELL"
-        confidence = min(0.5 + abs(move_pct) * 0.03, 0.92)
+        confidence = min(0.5 + 0.45 * (2 * _sigmoid(k * abs(move_pct)) - 1), 0.95)
     else:
         signal = "HOLD"
         confidence = 0.45
@@ -116,7 +192,7 @@ def forecast(df: pd.DataFrame, steps: int = 5) -> dict:
         f"Kronos Foundation Model ({signal} @ {confidence*100:.1f}% confidence):\n"
         f"  • Next {steps} candle forecast: {candle_path}\n"
         f"  • Predicted range: ₹{predicted_low:.1f} – ₹{predicted_high:.1f}\n"
-        f"  • Expected move: {move_pct:+.2f}% over {steps * 30} minutes\n"
+        f"  • Expected move: {move_pct:+.2f}% over {steps} sessions\n"
         f"  • Price trajectory: {'upward with momentum' if move_pct > 2 else 'gradual upward' if move_pct > 0 else 'downward pressure'}"
     )
 

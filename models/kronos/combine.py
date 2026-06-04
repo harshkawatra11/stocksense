@@ -53,6 +53,27 @@ def combine_signals(ml_result: dict, kronos_result: dict) -> dict:
     lgbm_w = _lgbm_weight
     kronos_w = _kronos_weight
 
+    # Both HOLD — neither model sees an edge. Reduce confidence further;
+    # this is the weakest possible signal and should not reach Claude.
+    if ml_sig == "HOLD" and kr_sig == "HOLD":
+        combined_conf = round(min(ml_conf, kr_conf) * 0.8, 4)
+        reasoning = (
+            f"Combined Analysis (HOLD @ {combined_conf*100:.1f}% confidence):\n"
+            f"  • LightGBM: HOLD at {ml_conf*100:.1f}%\n"
+            f"  • Kronos: HOLD at {kr_conf*100:.1f}%\n"
+            "  • Both models neutral — no edge, confidence reduced."
+        )
+        return {
+            "signal": "HOLD",
+            "confidence": combined_conf,
+            "ml_signal": ml_sig,
+            "kronos_signal": kr_sig,
+            "ml_confidence": round(ml_conf, 4),
+            "kronos_confidence": round(kr_conf, 4),
+            "combined_reasoning": reasoning,
+            "agreement": True,
+        }
+
     # Agreement bonus
     if ml_sig == kr_sig and ml_sig != "HOLD":
         agreement_boost = 0.05
