@@ -176,6 +176,12 @@ async def upsert_fo_daily(conn, d: date, df: pd.DataFrame) -> int:
     if not rows:
         return 0
 
+    # Filter to tickers that exist in the stocks table (excludes NIFTY/BANKNIFTY indices)
+    known = {r["ticker"] for r in await conn.fetch("SELECT ticker FROM stocks")}
+    rows = [r for r in rows if r[1] in known]
+    if not rows:
+        return 0
+
     await conn.executemany(
         """
         INSERT INTO fo_daily (time, ticker, total_oi, oi_change, put_oi, call_oi, pcr)
