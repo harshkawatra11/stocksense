@@ -7,7 +7,6 @@ import asyncio
 import asyncpg
 import pandas as pd
 import logging
-import os
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
@@ -16,7 +15,7 @@ from models.ml.predict import predict_with_reasoning
 from models.kronos.integration import forecast as kronos_forecast
 from models.kronos.combine import combine_signals
 from models.slm.infer import slm_enrich
-from intelligence.portfolio_guard import get_portfolio_tickers, is_held
+from intelligence.portfolio_guard import get_portfolio_tickers
 from config import settings
 
 log = logging.getLogger(__name__)

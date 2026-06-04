@@ -86,7 +86,7 @@ class SignalReasoning(Base):
 class Learning(Base):
     __tablename__ = "learnings"
     id = Column(Integer, primary_key=True)
-    learning_date = Column(DateTime, nullable=False)
+    learning_date = Column(Date, nullable=False)
     learning_type = Column(String(50), nullable=False)
     ticker = Column(String(20), ForeignKey("stocks.ticker"))
     signal_id = Column(Integer, ForeignKey("signals.id"))

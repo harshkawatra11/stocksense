@@ -102,6 +102,30 @@ CREATE TABLE learnings (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE fo_daily (
+    time TIMESTAMPTZ NOT NULL,
+    ticker VARCHAR(20) NOT NULL REFERENCES stocks(ticker),
+    total_oi BIGINT,
+    oi_change BIGINT,
+    put_oi BIGINT,
+    call_oi BIGINT,
+    pcr NUMERIC(10,4),
+    PRIMARY KEY (time, ticker)
+);
+SELECT create_hypertable('fo_daily', 'time', if_not_exists => TRUE);
+
+CREATE TABLE slm_training_pairs (
+    id SERIAL PRIMARY KEY,
+    ticker VARCHAR(20) REFERENCES stocks(ticker),
+    trade_date DATE NOT NULL,
+    situation_context TEXT NOT NULL,
+    claude_response TEXT NOT NULL,
+    decision VARCHAR(10),
+    confidence NUMERIC(5,4),
+    reasoning TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE feature_importance (
     id SERIAL PRIMARY KEY,
     model_version VARCHAR(50) NOT NULL,
