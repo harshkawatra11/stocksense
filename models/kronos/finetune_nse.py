@@ -4,7 +4,7 @@ using the real finetune_csv pipeline from the Kronos repo.
 
 Usage:
     python -m models.kronos.finetune_nse [--ticker RELIANCE] [--model-size base]
-                                          [--epochs-tokenizer 30] [--epochs-model 20]
+                                          [--epochs-tokenizer 3] [--epochs-model 2]
                                           [--batch-size 8]
 
 Strategy:
@@ -20,8 +20,10 @@ Strategy:
 
 Hardware note (RTX 3050 4GB):
     batch_size=8, lookback_window=90, predict_window=10
-    Tokenizer: ~1-2 hr/epoch. Base model: ~2-4 hr/epoch.
-    Run overnight: 30 tokenizer epochs + 20 base epochs ≈ 10-18 hrs total.
+    Fine-tuning a PRETRAINED model needs few epochs (3 tokenizer + 2 base) —
+    more just re-feeds the same candles and overfits. Full ~26yr history per
+    ticker is exported (cap 6500 ≈ trading days in 26yr). One overnight run
+    (~8-14 hrs on RTX 3050).
 """
 from __future__ import annotations
 
@@ -97,18 +99,18 @@ async def export_nse_csv(
             )
         tickers_used = [ticker]
     else:
-        # Cap to most-recent max_rows_per_ticker rows per ticker so the full
-        # export fits comfortably in RAM (~3772 × 2000 × 6 cols ≈ 350MB).
-        # 2000 daily candles = ~8 years per ticker, giving ~1900 valid training
-        # windows per ticker (lookback+predict = 100 candles each).
-        max_rows_per_ticker = 2000
+        # Cap per ticker to the natural ceiling of ~26 years of NSE trading days
+        # (~250 sessions/yr × 26 ≈ 6500). No NSE equity has more daily candles than
+        # this, so the cap is effectively "full history" while bounding RAM.
+        # ~6500 × ~700 deep-history tickers × 7 cols ≈ a few hundred MB — fits 16GB.
+        max_rows_per_ticker = 6500
         log.info(
-            "Bulk export: tickers with >= %d rows, capped at %d rows each...",
+            "Bulk export: tickers with >= %d rows, capped at %d rows each (full ~26yr history)...",
             min_rows, max_rows_per_ticker,
         )
         rows = await conn.fetch(
             """
-            SELECT time, open, high, low, close, volume
+            SELECT ticker, time, open, high, low, close, volume
             FROM (
                 SELECT
                     ticker, time, open, high, low, close, volume,
@@ -124,7 +126,7 @@ async def export_nse_csv(
                   GROUP BY ticker
                   HAVING COUNT(*) >= $1
               )
-            ORDER BY time ASC
+            ORDER BY ticker ASC, time ASC
             """,
             min_rows,
             max_rows_per_ticker,
@@ -132,22 +134,53 @@ async def export_nse_csv(
         log.info("Bulk export: %d rows fetched across all tickers", len(rows))
         tickers_used = ["all"]
 
-    df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
+    # IMPORTANT: keep each ticker's candles contiguous and in time order.
+    # CustomKlineDataset slices a fixed-length window (lookback+predict+1) as a
+    # single OHLCV sequence, so rows MUST be grouped per ticker — interleaving
+    # tickers by date would feed the model meaningless cross-stock windows.
+    # The single-ticker branch returns 6 columns; the bulk branch returns 7
+    # (with a leading `ticker`) — normalize both to the 6 feature columns,
+    # preserving the SQL ordering (do NOT re-sort globally by time).
+    multi_ticker = ticker is None
+    cols = ["ticker", "time", "open", "high", "low", "close", "volume"] if rows and len(rows[0]) == 7 \
+        else ["time", "open", "high", "low", "close", "volume"]
+    df = pd.DataFrame(rows, columns=cols)
+    if "ticker" in df.columns:
+        df = df.drop(columns=["ticker"])
     df["time"] = pd.to_datetime(df["time"])
-    df = df.sort_values("time").reset_index(drop=True)
 
     # Derive amount = close * volume (turnover). Kronos requires this column;
     # NSE daily data doesn't store it directly but the product is equivalent.
     df["amount"] = df["close"] * df["volume"]
 
-    # Rename and reorder to match Kronos expected schema exactly:
-    # timestamps, open, close, high, low, volume, amount
-    df = df.rename(columns={"time": "timestamps"})
-    df["timestamps"] = df["timestamps"].dt.strftime("%Y/%m/%d %H:%M")
-    df = df[["timestamps", "open", "close", "high", "low", "volume", "amount"]]
+    # Drop rows with any NaN before assigning timestamps so the synthetic
+    # sequence below stays gap-free and length-aligned.
+    df = df.dropna().reset_index(drop=True)
 
-    # Drop rows with any NaN after computation
-    df = df.dropna()
+    if multi_ticker:
+        # CRITICAL: Kronos's CustomKlineDataset re-sorts the CSV by `timestamps`
+        # on load (df.sort_values('timestamps')). Real NSE daily candles share
+        # calendar dates across tickers, so real timestamps would re-interleave
+        # every stock by date and destroy per-ticker sequence contiguity —
+        # making each training window a mix of ~100 unrelated stocks.
+        #
+        # We export tickers in contiguous per-ticker blocks (ORDER BY ticker,
+        # time) and overwrite timestamps with a synthetic strictly-monotonic
+        # minute sequence. This makes the internal sort a no-op and preserves
+        # each ticker's candle order. Trade-off: synthetic timestamps drop real
+        # calendar features (weekday/month seasonality), which is an acceptable
+        # secondary loss — correct price sequences are what matter.
+        # freq='min' keeps millions of rows inside the datetime64[ns] range
+        # (year 1677-2262); 'B'/'D' would overflow on a multi-million-row corpus.
+        ts = pd.date_range("2000-01-01", periods=len(df), freq="min")
+        df["timestamps"] = ts.strftime("%Y/%m/%d %H:%M")
+    else:
+        # Single instrument — real timestamps are safe and preserve calendar features.
+        df["timestamps"] = df["time"].dt.strftime("%Y/%m/%d %H:%M")
+
+    # Reorder to match Kronos expected schema exactly:
+    # timestamps, open, close, high, low, volume, amount
+    df = df[["timestamps", "open", "close", "high", "low", "volume", "amount"]]
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path, index=False)
@@ -209,8 +242,8 @@ def generate_config(
     lookback_window: int = 90,
     predict_window: int = 10,
     batch_size: int = 8,
-    epochs_tokenizer: int = 30,
-    epochs_model: int = 20,
+    epochs_tokenizer: int = 3,
+    epochs_model: int = 2,
 ) -> Path:
     """
     Write a Kronos config.yaml tuned for RTX 3050 4GB (single GPU, small batch).
@@ -357,8 +390,8 @@ def run_finetune(config_path: Path) -> None:
 async def run(
     ticker: str | None = None,
     model_size: str = settings.KRONOS_MODEL_SIZE,
-    epochs_tokenizer: int = 30,
-    epochs_model: int = 20,
+    epochs_tokenizer: int = 3,
+    epochs_model: int = 2,
     batch_size: int = 8,
     lookback_window: int = 90,
     predict_window: int = 10,
@@ -418,12 +451,13 @@ if __name__ == "__main__":
         help=f"Kronos model variant (default: {settings.KRONOS_MODEL_SIZE} from KRONOS_MODEL_SIZE env)"
     )
     parser.add_argument(
-        "--epochs-tokenizer", type=int, default=30,
-        help="Tokenizer training epochs (default: 30)"
+        "--epochs-tokenizer", type=int, default=3,
+        help="Tokenizer training epochs (default: 3 — fine-tuning a pretrained model "
+             "needs few passes; more overfits and repeats data)"
     )
     parser.add_argument(
-        "--epochs-model", type=int, default=20,
-        help="Base model fine-tune epochs (default: 20)"
+        "--epochs-model", type=int, default=2,
+        help="Base model fine-tune epochs (default: 2)"
     )
     parser.add_argument(
         "--batch-size", type=int, default=8,
