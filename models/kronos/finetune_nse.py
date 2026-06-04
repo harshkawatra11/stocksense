@@ -192,6 +192,9 @@ def ensure_pretrained_weights(model_size: str = "base") -> tuple[Path, Path]:
 # ---------------------------------------------------------------------------
 # Step 3: Generate config.yaml
 # ---------------------------------------------------------------------------
+_MAX_CONTEXT = {"mini": 2048, "small": 512, "base": 512}
+
+
 def generate_config(
     csv_path: Path,
     tokenizer_path: Path,
@@ -199,6 +202,7 @@ def generate_config(
     finetuned_dir: Path,
     exp_name: str,
     *,
+    model_size: str = "mini",
     lookback_window: int = 90,
     predict_window: int = 10,
     batch_size: int = 8,
@@ -214,7 +218,7 @@ def generate_config(
             "data_path": str(csv_path),
             "lookback_window": lookback_window,
             "predict_window": predict_window,
-            "max_context": 512,
+            "max_context": _MAX_CONTEXT.get(model_size, 512),
             "clip": 5.0,
             "train_ratio": 0.9,
             "val_ratio": 0.1,
@@ -347,7 +351,7 @@ def run_finetune(config_path: Path) -> None:
 # ---------------------------------------------------------------------------
 async def run(
     ticker: str | None = None,
-    model_size: str = "base",
+    model_size: str = "mini",
     epochs_tokenizer: int = 30,
     epochs_model: int = 20,
     batch_size: int = 8,
@@ -380,6 +384,7 @@ async def run(
         predictor_path=predictor_path,
         finetuned_dir=FINETUNED_DIR,
         exp_name=exp_name,
+        model_size=model_size,
         lookback_window=lookback_window,
         predict_window=predict_window,
         batch_size=batch_size,
@@ -399,8 +404,8 @@ if __name__ == "__main__":
         help="Single NSE ticker to fine-tune on (default: all tickers with >=300 rows)"
     )
     parser.add_argument(
-        "--model-size", default="base", choices=["mini", "small", "base"],
-        help="Kronos model variant (default: base)"
+        "--model-size", default="mini", choices=["mini", "small", "base"],
+        help="Kronos model variant (default: mini — 2048 context sees ~8yr of daily NSE data per sample)"
     )
     parser.add_argument(
         "--epochs-tokenizer", type=int, default=30,
