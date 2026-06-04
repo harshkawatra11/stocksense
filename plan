@@ -4,12 +4,12 @@
 
 ## Context
 
-StockSense is an intelligent NSE stock market system modeled on Angel One's UI with an additional Intelligence Dashboard. The system chains four reasoning layers — LightGBM ensemble, Kronos foundation model, a commander-grade SLM (Qwen2.5-7B-Instruct), and Claude CLI — each producing explicit, human-readable reasoning that streams live into a multi-terminal dashboard. The system learns every day: EOD and weekend Claude Opus reviews compare predictions to actuals, extract structured learnings, and feed those back into every subsequent run. After two months of daily market runs, the system is intended to be a self-improving NSE intelligence engine.
+StockSense is an intelligent NSE stock market system modeled on Angel One's UI with an additional Intelligence Dashboard. The system chains four reasoning layers — LightGBM ensemble, Kronos foundation model, a commander-grade SLM (Phi-3 Mini), and Claude CLI — each producing explicit, human-readable reasoning that streams live into a multi-terminal dashboard. The system learns every day: EOD and weekend Claude Opus reviews compare predictions to actuals, extract structured learnings, and feed those back into every subsequent run. After two months of daily market runs, the system is intended to be a self-improving NSE intelligence engine.
 
 A partial scaffold exists (backend routers, ML pipeline, intelligence layer) but is not production-ready: no scheduler, empty frontend, missing requirements.txt and docker-compose, incomplete ORM, fragile JSON parsing, and hardcoded config throughout. This plan rebuilds and extends the scaffold into a complete, runnable system.
 
 **User answers locked in:**
-- SLM commander training: Claude distillation — Claude CLI generates veteran-grade (situation → judgment) pairs from 26yr NSE data, then QLoRA fine-tune Qwen2.5-7B-Instruct via Unsloth
+- SLM commander training: Claude distillation — Claude CLI generates veteran-grade (situation → judgment) pairs from 26yr NSE data, then QLoRA fine-tune Phi-3 Mini via Unsloth
 - First milestone: Multi-terminal dashboard, live-streaming reasoning from all models
 - Live data: Phase 2 — yfinance + daily data first, Angel One SmartAPI in second phase
 
@@ -79,7 +79,7 @@ Generate pairs for:
 
 ### Phase 3: QLoRA Fine-tune (Week 5–6)
 - Framework: Unsloth (designed for sub-8GB VRAM)
-- Base: Qwen2.5-7B-Instruct (7B) — fallback to 3B if 7B OOMs during training
+- Base: Phi-3-mini-4k-instruct (3.8B)
 - Method: QLoRA 4-bit, LoRA rank=16, target modules: q_proj, v_proj
 - Hardware: RTX 3050 4GB — Unsloth confirmed working at this spec
 - Expected: 8–12 hours per epoch, 3 epochs = 2–3 days
@@ -133,7 +133,7 @@ trl==0.13.0
 DATABASE_URL=postgresql+asyncpg://stocksense:stocksense@localhost:5432/stocksense
 DATABASE_DSN=postgresql://stocksense:stocksense@localhost:5432/stocksense
 OLLAMA_URL=http://localhost:11434
-SLM_MODEL=qwen2.5:7b
+SLM_MODEL=phi3:mini
 ANGEL_ONE_API_KEY=
 ANGEL_ONE_CLIENT_ID=
 PIPELINE_INTERVAL_MINUTES=30
@@ -155,7 +155,7 @@ Services:
 - Raw Bhavcopy zips deleted after parsing (saves 15GB, keeps ~210GB free)
 - 1-min OHLCV deferred to Phase 2, top 100 watchlist stocks only (~30GB additional)
 - TimescaleDB compression enabled on data older than 90 days (~60% size reduction on historical)
-- Ollama (Qwen2.5-7B-Instruct) runs on host, uses RTX 3050 for GPU-accelerated inference
+- Ollama (Phi-3 Mini) runs on host, uses RTX 3050 for GPU-accelerated inference
 - All Claude calls via CLI subprocess — no cloud dependency beyond Claude Code subscription
 - System is fully self-contained and offline-capable after initial data seed
 
@@ -313,7 +313,7 @@ Kronos trained on only recent years would never learn how Indian markets behave 
 ---
 
 ### Phase 4: SLM Commander Layer
-**Goal:** Qwen2.5-7B-Instruct running via Ollama with commander-grade reasoning.
+**Goal:** Phi-3 Mini running via Ollama with commander-grade reasoning.
 
 #### Fix `models/slm/infer.py`
 - Replace generic system prompt with full SKILL_nse_specialist.md + SKILL_intraday.md content
@@ -339,7 +339,7 @@ async def generate_training_pair(conn, ticker, date, market_context) -> dict:
 Unsloth QLoRA fine-tuning:
 ```python
 from unsloth import FastLanguageModel
-model, tokenizer = FastLanguageModel.from_pretrained("microsoft/Qwen2.5-7B-Instruct", load_in_4bit=True)
+model, tokenizer = FastLanguageModel.from_pretrained("microsoft/Phi-3-mini-4k-instruct", load_in_4bit=True)
 # Apply LoRA, train on training_pairs.jsonl, save adapter
 ```
 - Designed for RTX 3050 4GB (Unsloth's exact use case)
@@ -580,6 +580,7 @@ Refactor `intelligence/signal_pipeline.py::run_single_ticker()` to be an async g
 
 #### Add `intelligence/accuracy_tracker.py` (new file)
 - Runs nightly (after EOD review)
+
 - Computes rolling 7-day accuracy per model (LightGBM, Kronos, combined)
 - Updates `model_accuracy` table
 - If LightGBM 7-day accuracy > Kronos: shift weights (60/40 instead of 40/60)
@@ -661,8 +662,8 @@ python -m models.ml.train
 python -m models.kronos.integration  # auto-clones and sets up
 python -m models.kronos.finetune_nse  # fine-tune on NSE data
 
-# 6. Setup Ollama + Qwen2.5-7B
-ollama pull qwen2.5:7b
+# 6. Setup Ollama + Phi-3
+ollama pull phi3:mini
 
 # 7. Generate SLM training pairs (Week 3, after data is in)
 python -m models.slm.train_commander  # calls claude CLI ~10,000 times
@@ -723,7 +724,7 @@ These are directional estimates. Edge comes from compounding daily learning.
 - combine_signals() returns correct agreement/disagreement reasoning
 
 ### After Phase 4
-- Ollama running: `curl http://localhost:11434/api/tags` returns qwen2.5:7b
+- Ollama running: `curl http://localhost:11434/api/tags` returns phi3:mini
 - slm_enrich() returns valid JSON with stop_loss, target, confidence
 - SELL signal on unowned ticker returns SKIP
 

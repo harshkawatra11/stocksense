@@ -89,7 +89,7 @@ class Settings:
 
     @property
     def KRONOS_MODEL_SIZE(self) -> str:
-        return os.getenv("KRONOS_MODEL_SIZE", "base")
+        return os.getenv("KRONOS_MODEL_SIZE", "mini")
 
     # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
