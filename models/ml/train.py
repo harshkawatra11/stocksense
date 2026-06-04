@@ -55,6 +55,8 @@ async def load_training_data(conn, tickers: list = None) -> pd.DataFrame:
         rows = await conn.fetch(query)
 
     df = pd.DataFrame(rows, columns=["time", "ticker", "open", "high", "low", "close", "volume"])
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
     df["time"] = pd.to_datetime(df["time"], utc=True)
     df = df.set_index("time").sort_index()
     return df
