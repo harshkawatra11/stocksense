@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react'
-import { fetchAccuracySummary } from '../api/accuracy'
-import type { AccuracySummary } from '../api/accuracy'
+import { fetchAccuracySummary, fetchModelAccuracy } from '../api/accuracy'
+import type { AccuracySummary, ModelAccuracyRow } from '../api/accuracy'
 
 export function useAccuracy() {
-  const [rows, setRows] = useState<AccuracySummary[]>([])
+  const [summary, setSummary] = useState<AccuracySummary | null>(null)
+  const [rows, setRows] = useState<ModelAccuracyRow[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     setLoading(true)
-    fetchAccuracySummary()
-      .then(setRows)
-      .catch(() => setRows([]))
+    Promise.all([fetchAccuracySummary(), fetchModelAccuracy()])
+      .then(([s, r]) => { setSummary(s); setRows(r) })
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
 
-  return { rows, loading }
+  return { summary, rows, loading }
 }

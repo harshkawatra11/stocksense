@@ -22,6 +22,7 @@ async def accuracy_summary():
         FROM signals
         """
     )
+    await conn.close()
     r = rows[0]
     total = r["total_resolved"] or 1
     return {
