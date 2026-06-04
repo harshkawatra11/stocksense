@@ -21,7 +21,22 @@ log = logging.getLogger(__name__)
 KRONOS_DIR = os.path.join(os.path.dirname(__file__), "kronos_repo")
 KRONOS_REPO = "https://github.com/shiyu-coder/Kronos.git"
 # Local NSE-finetuned model checkpoint (produced by finetune_nse.py). Optional.
-KRONOS_WEIGHTS_DIR = os.path.join(os.path.dirname(__file__), "weights", "nse_26yr_finetuned")
+# NSE-finetuned predictor checkpoint — produced by finetune_nse.py.
+# finetune_nse.py saves to weights/nse_finetuned/{exp_name}/basemodel/best_model/
+# Override via env var NSE_KRONOS_WEIGHTS_DIR if you used a custom exp_name.
+_WEIGHTS_BASE = os.path.join(os.path.dirname(__file__), "weights", "nse_finetuned")
+KRONOS_WEIGHTS_DIR = os.environ.get(
+    "NSE_KRONOS_WEIGHTS_DIR",
+    # auto-detect: use the first basemodel/best_model found under nse_finetuned/
+    next(
+        (
+            str(p)
+            for p in sorted(__import__("pathlib").Path(_WEIGHTS_BASE).glob("*/basemodel/best_model"))
+            if p.is_dir()
+        ),
+        "",  # empty → no finetuned weights, use pretrained
+    ),
+)
 
 # model_size -> (model HF id, tokenizer HF id, max_context)
 _MODEL_SPECS = {

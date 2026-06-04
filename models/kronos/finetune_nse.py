@@ -1,34 +1,44 @@
 """
-Fine-tunes Kronos foundation model on 26 years of NSE OHLCV data.
+Fine-tunes Kronos foundation model on 26 years of NSE OHLCV data
+using the real finetune_csv pipeline from the Kronos repo.
 
 Usage:
-    python -m models.kronos.finetune_nse
+    python -m models.kronos.finetune_nse [--ticker RELIANCE] [--model-size base]
+                                          [--epochs-tokenizer 30] [--epochs-model 20]
+                                          [--batch-size 8]
 
 Strategy:
-    1. Checks if Kronos repo is cloned (calls ensure_kronos from integration.py).
-    2. Loads all NSE daily OHLCV from DB for all tickers with >= 300 rows.
-    3. Formats data as Kronos training sequences (OHLCV windows of 60 candles).
-    4. Attempts to fine-tune using Kronos API; if API unavailable, saves training
-       data in Kronos-compatible format with instructions for manual run.
-    5. Saves fine-tuned weights (or training data) to
-       models/kronos/weights/nse_26yr_finetuned/
+    1. Exports NSE daily OHLCV from DB to a Kronos-compatible CSV file.
+       CSV columns: timestamps, open, close, high, low, volume, amount
+       (amount = close × volume — trading turnover, required by Kronos tokenizer)
+    2. Generates a config.yaml pointing at pretrained weights and the CSV.
+    3. Downloads pretrained Kronos weights from HuggingFace if not already present.
+    4. Runs finetune_tokenizer.py then finetune_base_model.py from the Kronos repo,
+       which implement the real training loop:
+         tokenizer.encode → Kronos.forward → head.compute_loss → AdamW
+    5. Saves finetuned weights to models/kronos/weights/nse_finetuned/{exp_name}/
+
+Hardware note (RTX 3050 4GB):
+    batch_size=8, lookback_window=90, predict_window=10
+    Tokenizer: ~1-2 hr/epoch. Base model: ~2-4 hr/epoch.
+    Run overnight: 30 tokenizer epochs + 20 base epochs ≈ 10-18 hrs total.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
-import pickle
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import asyncpg
-import numpy as np
 import pandas as pd
+import yaml
 
 from config import settings
-from models.kronos.integration import ensure_kronos
+from models.kronos.integration import ensure_kronos, KRONOS_DIR
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -36,272 +46,390 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-WEIGHTS_DIR = Path(__file__).parent / "weights" / "nse_26yr_finetuned"
-KRONOS_REPO_DIR = Path(__file__).parent / "kronos_repo"
-TRAIN_DATA_PATH = WEIGHTS_DIR / "train_data.pkl"
-FINETUNED_MODEL_PATH = WEIGHTS_DIR / "kronos_nse_finetuned"
+_HERE = Path(__file__).parent
+KRONOS_REPO_DIR   = Path(KRONOS_DIR)
+WEIGHTS_DIR       = _HERE / "weights"
+PRETRAINED_DIR    = WEIGHTS_DIR / "pretrained"
+FINETUNED_DIR     = WEIGHTS_DIR / "nse_finetuned"
+CSV_DIR           = WEIGHTS_DIR / "csv_exports"
+
+# HuggingFace model IDs for Kronos base weights
+_HF_PREDICTOR  = "NeoQuasar/Kronos-base"
+_HF_TOKENIZER  = "NeoQuasar/Kronos-Tokenizer-base"
 
 
 # ---------------------------------------------------------------------------
-# Data loading
+# Step 1: Export DB → Kronos CSV
 # ---------------------------------------------------------------------------
-async def load_nse_sequences(conn, window: int = 60) -> list[dict[str, Any]]:
+async def export_nse_csv(
+    conn,
+    ticker: str | None,
+    out_path: Path,
+    min_rows: int = 300,
+) -> int:
     """
-    Fetch all NSE tickers with >= 300 rows of daily OHLCV from DB.
-    For each ticker, create sliding windows of `window` candles.
-    Each window is a dict with arrays: open, high, low, close, volume, ticker, start_date.
+    Export NSE daily OHLCV from DB to a Kronos-compatible CSV.
 
-    Returns a list of sequence dicts ready for Kronos training.
+    If ticker is None, exports ALL tickers with >= min_rows rows,
+    sorted chronologically and concatenated (one long time series).
+    This is the correct approach for fine-tuning — Kronos learns from
+    the full distribution of NSE price action, not a single stock.
+
+    CSV columns: timestamps, open, close, high, low, volume, amount
+    amount = close * volume (trading turnover — required by Kronos tokenizer)
     """
-    log.info("Fetching ticker list (min 300 rows)...")
-    ticker_rows = await conn.fetch(
-        """
-        SELECT ticker, COUNT(*) as cnt
-        FROM ohlcv_daily
-        WHERE close IS NOT NULL
-        GROUP BY ticker
-        HAVING COUNT(*) >= 300
-        ORDER BY cnt DESC
-        """
-    )
-    tickers = [r["ticker"] for r in ticker_rows]
-    log.info(f"Found {len(tickers)} tickers with >= 300 rows")
-
-    sequences: list[dict] = []
-
-    for ticker in tickers:
+    if ticker:
+        log.info(f"Exporting {ticker} from DB...")
         rows = await conn.fetch(
             """
             SELECT time, open, high, low, close, volume
             FROM ohlcv_daily
             WHERE ticker = $1 AND close IS NOT NULL
+              AND open IS NOT NULL AND volume IS NOT NULL
             ORDER BY time ASC
             """,
             ticker,
         )
-        if not rows:
-            continue
-
-        df = pd.DataFrame(
-            rows, columns=["time", "open", "high", "low", "close", "volume"]
+        if len(rows) < min_rows:
+            raise ValueError(
+                f"{ticker} has only {len(rows)} rows (need {min_rows}). "
+                "Run fetch_historical first."
+            )
+        tickers_used = [ticker]
+    else:
+        log.info("Fetching all tickers with >= %d rows...", min_rows)
+        ticker_rows = await conn.fetch(
+            """
+            SELECT ticker FROM (
+                SELECT ticker, COUNT(*) as cnt
+                FROM ohlcv_daily
+                WHERE close IS NOT NULL AND open IS NOT NULL AND volume IS NOT NULL
+                GROUP BY ticker
+            ) t WHERE cnt >= $1
+            ORDER BY ticker
+            """,
+            min_rows,
         )
-        df["time"] = pd.to_datetime(df["time"])
+        tickers_used = [r["ticker"] for r in ticker_rows]
+        log.info("Exporting %d tickers...", len(tickers_used))
 
-        opens = df["open"].astype(float).values
-        highs = df["high"].astype(float).values
-        lows = df["low"].astype(float).values
-        closes = df["close"].astype(float).values
-        volumes = df["volume"].astype(float).values
-        dates = df["time"].values
+        all_rows = []
+        for tk in tickers_used:
+            r = await conn.fetch(
+                """
+                SELECT time, open, high, low, close, volume
+                FROM ohlcv_daily
+                WHERE ticker = $1 AND close IS NOT NULL
+                  AND open IS NOT NULL AND volume IS NOT NULL
+                ORDER BY time ASC
+                """,
+                tk,
+            )
+            all_rows.extend(r)
+        rows = all_rows
 
-        n = len(df)
-        step = max(1, window // 4)  # 25% stride to get diverse windows
+    df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "volume"])
+    df["time"] = pd.to_datetime(df["time"])
+    df = df.sort_values("time").reset_index(drop=True)
 
-        for start in range(0, n - window, step):
-            end = start + window
-            seq = {
-                "ticker": ticker,
-                "start_date": str(dates[start])[:10],
-                "end_date": str(dates[end - 1])[:10],
-                "open": opens[start:end].tolist(),
-                "high": highs[start:end].tolist(),
-                "low": lows[start:end].tolist(),
-                "close": closes[start:end].tolist(),
-                "volume": volumes[start:end].tolist(),
-                # Next candle as target (for supervised fine-tuning)
-                "target_close": float(closes[end]) if end < n else None,
-                "target_high": float(highs[end]) if end < n else None,
-                "target_low": float(lows[end]) if end < n else None,
-            }
-            sequences.append(seq)
+    # Derive amount = close * volume (turnover). Kronos requires this column;
+    # NSE daily data doesn't store it directly but the product is equivalent.
+    df["amount"] = df["close"] * df["volume"]
 
-    log.info(f"Built {len(sequences):,} training sequences from {len(tickers)} tickers")
-    return sequences
+    # Rename and reorder to match Kronos expected schema exactly:
+    # timestamps, open, close, high, low, volume, amount
+    df = df.rename(columns={"time": "timestamps"})
+    df["timestamps"] = df["timestamps"].dt.strftime("%Y/%m/%d %H:%M")
+    df = df[["timestamps", "open", "close", "high", "low", "volume", "amount"]]
+
+    # Drop rows with any NaN after computation
+    df = df.dropna()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+    log.info("Exported %d rows to %s", len(df), out_path)
+    return len(df)
 
 
-def _normalize_sequences(sequences: list[dict]) -> list[dict]:
+# ---------------------------------------------------------------------------
+# Step 2: Download pretrained weights
+# ---------------------------------------------------------------------------
+def ensure_pretrained_weights(model_size: str = "base") -> tuple[Path, Path]:
     """
-    Normalize OHLCV values within each window to [0, 1] range.
-    This improves cross-ticker generalization.
+    Download pretrained Kronos tokenizer + predictor from HuggingFace if needed.
+    Returns (tokenizer_path, predictor_path).
     """
-    normalized = []
-    for seq in sequences:
-        closes = np.array(seq["close"])
-        price_min = min(seq["low"])
-        price_max = max(seq["high"])
-        price_range = price_max - price_min + 1e-8
+    specs = {
+        "base":  ("NeoQuasar/Kronos-base",       "NeoQuasar/Kronos-Tokenizer-base"),
+        "mini":  ("NeoQuasar/Kronos-mini",        "NeoQuasar/Kronos-Tokenizer-2k"),
+        "small": ("NeoQuasar/Kronos-small",       "NeoQuasar/Kronos-Tokenizer-base"),
+    }
+    predictor_hf, tokenizer_hf = specs.get(model_size, specs["base"])
 
-        vol_arr = np.array(seq["volume"])
-        vol_max = vol_arr.max() + 1e-8
+    predictor_path  = PRETRAINED_DIR / f"Kronos-{model_size}"
+    tokenizer_path  = PRETRAINED_DIR / f"Kronos-Tokenizer-{model_size}"
 
-        norm_seq = {
-            **seq,
-            "open": ((np.array(seq["open"]) - price_min) / price_range).tolist(),
-            "high": ((np.array(seq["high"]) - price_min) / price_range).tolist(),
-            "low": ((np.array(seq["low"]) - price_min) / price_range).tolist(),
-            "close": ((closes - price_min) / price_range).tolist(),
-            "volume": (vol_arr / vol_max).tolist(),
-            "price_min": float(price_min),
-            "price_range": float(price_range),
-            "vol_max": float(vol_max),
-        }
-        if seq.get("target_close") is not None:
-            norm_seq["target_close_norm"] = (
-                seq["target_close"] - price_min
-            ) / price_range
-        normalized.append(norm_seq)
-    return normalized
+    for hf_id, local_path in [(tokenizer_hf, tokenizer_path), (predictor_hf, predictor_path)]:
+        if local_path.exists() and any(local_path.iterdir()):
+            log.info("Weights already present: %s", local_path)
+            continue
+        log.info("Downloading %s from HuggingFace → %s", hf_id, local_path)
+        local_path.mkdir(parents=True, exist_ok=True)
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(repo_id=hf_id, local_dir=str(local_path))
+            log.info("Downloaded %s", hf_id)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to download {hf_id}: {e}\n"
+                f"Install: pip install huggingface_hub\n"
+                f"Or manually: huggingface-cli download {hf_id} --local-dir {local_path}"
+            ) from e
+
+    return tokenizer_path, predictor_path
 
 
-def _save_training_data_for_kronos(sequences: list[dict]) -> None:
+# ---------------------------------------------------------------------------
+# Step 3: Generate config.yaml
+# ---------------------------------------------------------------------------
+def generate_config(
+    csv_path: Path,
+    tokenizer_path: Path,
+    predictor_path: Path,
+    finetuned_dir: Path,
+    exp_name: str,
+    *,
+    lookback_window: int = 90,
+    predict_window: int = 10,
+    batch_size: int = 8,
+    epochs_tokenizer: int = 30,
+    epochs_model: int = 20,
+) -> Path:
     """
-    Persist training sequences to disk in Kronos-compatible pickle format.
-    Called when Kronos fine-tune API is not available.
+    Write a Kronos config.yaml tuned for RTX 3050 4GB (single GPU, small batch).
+    Returns the path to the written config file.
     """
-    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-    normalized = _normalize_sequences(sequences)
-
-    payload = {
-        "sequences": normalized,
-        "metadata": {
-            "n_sequences": len(normalized),
-            "window_size": 60,
-            "features": ["open", "high", "low", "close", "volume"],
-            "description": "NSE 26yr OHLCV fine-tuning data",
-            "created_by": "stocksense/models/kronos/finetune_nse.py",
+    config = {
+        "data": {
+            "data_path": str(csv_path),
+            "lookback_window": lookback_window,
+            "predict_window": predict_window,
+            "max_context": 512,
+            "clip": 5.0,
+            "train_ratio": 0.9,
+            "val_ratio": 0.1,
+            "test_ratio": 0.0,
+        },
+        "training": {
+            "tokenizer_epochs": epochs_tokenizer,
+            "basemodel_epochs": epochs_model,
+            "batch_size": batch_size,
+            "log_interval": 50,
+            "num_workers": 2,        # keep low — 16GB RAM
+            "seed": 42,
+            "tokenizer_learning_rate": 2e-4,
+            "predictor_learning_rate": 1e-6,
+            "adam_beta1": 0.9,
+            "adam_beta2": 0.95,
+            "adam_weight_decay": 0.1,
+            "accumulation_steps": 4, # effective batch = 8*4 = 32
+        },
+        "model_paths": {
+            "pretrained_tokenizer": str(tokenizer_path),
+            "pretrained_predictor": str(predictor_path),
+            "exp_name": exp_name,
+            "base_path": str(finetuned_dir),
+            "base_save_path": "",    # auto-filled by config_loader
+            "finetuned_tokenizer": "",
+            "tokenizer_save_name": "tokenizer",
+            "basemodel_save_name": "basemodel",
+        },
+        "experiment": {
+            "name": "kronos_nse_finetune",
+            "description": f"NSE 26yr daily OHLCV fine-tune — {exp_name}",
+            "use_comet": False,
+            "train_tokenizer": True,
+            "train_basemodel": True,
+            "skip_existing": True,   # don't restart tokenizer if already done
+            "pre_trained_tokenizer": True,
+            "pre_trained_predictor": True,
+        },
+        "device": {
+            "use_cuda": True,
+            "device_id": 0,
+        },
+        "distributed": {
+            "use_ddp": False,
         },
     }
 
-    with open(TRAIN_DATA_PATH, "wb") as f:
-        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    finetuned_dir.mkdir(parents=True, exist_ok=True)
+    config_path = finetuned_dir / f"config_{exp_name}.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, allow_unicode=True, indent=2)
 
-    log.info(f"Saved {len(normalized):,} training sequences to {TRAIN_DATA_PATH}")
+    log.info("Config written to %s", config_path)
+    return config_path
 
 
-def finetune_kronos(train_sequences: list[dict], model_size: str = "base") -> bool:
+# ---------------------------------------------------------------------------
+# Step 4: Run the real Kronos fine-tune scripts
+# ---------------------------------------------------------------------------
+def run_finetune(config_path: Path) -> None:
     """
-    Attempts to fine-tune Kronos on NSE data.
-    If Kronos fine-tune API is unavailable, saves training data for manual run.
+    Runs the two-phase Kronos fine-tune:
+      Phase A — finetune_tokenizer.py  (learns NSE price vocabulary)
+      Phase B — finetune_base_model.py (fine-tunes the predictor)
 
-    Returns True if fine-tuning succeeded, False if data was saved for manual run.
+    Both scripts are in KRONOS_REPO_DIR/finetune_csv/ and must be run
+    from that directory so their sys.path.append('../') finds model/.
     """
     ensure_kronos()
 
-    try:
-        # Try to import Kronos fine-tune interface
-        # NOTE: The actual class name may differ in the real repo.
-        # We try multiple likely names in order.
-        KronosFineTuner = None
-        try:
-            from kronos import KronosFineTuner  # type: ignore  # noqa: F401
-        except ImportError:
-            pass
-
-        if KronosFineTuner is None:
-            try:
-                from kronos.finetune import KronosFineTuner  # type: ignore  # noqa: F401
-            except ImportError:
-                pass
-
-        if KronosFineTuner is None:
-            raise ImportError("KronosFineTuner not found in kronos package")
-
-        # Prepare data in Kronos expected format
-        import torch
-        normalized = _normalize_sequences(train_sequences)
-
-        # Build tensor dataset
-        inputs = []
-        targets = []
-        for seq in normalized:
-            if seq.get("target_close_norm") is None:
-                continue
-            ohlcv = np.stack([
-                seq["open"], seq["high"], seq["low"],
-                seq["close"], seq["volume"],
-            ], axis=1)  # shape (window, 5)
-            inputs.append(ohlcv)
-            targets.append([seq["target_close_norm"]])
-
-        inputs_t = torch.tensor(inputs, dtype=torch.float32)
-        targets_t = torch.tensor(targets, dtype=torch.float32)
-
-        WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-
-        log.info(f"Starting Kronos fine-tune on {len(inputs_t):,} sequences...")
-        tuner = KronosFineTuner.from_pretrained(
-            f"kronos-{model_size}",
-            output_dir=str(FINETUNED_MODEL_PATH),
+    finetune_csv_dir = KRONOS_REPO_DIR / "finetune_csv"
+    if not finetune_csv_dir.exists():
+        raise RuntimeError(
+            f"Kronos finetune_csv/ not found at {finetune_csv_dir}.\n"
+            f"Re-clone the repo: git clone https://github.com/shiyu-coder/Kronos.git "
+            f'"{KRONOS_REPO_DIR}"'
         )
-        tuner.train(
-            inputs=inputs_t,
-            targets=targets_t,
-            epochs=10,
-            batch_size=64,
-            learning_rate=1e-4,
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(KRONOS_REPO_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+
+    for script_name, phase_label in [
+        ("finetune_tokenizer.py",   "Phase A — Tokenizer"),
+        ("finetune_base_model.py",  "Phase B — Base model"),
+    ]:
+        script_path = finetune_csv_dir / script_name
+        if not script_path.exists():
+            raise RuntimeError(
+                f"{script_name} not found at {script_path}. "
+                "Check the Kronos repo is fully cloned."
+            )
+
+        log.info("=" * 60)
+        log.info("Starting %s", phase_label)
+        log.info("Script: %s", script_path)
+        log.info("Config: %s", config_path)
+        log.info("=" * 60)
+
+        result = subprocess.run(
+            [sys.executable, str(script_path), "--config", str(config_path)],
+            cwd=str(finetune_csv_dir),
+            env=env,
         )
-        tuner.save(str(FINETUNED_MODEL_PATH))
-        log.info(f"Kronos fine-tuned weights saved to {FINETUNED_MODEL_PATH}")
-        return True
 
-    except ImportError as e:
-        log.warning(f"Kronos fine-tune API not available: {e}")
-        _save_training_data_for_kronos(train_sequences)
-        log.info("=" * 70)
-        log.info("MANUAL FINE-TUNING INSTRUCTIONS")
-        log.info("=" * 70)
-        log.info(f"Training data saved to: {TRAIN_DATA_PATH}")
-        log.info(
-            "Run the following command to fine-tune manually:\n"
-            f"  cd {KRONOS_REPO_DIR}\n"
-            f"  python finetune.py \\\n"
-            f"    --data {TRAIN_DATA_PATH} \\\n"
-            f"    --output {FINETUNED_MODEL_PATH} \\\n"
-            f"    --model-size {model_size} \\\n"
-            f"    --epochs 10 \\\n"
-            f"    --batch-size 64 \\\n"
-            f"    --lr 1e-4"
-        )
-        log.info("=" * 70)
-        return False
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{phase_label} failed with exit code {result.returncode}.\n"
+                f"Check logs in the finetuned_dir/logs/ directory."
+            )
 
-    except Exception as e:
-        log.error(f"Unexpected error during Kronos fine-tuning: {e}", exc_info=True)
-        _save_training_data_for_kronos(train_sequences)
-        return False
+        log.info("%s complete.", phase_label)
+
+    log.info("=" * 60)
+    log.info("Fine-tuning complete.")
+    log.info(
+        "Finetuned weights are in: %s",
+        FINETUNED_DIR,
+    )
+    log.info(
+        "To use them: update KRONOS_WEIGHTS_DIR in integration.py "
+        "to point at the basemodel/best_model subdirectory, "
+        "or set env var NSE_KRONOS_WEIGHTS_DIR."
+    )
+    log.info("=" * 60)
 
 
-async def run(model_size: str = "base", window: int = 60) -> None:
-    """Main entry point for NSE fine-tuning."""
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+async def run(
+    ticker: str | None = None,
+    model_size: str = "base",
+    epochs_tokenizer: int = 30,
+    epochs_model: int = 20,
+    batch_size: int = 8,
+    lookback_window: int = 90,
+    predict_window: int = 10,
+) -> None:
+    exp_name = f"nse_{ticker or 'all'}_{model_size}"
+    csv_path = CSV_DIR / f"{exp_name}.csv"
+
     log.info("Connecting to DB...")
     conn = await asyncpg.connect(settings.DATABASE_DSN)
-
     try:
-        sequences = await load_nse_sequences(conn, window=window)
+        n_rows = await export_nse_csv(conn, ticker, csv_path)
     finally:
         await conn.close()
 
-    if not sequences:
-        log.error("No training sequences found. Ensure ohlcv_daily has data.")
+    if n_rows < lookback_window + predict_window + 1:
+        log.error(
+            "Only %d rows exported — need at least %d. "
+            "Run data pipeline first.",
+            n_rows, lookback_window + predict_window + 1,
+        )
         return
 
-    log.info(f"Starting Kronos fine-tune with {len(sequences):,} sequences, model_size={model_size}")
-    success = finetune_kronos(sequences, model_size=model_size)
+    tokenizer_path, predictor_path = ensure_pretrained_weights(model_size)
 
-    if success:
-        log.info("Fine-tuning complete. Update integration.py to load from fine-tuned weights.")
-    else:
-        log.info(
-            "Fine-tuning data prepared. Follow the instructions above for manual fine-tuning."
-        )
+    config_path = generate_config(
+        csv_path=csv_path,
+        tokenizer_path=tokenizer_path,
+        predictor_path=predictor_path,
+        finetuned_dir=FINETUNED_DIR,
+        exp_name=exp_name,
+        lookback_window=lookback_window,
+        predict_window=predict_window,
+        batch_size=batch_size,
+        epochs_tokenizer=epochs_tokenizer,
+        epochs_model=epochs_model,
+    )
+
+    run_finetune(config_path)
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Fine-tune Kronos on 26yr NSE data")
-    parser.add_argument("--model-size", default="base", choices=["mini", "small", "base"])
-    parser.add_argument("--window", type=int, default=60, help="Candle window size")
+    parser = argparse.ArgumentParser(
+        description="Fine-tune Kronos on NSE OHLCV data using the real finetune_csv pipeline"
+    )
+    parser.add_argument(
+        "--ticker", default=None,
+        help="Single NSE ticker to fine-tune on (default: all tickers with >=300 rows)"
+    )
+    parser.add_argument(
+        "--model-size", default="base", choices=["mini", "small", "base"],
+        help="Kronos model variant (default: base)"
+    )
+    parser.add_argument(
+        "--epochs-tokenizer", type=int, default=30,
+        help="Tokenizer training epochs (default: 30)"
+    )
+    parser.add_argument(
+        "--epochs-model", type=int, default=20,
+        help="Base model fine-tune epochs (default: 20)"
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=8,
+        help="Batch size — keep at 8 for RTX 3050 4GB (default: 8)"
+    )
+    parser.add_argument(
+        "--lookback", type=int, default=90,
+        help="Lookback window in candles (default: 90)"
+    )
+    parser.add_argument(
+        "--predict", type=int, default=10,
+        help="Predict window in candles (default: 10)"
+    )
     args = parser.parse_args()
 
-    asyncio.run(run(model_size=args.model_size, window=args.window))
+    asyncio.run(run(
+        ticker=args.ticker,
+        model_size=args.model_size,
+        epochs_tokenizer=args.epochs_tokenizer,
+        epochs_model=args.epochs_model,
+        batch_size=args.batch_size,
+        lookback_window=args.lookback,
+        predict_window=args.predict,
+    ))
