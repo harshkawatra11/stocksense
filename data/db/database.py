@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import (
     Column, Integer, String, Numeric, Boolean, Text,
-    ARRAY, DateTime, BigInteger, ForeignKey,
+    ARRAY, DateTime, Date, BigInteger, ForeignKey,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -138,9 +138,12 @@ class SLMTrainingPair(Base):
     __tablename__ = "slm_training_pairs"
     id = Column(Integer, primary_key=True)
     ticker = Column(String(20), ForeignKey("stocks.ticker"))
-    situation_date = Column(DateTime, nullable=False)
+    trade_date = Column(Date, nullable=False)
     situation_context = Column(Text, nullable=False)
     claude_response = Column(Text, nullable=False)
+    decision = Column(String(10))
+    confidence = Column(Numeric(5, 4))
+    reasoning = Column(Text)
     created_at = Column(TIMESTAMPTZ)
 
 

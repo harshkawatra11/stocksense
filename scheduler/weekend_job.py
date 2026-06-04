@@ -63,8 +63,8 @@ async def save_weekly_review(conn, review_text: str):
     try:
         await conn.execute(
             """
-            INSERT INTO learnings (title, body, learning_type, tags, created_at)
-            VALUES ($1, $2, 'weekly_review', ARRAY['weekly', 'regime'], NOW())
+            INSERT INTO learnings (learning_date, title, body, learning_type, tags, created_at)
+            VALUES (CURRENT_DATE, $1, $2, 'weekly_review', ARRAY['weekly', 'regime'], NOW())
             """,
             f"Weekly Review — {datetime.now().strftime('%Y-%m-%d')}",
             review_text[:4000],
