@@ -279,24 +279,31 @@ async def run_pipeline_batch(tickers: list[str]) -> AsyncGenerator[dict, None]:
     """
     Run full pipeline for all tickers (non-streaming, batch mode).
     Used by scheduler. Yields individual final signals as they complete.
+    Uses a connection pool so concurrent tasks each get their own connection
+    (a single shared asyncpg connection raises InterfaceError under concurrency).
     """
-    conn = await asyncpg.connect(settings.DATABASE_DSN)
-    portfolio_tickers = await get_portfolio_tickers(conn)
-    sector_map = await fetch_sector_map(conn)
+    pool = await asyncpg.create_pool(settings.DATABASE_DSN, min_size=2, max_size=12)
+
+    # Load shared context once using a dedicated pool connection
+    async with pool.acquire() as meta_conn:
+        portfolio_tickers = await get_portfolio_tickers(meta_conn)
+        sector_map = await fetch_sector_map(meta_conn)
 
     semaphore = asyncio.Semaphore(10)
 
     async def bounded(ticker):
         async with semaphore:
-            return await run_single_ticker(conn, ticker, portfolio_tickers, sector_map)
+            async with pool.acquire() as conn:
+                return await run_single_ticker(conn, ticker, portfolio_tickers, sector_map)
 
     tasks = [bounded(t) for t in tickers]
-    for coro in asyncio.as_completed(tasks):
-        result = await coro
-        if result:
-            yield result
-
-    await conn.close()
+    try:
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            if result:
+                yield result
+    finally:
+        await pool.close()
 
 
 async def run_pipeline_batch_streaming(
@@ -324,19 +331,27 @@ async def run_pipeline():
     Scheduler entry point. Runs full pipeline batch and saves all signals to DB.
     Called by market_runner.py every 30 min during market hours.
     """
-    import asyncpg
-    from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS
-    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    save_conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
-        tickers = [t["ticker"] for t in FALLBACK_TICKERS][:settings.MAX_TICKERS_PER_RUN]
+        # Load active tickers from DB; fall back to static list
+        rows = await save_conn.fetch(
+            "SELECT ticker FROM stocks WHERE active = TRUE ORDER BY ticker LIMIT $1",
+            settings.MAX_TICKERS_PER_RUN,
+        )
+        if rows:
+            tickers = [r["ticker"] for r in rows]
+        else:
+            from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS
+            tickers = [t["ticker"] for t in FALLBACK_TICKERS][:settings.MAX_TICKERS_PER_RUN]
+
         async for signal in run_pipeline_batch(tickers):
             try:
-                await save_signal(conn, signal)
+                await save_signal(save_conn, signal)
                 log.info(f"Saved signal for {signal['ticker']} ({signal.get('signal')})")
             except Exception as e:
                 log.warning(f"Failed to save signal for {signal.get('ticker')}: {e}")
     finally:
-        await conn.close()
+        await save_conn.close()
 
 
 async def save_signal(conn, signal: dict) -> int:
