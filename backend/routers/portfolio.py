@@ -3,9 +3,10 @@ from pydantic import BaseModel
 from datetime import datetime
 import asyncpg
 import os
+from config import settings
 
 router = APIRouter()
-DB_DSN = os.getenv("DATABASE_DSN", "postgresql://stocksense:stocksense@localhost:5432/stocksense")
+DB_DSN = settings.DATABASE_DSN
 
 
 class AddPositionRequest(BaseModel):

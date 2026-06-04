@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Query
 import asyncpg
 import os
+from config import settings
 
 router = APIRouter()
-DB_DSN = os.getenv("DATABASE_DSN", "postgresql://stocksense:stocksense@localhost:5432/stocksense")
+DB_DSN = settings.DATABASE_DSN
 
 
 @router.get("/learnings")

@@ -3,8 +3,9 @@ Portfolio guard — ensures SELL signals only fire for held positions.
 """
 import asyncpg
 import os
+from config import settings
 
-DB_DSN = os.getenv("DATABASE_DSN", "postgresql://stocksense:stocksense@localhost:5432/stocksense")
+DB_DSN = settings.DATABASE_DSN
 
 
 async def get_portfolio_tickers(conn) -> set[str]:
