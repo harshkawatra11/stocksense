@@ -1,14 +1,18 @@
 """
 NSE Commander SLM Fine-Tuning Script
 =====================================
-Fine-tunes Phi-3-mini-4k-instruct using Unsloth QLoRA on NSE trading instruction pairs.
-Optimized for RTX 3050 (fp16, not bf16) with 4-bit quantization.
+Fine-tunes Qwen2.5-7B-Instruct using Unsloth QLoRA on NSE trading instruction pairs.
+Optimized for RTX 3050 4GB (fp16, not bf16) with 4-bit quantization.
+
+For 4GB VRAM use: --batch-size 1 --grad-accum 8 --max-seq-length 1024
+If 7B still OOMs during training, swap --model to Qwen/Qwen2.5-3B-Instruct and
+run inference with qwen2.5:7b via Ollama (untuned but stronger base).
 
 Usage:
     python finetune.py                          # Full training (3 epochs)
     python finetune.py --max-steps 60           # Quick test run
     python finetune.py --epochs 5 --output-dir models/slm/adapters/v2/
-    python finetune.py --max-steps 60 --output-dir models/slm/adapters/test_run/
+    python finetune.py --batch-size 1 --grad-accum 8 --max-seq-length 1024  # 4GB safe
 """
 
 import argparse
@@ -21,7 +25,7 @@ import os
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Fine-tune Phi-3-mini-4k-instruct on NSE trading instruction pairs using Unsloth QLoRA."
+        description="Fine-tune Qwen2.5-7B-Instruct on NSE trading instruction pairs using Unsloth QLoRA."
     )
     parser.add_argument(
         "--epochs",
@@ -53,14 +57,14 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=2,
-        help="Per-device training batch size (default: 2).",
+        default=1,
+        help="Per-device training batch size (default: 1). Keep at 1 for RTX 3050 4GB.",
     )
     parser.add_argument(
         "--grad-accum",
         type=int,
-        default=4,
-        help="Gradient accumulation steps (default: 4). Effective batch = batch_size × grad_accum.",
+        default=8,
+        help="Gradient accumulation steps (default: 8). Effective batch = batch_size × grad_accum.",
     )
     parser.add_argument(
         "--learning-rate",
@@ -75,10 +79,18 @@ def parse_args():
         help="Number of warmup steps (default: 5).",
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help="HuggingFace model ID to fine-tune (default: Qwen/Qwen2.5-7B-Instruct). "
+             "Use Qwen/Qwen2.5-3B-Instruct if 7B OOMs during training.",
+    )
+    parser.add_argument(
         "--max-seq-length",
         type=int,
-        default=2048,
-        help="Maximum sequence length for tokenization (default: 2048).",
+        default=1024,
+        help="Maximum sequence length for tokenization (default: 1024). "
+             "Use 1024 for 4GB VRAM safety; increase to 2048 if VRAM allows.",
     )
     parser.add_argument(
         "--lora-r",
@@ -169,7 +181,7 @@ def load_training_data(data_path: str, tokenizer):
 
     print(f"[INFO] Loaded {len(records)} training pairs from {data_path}")
 
-    # Alpaca-style formatting for Phi-3
+    # Alpaca-style formatting for Qwen2.5
     ALPACA_PROMPT = (
         "### Instruction:\n"
         "{instruction}\n\n"
@@ -196,11 +208,12 @@ def load_training_data(data_path: str, tokenizer):
 # ---------------------------------------------------------------------------
 
 def load_model_and_tokenizer(args, FastLanguageModel):
-    """Load Phi-3-mini-4k-instruct with 4-bit quantization via Unsloth."""
-    print("[INFO] Loading Phi-3-mini-4k-instruct with 4-bit quantization...")
+    """Load Qwen2.5-7B-Instruct with 4-bit quantization via Unsloth."""
+    print(f"[INFO] Loading {args.model} with 4-bit quantization...")
+    print("[INFO] RTX 3050 4GB: using fp16, batch=1, grad_accum=8, max_seq=1024")
 
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="microsoft/Phi-3-mini-4k-instruct",
+        model_name=args.model,
         max_seq_length=args.max_seq_length,
         dtype=None,          # Auto-detect; will use float16 on RTX 3050
         load_in_4bit=True,   # QLoRA 4-bit quantization
@@ -336,8 +349,8 @@ Run this Python snippet to merge LoRA weights into the full model:
     from unsloth import FastLanguageModel
 
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="microsoft/Phi-3-mini-4k-instruct",
-        max_seq_length=2048,
+        model_name="Qwen/Qwen2.5-7B-Instruct",  # or 3B if you trained on 3B
+        max_seq_length=1024,
         load_in_4bit=True,
     )
     model.load_adapter("{output_dir}")
@@ -386,7 +399,7 @@ ALTERNATIVE: Load adapter directly (without merging) for inference:
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="{output_dir}",
-        max_seq_length=2048,
+        max_seq_length=1024,
         load_in_4bit=True,
     )
     FastLanguageModel.for_inference(model)
@@ -412,8 +425,8 @@ def main():
 
     print("\n" + "=" * 60)
     print("NSE COMMANDER — SLM FINE-TUNING")
-    print("Model: microsoft/Phi-3-mini-4k-instruct")
-    print("Method: Unsloth QLoRA (4-bit, fp16)")
+    print(f"Model: {args.model}")
+    print("Method: Unsloth QLoRA (4-bit, fp16, RTX 3050 optimised)")
     print("=" * 60 + "\n")
 
     # Import dependencies (with helpful error messages)

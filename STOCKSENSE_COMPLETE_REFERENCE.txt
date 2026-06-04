@@ -22,7 +22,7 @@ PIPELINE (every 30 min, 9:15–15:30 IST, Mon–Fri):
     → LightGBM (SHAP feature reasoning)
     → Kronos foundation model (candle-path forecast)
     → Signal combiner (weighted, dynamically adjusted)
-    → SLM Phi-3 Mini commander (NSE context, portfolio guard, stop/target)
+    → SLM Qwen2.5-7B-Instruct commander (NSE context, portfolio guard, stop/target)
     → Claude Sonnet CLI (top 40 batch confirm/reject)
     → DB (signal + full 4-model reasoning chain)
     → SSE stream → React frontend (4 live terminals)
@@ -58,9 +58,9 @@ Phase 2 (deferred):
   - 1-min OHLCV for top 100 watchlist stocks only (~30GB additional)
   - Angel One SmartAPI ticks — requires live WebSocket connection
 
-Ollama (Phi-3 Mini):
+Ollama (Qwen2.5-7B-Instruct):
   - Runs on HOST (not Docker) — needs RTX 3050 for GPU inference
-  - phi3:mini model: ~2.2GB on disk
+  - qwen2.5:7b model: ~2.2GB on disk
   - Inference: ~2-3s per request on RTX 3050
 
 Docker containers:
@@ -181,7 +181,7 @@ config.py                                                              [COMPLETE
     DATABASE_URL      — SQLAlchemy async URL (postgresql+asyncpg://...)
     DATABASE_DSN      — Plain asyncpg DSN (postgresql://...)
     OLLAMA_URL        — http://localhost:11434
-    SLM_MODEL         — phi3:mini
+    SLM_MODEL         — qwen2.5:7b
     PIPELINE_INTERVAL_MINUTES — 30
     MAX_TICKERS_PER_RUN — 200
     TOP_SIGNALS_FOR_CLAUDE — 40
@@ -522,14 +522,14 @@ models/kronos/finetune_nse.py                                          [COMPLETE
   models/kronos/weights/nse_26yr_finetuned/ instead of the base model.
 
 --------------------------------------------------------------------------------
-SLM LAYER (Phi-3 Mini)
+SLM LAYER (Qwen2.5-7B-Instruct)
 --------------------------------------------------------------------------------
 
 models/slm/__init__.py                                                 [COMPLETE]
   Empty package marker.
 
 models/slm/infer.py                                                    [COMPLETE]
-  Phi-3 Mini inference via Ollama REST API.
+  Qwen2.5-7B-Instruct inference via Ollama REST API.
   Falls back gracefully if Ollama is not running.
 
   CRITICAL PORTFOLIO GUARD:
@@ -603,7 +603,7 @@ models/slm/train_commander.py                                          [COMPLETE
 
 models/slm/finetune.py                                                 [MISSING]
   STATUS: NOT CREATED — needs to be built.
-  PURPOSE: QLoRA fine-tuning of Phi-3 Mini on training pairs generated
+  PURPOSE: QLoRA fine-tuning of Qwen2.5-7B-Instruct on training pairs generated
            by train_commander.py.
   FRAMEWORK: Unsloth (designed for sub-8GB VRAM, 2x faster than vanilla HF)
   TARGET HARDWARE: RTX 3050 4GB (confirmed working with Unsloth QLoRA 4-bit)
@@ -984,12 +984,12 @@ FILE 1: models/ml/retrain_trigger.py
   EFFORT: Small (50-80 lines)
 
 FILE 2: models/slm/finetune.py
-  PURPOSE: QLoRA fine-tuning of Phi-3 Mini on training pairs.
+  PURPOSE: QLoRA fine-tuning of Qwen2.5-7B-Instruct on training pairs.
   FRAMEWORK: Unsloth (designed for RTX 3050 4GB, 2x faster, 60% less VRAM)
   CODE STRUCTURE:
     from unsloth import FastLanguageModel
     model, tokenizer = FastLanguageModel.from_pretrained(
-        "microsoft/Phi-3-mini-4k-instruct", load_in_4bit=True)
+        "microsoft/Qwen2.5-7B-Instruct", load_in_4bit=True)
     # Apply LoRA (rank=16, target: q_proj, v_proj)
     # Load training_pairs.jsonl from data/slm_training/
     # Format as instruction/output pairs
@@ -1240,7 +1240,7 @@ PRIORITY 4 — WEEK 5-6 (after enough training pairs)
 12. Generate SLM training pairs: python -m models.slm.train_commander --count 10000
     (requires Claude CLI running, 5-6 hours at 2s rate limit)
 
-13. Create models/slm/finetune.py and fine-tune Phi-3 Mini
+13. Create models/slm/finetune.py and fine-tune Qwen2.5-7B-Instruct
     (framework: Unsloth, hardware: RTX 3050 4GB, time: 24-36 hours for 3 epochs)
 
 14. Create 4 SLM skill files:
@@ -1269,7 +1269,7 @@ STEP 1 — Prerequisites on your machine (one-time)
 
   # Install Ollama
   curl -fsSL https://ollama.ai/install.sh | sh
-  ollama pull phi3:mini
+  ollama pull qwen2.5:7b
 
   # Install Node.js 18+ (for frontend)
   # https://nodejs.org
@@ -1410,7 +1410,7 @@ SECTION 10 — ACCURACY EXPECTATION CURVE
 ================================================================================
 
 Day 1:    ~52-55%  LightGBM + Kronos base model (no fine-tuning),
-                   generic Phi-3 Mini SLM (no commander training)
+                   generic Qwen2.5-7B-Instruct SLM (no commander training)
 Week 2:   ~58-60%  Kronos fine-tuned on NSE 26yr,
                    learnings database starts accumulating (RAG in SLM calls)
 Month 1:  ~63-65%  SLM has 20+ days of real signal history in RAG context,
@@ -1493,7 +1493,7 @@ F&O training start year: 2010 (F&O data before 2010 is sparse/unavailable)
 Bhavcopy history start: 2000-01-01
 SLM training pairs target: 10,000+
 Kronos model size: base (102.3M params, fits 4GB VRAM)
-Phi-3 Mini size: 3.8B params
+Qwen2.5-7B-Instruct size: 3.8B params
 QLoRA rank: 16, target modules: q_proj, v_proj
 
 DB DSN (local default): postgresql://stocksense:stocksense@localhost:5432/stocksense

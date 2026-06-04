@@ -9,7 +9,6 @@ yfinance==0.2.48
 pandas==2.2.3
 numpy==1.26.4
 scikit-learn==1.5.2
-ta==0.11.0
 httpx==0.27.2
 websockets==13.1
 python-dotenv==1.0.1
@@ -22,5 +21,7 @@ transformers>=4.40.0
 datasets>=2.18.0
 peft>=0.10.0
 trl>=0.8.0
+# unsloth: install separately with CUDA variant — see models/slm/finetune.py header
+# pip install "unsloth[cu121]"  or  pip install "unsloth[cu118]"
 jugaad-data>=0.29
 aiofiles>=23.0.0

@@ -40,7 +40,7 @@ class Settings:
 
     @property
     def SLM_MODEL(self) -> str:
-        return os.getenv("SLM_MODEL", "phi3:mini")
+        return os.getenv("SLM_MODEL", "qwen2.5:7b")
 
     # ------------------------------------------------------------------ #
     # Pipeline tuning                                                      #

@@ -1,7 +1,8 @@
 """
-SLM layer — Phi-3 Mini via Ollama.
+SLM layer — Qwen2.5-7B-Instruct via Ollama.
 Falls back gracefully if Ollama not running.
-install: curl -fsSL https://ollama.ai/install.sh | sh && ollama pull phi3:mini
+install: curl -fsSL https://ollama.ai/install.sh | sh && ollama pull qwen2.5:7b
+fallback: ollama pull qwen2.5:3b  (if 7b OOMs during training)
 """
 import requests
 import json
@@ -11,7 +12,7 @@ import os
 log = logging.getLogger(__name__)
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-SLM_MODEL = os.getenv("SLM_MODEL", "phi3:mini")
+SLM_MODEL = os.getenv("SLM_MODEL", "qwen2.5:7b")
 
 
 def _ollama_available() -> bool:
