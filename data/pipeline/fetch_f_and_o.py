@@ -21,10 +21,20 @@ from config import settings
 
 log = logging.getLogger(__name__)
 
+# Old format (pre 2024-07-08): archives.nseindia.com fo<DD><MMM><YYYY>bhav.csv.zip
 FO_BHAVCOPY_URL = (
     "https://archives.nseindia.com/content/historical/DERIVATIVES"
     "/{YYYY}/{MMM}/fo{DD}{MMM}{YYYY}bhav.csv.zip"
 )
+
+# New UDiFF format (2024-07-08 onwards): nsearchives.nseindia.com
+FO_BHAVCOPY_URL_NEW = (
+    "https://nsearchives.nseindia.com/content/fo/"
+    "BhavCopy_NSE_FO_0_0_0_{YYYYMMDD}_F_0000.csv.zip"
+)
+
+# NSE switched the F&O Bhavcopy to the UDiFF format on this date.
+FO_NEW_FORMAT_CUTOVER = date(2024, 7, 8)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
@@ -58,7 +68,9 @@ def is_trading_day(d: date) -> bool:
 
 
 def build_fo_url(d: date) -> str:
-    """Build the NSE F&O Bhavcopy URL for a given date."""
+    """Build the NSE F&O Bhavcopy URL for a given date (old or new UDiFF format)."""
+    if d >= FO_NEW_FORMAT_CUTOVER:
+        return FO_BHAVCOPY_URL_NEW.format(YYYYMMDD=d.strftime("%Y%m%d"))
     return FO_BHAVCOPY_URL.format(
         YYYY=d.strftime("%Y"),
         MMM=d.strftime("%b").upper(),
@@ -113,7 +125,25 @@ def parse_fo_bhavcopy(zip_path: Path) -> pd.DataFrame | None:
 
         df.columns = [c.strip().upper() for c in df.columns]
 
-        # Required columns: SYMBOL, EXPIRY_DT, OPTION_TYP, STRIKE_PR, OPEN_INT, CHG_IN_OI, CONTRACTS
+        # New UDiFF format (2024-07-08+) uses different column names — normalize
+        # them to the legacy schema so the rest of the function is unchanged.
+        # UDiFF: TCKRSYMB, OPNINTRST, CHNGINOPNINTRST, OPTNTP, FININSTRMTP, XPRYDT
+        if "TCKRSYMB" in df.columns:
+            rename = {
+                "TCKRSYMB": "SYMBOL",
+                "OPNINTRST": "OPEN_INT",
+                "CHNGINOPNINTRST": "CHG_IN_OI",
+                "OPTNTP": "OPTION_TYP",
+                "FININSTRMTP": "INSTRUMENT",
+                "XPRYDT": "EXPIRY_DT",
+            }
+            df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+            # UDiFF marks non-option instruments (futures) with OptnTp blank/'XX'.
+            if "OPTION_TYP" in df.columns:
+                df["OPTION_TYP"] = df["OPTION_TYP"].astype(str).str.strip().str.upper()
+                df.loc[~df["OPTION_TYP"].isin(["CE", "PE"]), "OPTION_TYP"] = ""
+
+        # Required columns: SYMBOL, OPEN_INT, CHG_IN_OI
         required = {"SYMBOL", "OPEN_INT", "CHG_IN_OI"}
         if not required.issubset(set(df.columns)):
             log.warning(f"Missing columns in F&O CSV. Found: {df.columns.tolist()}")
