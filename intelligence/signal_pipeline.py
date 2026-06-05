@@ -5,6 +5,7 @@ Supports both batch (non-streaming) and per-stage SSE streaming modes.
 """
 import asyncio
 import asyncpg
+import math
 import pandas as pd
 import logging
 from datetime import datetime, timezone
@@ -16,9 +17,82 @@ from models.kronos.integration import forecast as kronos_forecast
 from models.kronos.combine import combine_signals
 from models.slm.infer import slm_enrich
 from intelligence.portfolio_guard import get_portfolio_tickers
+from intelligence.macro_context import get_macro_context, MacroContext
 from config import settings
 
 log = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------ #
+# Live multi-timeframe helpers                                        #
+# ------------------------------------------------------------------ #
+def annotate_affordability(price: float) -> tuple[bool, int]:
+    """How many whole shares the deployable cash buys; affordable = at least 1."""
+    cash = settings.CASH_AVAILABLE
+    shares = int(cash // price) if price and price > 0 else 0
+    return shares >= 1, shares
+
+
+def apply_macro_nudge(
+    confidence: float, signal: str, sector: str | None, macro: MacroContext
+) -> tuple[float, float]:
+    """
+    Nudge confidence by the sector's macro news sentiment (±0.10 max).
+    For BUY, a bullish sector raises confidence, a bearish one lowers it.
+    Returns (new_confidence, sector_score).
+    """
+    score = macro.sector_score(sector)  # -1.0 .. +1.0
+    delta = 0.10 * score if signal == "BUY" else (-0.10 * score if signal == "SELL" else 0.0)
+    return max(0.0, min(0.97, confidence + delta)), score
+
+
+def target_and_eta(
+    current_price: float, forecast_records: list[dict] | None
+) -> tuple[float | None, float | None, float | None]:
+    """
+    From a Kronos daily forecast path, derive:
+      - target  : the peak predicted price over the path (where it's headed)
+      - eta_days : fractional days to first reach that target (e.g. 2.5)
+      - move_pct : expected % move to target
+    Interpolates within a day between the prior close and that day's high so the
+    ETA lands on fractional days like 1.5 / 2.5. Returns (None,None,None) if no path.
+    """
+    if not forecast_records:
+        return None, None, None
+    highs = [float(r.get("high", r.get("close", current_price))) for r in forecast_records]
+    target = max(highs)
+    if target <= current_price:
+        return None, None, None  # no upside in the forecast
+
+    prev = current_price
+    eta = float(len(forecast_records))
+    for i, r in enumerate(forecast_records, start=1):
+        hi = float(r.get("high", r.get("close", prev)))
+        if hi >= target - 1e-9:
+            span = hi - prev
+            frac = (target - prev) / span if span > 1e-9 else 1.0
+            eta = round((i - 1) + max(0.0, min(1.0, frac)), 1)
+            break
+        prev = float(r.get("close", prev))
+    move_pct = (target - current_price) / current_price * 100
+    return round(target, 2), eta, round(move_pct, 2)
+
+
+def horizon_stops(
+    price: float, signal: str, atr: float | None, hold_days: int
+) -> tuple[float, float]:
+    """
+    Volatility + horizon-scaled stop/target. Longer holds get wider bands
+    (ATR × sqrt(hold_days)), clamped to [0.5%, 8%]. Target at 2R.
+    """
+    base = atr if atr and atr > 0 else price * 0.02
+    factor = max(1.0, math.sqrt(max(hold_days, 1)))
+    stop_dist = 1.5 * base * factor
+    stop_dist = max(price * 0.005, min(stop_dist, price * 0.08))
+    target_dist = 2.0 * stop_dist
+    if signal == "SELL":
+        return round(price + stop_dist, 2), round(price - target_dist, 2)
+    return round(price - stop_dist, 2), round(price + target_dist, 2)
 
 
 async def fetch_ohlcv(conn, ticker: str, limit: int = 300) -> pd.DataFrame:
@@ -395,3 +469,221 @@ async def save_signal(conn, signal: dict) -> int:
             )
 
     return signal_id
+
+
+# ================================================================== #
+# LIVE multi-timeframe pipeline                                       #
+#   ML (next-day prior) → Kronos per horizon → combine → macro nudge  #
+#   → BUY-only filter → affordability annotation → save per horizon.  #
+#   The SLM's old per-ticker enrich is replaced by the global macro   #
+#   layer (intelligence/macro_context), run once per cycle.           #
+# ================================================================== #
+
+async def run_single_ticker_multi(
+    conn,
+    ticker: str,
+    portfolio_tickers: set,
+    sector_map: dict[str, str],
+    macro: MacroContext,
+) -> list[dict]:
+    """Produce one signal PER active timeframe for a ticker. Returns a list."""
+    df = await fetch_ohlcv(conn, ticker)
+    if df.empty or len(df) < 60:
+        return []
+
+    price = float(df["close"].iloc[-1])
+    sector = sector_map.get(ticker)
+    held = ticker in portfolio_tickers
+    atr = compute_atr(df)
+
+    # ML directional prior — computed once, reused across horizons.
+    try:
+        ml_result = predict_with_reasoning(df, ticker, sector=sector)
+    except Exception as e:
+        log.warning("ML predict failed for %s: %s", ticker, e)
+        return []
+
+    out: list[dict] = []
+    for tf in settings.ACTIVE_TIMEFRAMES:
+        steps, hold = tf["kronos_steps"], tf["hold_days"]
+
+        # Kronos forecast for THIS horizon.
+        try:
+            kr = kronos_forecast(df, steps=steps)
+            if kr.get("error"):
+                raise ValueError(kr["error"])
+        except Exception as e:
+            log.debug("Kronos %s@%s failed (%s) — ML-only", ticker, tf["label"], e)
+            kr = {
+                "signal": ml_result.get("signal", "HOLD"),
+                "confidence": ml_result.get("confidence", 0.5),
+                "reasoning": f"Kronos unavailable for {tf['label']} — ML-only",
+            }
+
+        combined = combine_signals(ml_result, kr)
+        signal = combined["signal"]
+        conf = combined["confidence"]
+
+        # BUY-only phase: drop everything that isn't a BUY.
+        if settings.BUY_ONLY and signal != "BUY":
+            continue
+
+        # Macro news/sector nudge.
+        conf, sector_score = apply_macro_nudge(conf, signal, sector, macro)
+
+        # Confidence gate (per-horizon).
+        if conf < settings.CONFIDENCE_THRESHOLD:
+            continue
+
+        # Target + fractional ETA from the forecast path (the "it'll touch ₹X in ~Y days").
+        path = kr.get("candle_forecast")
+        f_target, eta_days, move_pct = target_and_eta(price, path)
+        atr_stop, atr_target = horizon_stops(price, signal, atr, hold)
+        # Prefer the forecast-derived target; keep the ATR stop for risk.
+        target = f_target if f_target else atr_target
+        stop = atr_stop
+        affordable, shares = annotate_affordability(price)
+
+        out.append({
+            "ticker": ticker,
+            "timeframe": tf["label"],
+            "horizon_days": hold,
+            "price": price,
+            "signal": signal,
+            "confidence": round(conf, 4),
+            "stop_loss": stop,
+            "target": target,
+            "target_eta_days": eta_days,
+            "expected_move_pct": move_pct,
+            "predicted_path": [round(float(r.get("close", 0)), 2) for r in (path or [])],
+            "affordable": affordable,
+            "shares_affordable": shares,
+            "macro_sector_score": round(sector_score, 4),
+            "sector": sector,
+            "held": held,
+            "ml_confidence": ml_result.get("confidence"),
+            "kronos_confidence": kr.get("confidence"),
+            "ml_reasoning": ml_result.get("reasoning", ""),
+            "kronos_reasoning": kr.get("reasoning", ""),
+            "combined_reasoning": combined.get("combined_reasoning", ""),
+            "macro_reasoning": (
+                f"Macro: market {macro.market_bias}; sector {sector or 'n/a'} "
+                f"score {sector_score:+.2f} — {macro.sectors.get((sector or '').upper(), {}).get('drivers', 'n/a')}"
+            ),
+            "headline": (
+                f"BUY {ticker} @ ₹{price:.1f} → ₹{target:.1f} "
+                f"({'+%.1f' % move_pct if move_pct else '?'}%) "
+                f"in ~{eta_days}d" if (target and eta_days) else
+                f"BUY {ticker} @ ₹{price:.1f}"
+            ),
+            "fired_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    return out
+
+
+async def save_signal_multi(conn, signal: dict) -> int:
+    """Persist a multi-timeframe live signal (truthful timeframe + annotations)."""
+    import json
+    signal_id = await conn.fetchval(
+        """
+        INSERT INTO signals (
+            ticker, signal_type, timeframe, horizon_days, price_at_signal,
+            target_price, stop_loss,
+            ml_confidence, kronos_confidence, slm_confidence, final_confidence,
+            affordable, shares_affordable, macro_sector_score,
+            target_eta_days, expected_move_pct, predicted_path, fired_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        RETURNING id
+        """,
+        signal["ticker"],
+        signal.get("signal", "HOLD"),
+        signal["timeframe"],
+        signal.get("horizon_days"),
+        signal["price"],
+        signal.get("target"),
+        signal.get("stop_loss"),
+        signal.get("ml_confidence"),
+        signal.get("kronos_confidence"),
+        None,  # slm_confidence — SLM is now the global macro layer, not per-signal
+        signal.get("confidence"),
+        signal.get("affordable"),
+        signal.get("shares_affordable"),
+        signal.get("macro_sector_score"),
+        signal.get("target_eta_days"),
+        signal.get("expected_move_pct"),
+        json.dumps(signal.get("predicted_path")) if signal.get("predicted_path") else None,
+        datetime.now(timezone.utc),
+    )
+
+    for model_name, key in [
+        ("lgbm", "ml_reasoning"),
+        ("kronos", "kronos_reasoning"),
+        ("combined", "combined_reasoning"),
+        ("macro", "macro_reasoning"),
+    ]:
+        reasoning = signal.get(key, "")
+        if reasoning:
+            await conn.execute(
+                "INSERT INTO signal_reasoning (signal_id, model_name, reasoning) VALUES ($1,$2,$3)",
+                signal_id, model_name, reasoning,
+            )
+
+    # Surface affordable BUYs in the activity feed so the user can rate/act on them.
+    if signal.get("affordable") and signal.get("signal") == "BUY":
+        from intelligence.activity import log_activity
+        await log_activity(
+            conn, event_type="SUGGESTED", ticker=signal["ticker"], signal_id=signal_id,
+            note=signal.get("headline", ""),
+            payload={"timeframe": signal["timeframe"], "confidence": signal.get("confidence"),
+                     "target": signal.get("target"), "eta_days": signal.get("target_eta_days"),
+                     "shares_affordable": signal.get("shares_affordable")},
+        )
+    return signal_id
+
+
+async def run_pipeline_multi(tickers: list[str] | None = None, save: bool = True) -> list[dict]:
+    """
+    Live multi-timeframe run. Loads macro context ONCE, then produces 1D/3D/5D
+    BUY signals across the universe. Returns all signals (also saved unless save=False).
+    """
+    macro = get_macro_context()  # cached ~30 min
+    log.info("Macro: bias=%s, %d headlines, source=%s",
+             macro.market_bias, macro.headline_count, macro.source)
+
+    pool = await asyncpg.create_pool(settings.DATABASE_DSN, min_size=2, max_size=8)
+    async with pool.acquire() as meta:
+        portfolio_tickers = await get_portfolio_tickers(meta)
+        sector_map = await fetch_sector_map(meta)
+        if tickers is None:
+            rows = await meta.fetch(
+                "SELECT ticker FROM stocks WHERE active = TRUE ORDER BY ticker LIMIT $1",
+                settings.MAX_TICKERS_PER_RUN,
+            )
+            tickers = [r["ticker"] for r in rows]
+
+    semaphore = asyncio.Semaphore(8)
+    all_signals: list[dict] = []
+
+    async def bounded(t):
+        async with semaphore:
+            async with pool.acquire() as conn:
+                sigs = await run_single_ticker_multi(conn, t, portfolio_tickers, sector_map, macro)
+                if save and sigs:
+                    for s in sigs:
+                        try:
+                            await save_signal_multi(conn, s)
+                        except Exception as e:
+                            log.warning("save failed %s/%s: %s", s["ticker"], s["timeframe"], e)
+                return sigs
+
+    try:
+        results = await asyncio.gather(*[bounded(t) for t in tickers])
+        for r in results:
+            all_signals.extend(r)
+    finally:
+        await pool.close()
+
+    log.info("Multi-timeframe run done: %d signals across %d tickers",
+             len(all_signals), len(tickers))
+    return all_signals

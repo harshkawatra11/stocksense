@@ -108,11 +108,11 @@ def get_ltp(obj: SmartConnect, tokens: list[tuple[str, str, str]]) -> dict[str, 
             log.warning("getMarketData failed: %s", resp.get("message"))
             return {}
 
+        # SmartAPI returns data.fetched as a LIST of instrument dicts.
         result: dict[str, float] = {}
-        for exchange, items in resp["data"]["fetched"].items():
-            for item in items:
-                sym = symbol_map.get(str(item["symbolToken"]), item["tradingSymbol"])
-                result[sym] = float(item["ltp"])
+        for item in resp["data"]["fetched"]:
+            sym = symbol_map.get(str(item.get("symbolToken")), item.get("tradingSymbol"))
+            result[sym] = float(item.get("ltp", 0))
         return result
     except Exception as e:
         log.error("get_ltp error: %s", e)

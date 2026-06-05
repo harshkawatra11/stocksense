@@ -62,6 +62,51 @@ class Settings:
         return float(os.getenv("CONFIDENCE_THRESHOLD", "0.55"))
 
     # ------------------------------------------------------------------ #
+    # Signal horizons (concurrent, config-driven)                          #
+    # ------------------------------------------------------------------ #
+    # Each horizon produces its own signal per ticker per run. `kronos_steps`
+    # is the forecast horizon fed to Kronos; `hold_days` is how long a signal
+    # stays active before it's resolved/expired; `requires_intraday` marks
+    # sub-day horizons that stay dormant until a live intraday feed exists.
+    # Add/remove a dict here to add/remove a timeframe — nothing else hardcodes them.
+    # Integer-day horizons are Kronos-backed (daily candles). Fractional precision
+    # (e.g. "touches target in ~2.5 days") is delivered per-signal by target_eta_days,
+    # NOT by separate half-day buckets — there's no half-day candle to forecast.
+    TIMEFRAMES: list[dict] = [
+        {"label": "1D", "kronos_steps": 1, "hold_days": 1, "requires_intraday": False},
+        {"label": "2D", "kronos_steps": 2, "hold_days": 2, "requires_intraday": False},
+        {"label": "3D", "kronos_steps": 3, "hold_days": 3, "requires_intraday": False},
+        {"label": "4D", "kronos_steps": 4, "hold_days": 4, "requires_intraday": False},
+        {"label": "5D", "kronos_steps": 5, "hold_days": 5, "requires_intraday": False},
+        # Sub-day horizons — enabled automatically once intraday data is present.
+        {"label": "30m", "kronos_steps": 1, "hold_days": 0, "requires_intraday": True},
+        {"label": "2h", "kronos_steps": 1, "hold_days": 0, "requires_intraday": True},
+    ]
+
+    @property
+    def ACTIVE_TIMEFRAMES(self) -> list[dict]:
+        """Timeframes we actually emit now — sub-day ones are skipped until a feed exists."""
+        return [tf for tf in self.TIMEFRAMES if not tf["requires_intraday"]]
+
+    # ------------------------------------------------------------------ #
+    # Trading policy                                                       #
+    # ------------------------------------------------------------------ #
+    @property
+    def BUY_ONLY(self) -> bool:
+        """When true, the pipeline only surfaces BUY signals (initial phase)."""
+        return os.getenv("BUY_ONLY", "true").lower() in ("1", "true", "yes")
+
+    @property
+    def CASH_AVAILABLE(self) -> float:
+        """Deployable capital (₹) — used to annotate affordability of buy signals."""
+        return float(os.getenv("CASH_AVAILABLE", "500"))
+
+    @property
+    def CASH_RESERVE(self) -> float:
+        """Reserve capital (₹) held back, not deployed."""
+        return float(os.getenv("CASH_RESERVE", "500"))
+
+    # ------------------------------------------------------------------ #
     # Anthropic / Claude                                                   #
     # ------------------------------------------------------------------ #
     @property
