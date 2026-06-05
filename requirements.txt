@@ -25,3 +25,5 @@ trl>=0.8.0
 # pip install "unsloth[cu121]"  or  pip install "unsloth[cu118]"
 jugaad-data>=0.29
 aiofiles>=23.0.0
+smartapi-python>=1.5.5
+pyotp>=2.9.0

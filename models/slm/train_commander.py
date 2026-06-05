@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 from datetime import date, datetime
@@ -25,6 +26,22 @@ from config import settings
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+class ClaudeLimitReached(Exception):
+    """Raised when the Claude CLI reports a usage/rate limit — stop the batch cleanly."""
+
+
+# Phrases that signal we've hit the account/usage limit (stop, don't burn through pairs)
+_LIMIT_PHRASES = (
+    "usage limit",
+    "rate limit",
+    "limit reached",
+    "you've reached your",
+    "out of credits",
+    "quota exceeded",
+    "too many requests",
+)
 
 # ---------------------------------------------------------------------------
 # Output paths
@@ -116,9 +133,13 @@ def build_situation_context(
     if ohlcv_df.empty:
         return f"Ticker: {ticker} | Date: {trade_date} | No data available"
 
-    # Slice to the trade date
+    # Slice to the trade date. DB timestamps are tz-aware (UTC); drop the tz so
+    # they compare cleanly against the tz-naive trade_date Timestamp.
     ohlcv_df = ohlcv_df.copy()
-    ohlcv_df.index = pd.to_datetime(ohlcv_df.index).normalize()
+    idx = pd.to_datetime(ohlcv_df.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    ohlcv_df.index = idx.normalize()
     trade_dt = pd.Timestamp(trade_date)
 
     df_to_date = ohlcv_df[ohlcv_df.index <= trade_dt]
@@ -233,23 +254,39 @@ Respond ONLY with this JSON structure (no markdown, no extra text):
   "holding_period": "intraday" | "swing (2-5 days)" | "positional (2-4 weeks)"
 }}"""
 
-    cmd = [
-        "claude",
-        "-p",
-        prompt,
-        "--model",
-        "claude-sonnet-4-5",
-        "--system",
-        NSE_VETERAN_SYSTEM_PROMPT,
-    ]
+    # Resolve the claude CLI robustly. shutil.which respects PATHEXT on Windows,
+    # so it finds the npm shim (claude.cmd) when the npm bin dir is on PATH.
+    # A .cmd/.bat shim is not directly executable via CreateProcess — wrap it in
+    # `cmd /c` so subprocess (shell=False) can launch it.
+    resolved = shutil.which("claude")
+    if not resolved:
+        raise RuntimeError(
+            "claude CLI not found on PATH. Launch this from a shell where "
+            "`claude` resolves (e.g. PowerShell with the npm bin dir on PATH)."
+        )
+    # The system persona + task prompt are large, multi-line, and full of quotes,
+    # braces and pipes. Passing them as CLI args gets mangled through the cmd.exe
+    # + .cmd-shim layers, so we feed the whole thing via STDIN and keep only
+    # simple flags as args. encoding=utf-8 keeps the ₹ symbol intact both ways.
+    full_prompt = f"{NSE_VETERAN_SYSTEM_PROMPT}\n\n{prompt}"
+    cli_args = ["-p", "--model", "claude-sonnet-4-6", "--thinking", "adaptive"]
+    if resolved.lower().endswith((".cmd", ".bat")):
+        cmd = ["cmd", "/c", resolved, *cli_args]
+    else:
+        cmd = [resolved, *cli_args]
 
     try:
         result = subprocess.run(
             cmd,
+            input=full_prompt,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=120,
         )
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if any(p in combined for p in _LIMIT_PHRASES):
+            raise ClaudeLimitReached(result.stdout.strip() or result.stderr.strip())
         if result.returncode == 0:
             return result.stdout.strip()
         else:
@@ -465,6 +502,8 @@ async def run(count: int = 500, rate_limit_secs: float = 2.0) -> None:
 
     generated = 0
     errors = 0
+    consecutive_fail = 0
+    MAX_CONSECUTIVE_FAIL = 5  # stop if Claude keeps failing (likely limit/auth issue)
 
     for i, (ticker, trade_date) in enumerate(pairs):
         pair_key = f"{ticker}_{trade_date}"
@@ -504,11 +543,31 @@ async def run(count: int = 500, rate_limit_secs: float = 2.0) -> None:
         situation = build_situation_context(ticker, trade_date, ohlcv_df)
 
         # Call Claude
-        response = generate_claude_response(situation)
+        try:
+            response = generate_claude_response(situation)
+        except ClaudeLimitReached as e:
+            _save_checkpoint(completed)
+            log.warning(
+                "Claude usage limit reached — stopping cleanly at %d pairs. "
+                "Re-run the same command later to resume (checkpoint saved). Detail: %s",
+                generated, str(e)[:200],
+            )
+            break
+
         if not response:
             log.warning(f"Empty Claude response for {ticker}/{trade_date}")
             errors += 1
+            consecutive_fail += 1
+            if consecutive_fail >= MAX_CONSECUTIVE_FAIL:
+                _save_checkpoint(completed)
+                log.warning(
+                    "%d consecutive failed Claude calls — stopping cleanly at %d pairs "
+                    "(likely a limit or auth problem). Re-run to resume.",
+                    consecutive_fail, generated,
+                )
+                break
             continue
+        consecutive_fail = 0
 
         # Save training pair
         try:

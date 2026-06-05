@@ -225,7 +225,7 @@ def _save_progress(d: date):
 
 async def run_bhavcopy_historical(
     start_date: date = date(2000, 1, 1),
-    end_date: date = date(2026, 6, 3),
+    end_date: date = date.today(),
     resume: bool = True,
     delay: float = 0.5,
 ):
@@ -382,4 +382,9 @@ async def run_incremental(days_back: int = 5):
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(run_bhavcopy_historical())
+    import sys
+    mode = sys.argv[1] if len(sys.argv) > 1 else "incremental"
+    if mode == "full":
+        asyncio.run(run_bhavcopy_historical())
+    else:
+        asyncio.run(run_incremental(days_back=7))

@@ -102,6 +102,14 @@ class Settings:
     def ANGEL_ONE_CLIENT_ID(self) -> str:
         return os.getenv("ANGEL_ONE_CLIENT_ID", "")
 
+    @property
+    def ANGEL_ONE_PIN(self) -> str:
+        return os.getenv("ANGEL_ONE_PIN", "")
+
+    @property
+    def ANGEL_ONE_TOTP_KEY(self) -> str:
+        return os.getenv("ANGEL_ONE_TOTP_KEY", "")
+
     # ------------------------------------------------------------------ #
     # Filesystem paths                                                     #
     # ------------------------------------------------------------------ #

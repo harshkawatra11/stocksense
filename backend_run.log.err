@@ -1,0 +1,58 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\harsh\\Desktop\\HARSH\\WEB-DEV-PROJECTS\\stocksense\\stocksense']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [25060] using WatchFiles
+INFO:     Started server process [25124]
+INFO:     Waiting for application startup.
+2026-06-05 15:47:36,141 INFO StockSense backend started
+INFO:     Application startup complete.
+[I 260605 15:48:50 smartConnect:124] in pool
+2026-06-05 15:48:50,759 INFO Angel One session established for client AACI179838
+2026-06-05 15:48:50,898 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 15:50:51,153 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 15:52:52,170 ERROR get_ltp error: 'list' object has no attribute 'items'
+[E 260605 15:55:00 smartConnect:221] Error occurred while making a POST request to https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote. Headers: {'Content-type': 'application/json', 'X-ClientLocalIP': '127.0.0.1', 'X-ClientPublicIP': '106.193.147.98', 'X-MACAddress': 'e0:e5:6f:c4:d2:c4', 'Accept': 'application/json', 'X-PrivateKey': 'gU6OyaWT', 'X-UserType': 'USER', 'X-SourceID': 'WEB', 'Authorization': 'Bearer eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkFBQ0kxNzk4MzgiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pNc0luTnZkWEpqWlNJNklqTWlMQ0prWlhacFkyVmZhV1FpT2lKa1kyRTRZbVF3TkMwNVlUUTVMVE14TlRVdFlqUm1aaTB3TkRJNU5XUmhNRGs1TXpjaUxDSnJhV1FpT2lKMGNtRmtaVjlyWlhsZmRqSWlMQ0p2Ylc1bGJXRnVZV2RsY21sa0lqb3pMQ0p3Y205a2RXTjBjeUk2ZXlKa1pXMWhkQ0k2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlN3aWJXWWlPbnNpYzNSaGRIVnpJam9pWVdOMGFYWmxJbjE5TENKcGMzTWlPaUowY21Ga1pWOXNiMmRwYmw5elpYSjJhV05sSWl3aWMzVmlJam9pUVVGRFNURTNPVGd6T0NJc0ltVjRjQ0k2TVRjNE1EYzBNVEV6TUN3aWJtSm1Jam94Tnpnd05qVTBOVFV3TENKcFlYUWlPakUzT0RBMk5UUTFOVEFzSW1wMGFTSTZJalppTjJFNE9HRmlMV1kwWVdZdE5EazBaaTFpTWpreExXRTBORGswTmpGalptRTNNeUlzSWxSdmEyVnVJam9pSW4wLlNuVl96MHh0VHVoVmZEZy1OUU1VZ0dqbENrR2tEWThzaEJRbnBENzdYLXlydVJmdVhISmdxUlIxRm45M2tVMVNPMXF4elhPdHZwSVhocEI3XzNqQUtJOFBGUWsyNzEzLWlxZkdoQ28wLTN4dTc3TnBtTWFxb1JqT2lvUnZQUUFSWUtjSXdfLXF4ZWU4eTF2Sko0TnBwMWNiTzdxWUFHQ3hHdkNBYm53RTg4byIsIkFQSS1LRVkiOiJnVTZPeWFXVCIsImlhdCI6MTc4MDY1NDczMCwiZXhwIjoxNzgwNjg0MjAwfQ.jBTYNZL17-t6NjMj_9NezR0O40GT5QdIbyOzs5bzZCUNslCar-AyE3VKgefjCK748pgF8K5uPCU3OQp84GX1DA'}, Request: {'mode': 'LTP', 'exchangeTokens': {'NSE': ['99926000'], 'BSE': ['99919000']}}, Response: HTTPSConnectionPool(host='apiconnect.angelone.in', port=443): Max retries exceeded with url: /rest/secure/angelbroking/market/v1/quote (Caused by ConnectTimeoutError(<HTTPSConnection(host='apiconnect.angelone.in', port=443) at 0x1e7668ef590>, 'Connection to apiconnect.angelone.in timed out. (connect timeout=7)'))
+2026-06-05 15:55:00,077 ERROR get_ltp error: HTTPSConnectionPool(host='apiconnect.angelone.in', port=443): Max retries exceeded with url: /rest/secure/angelbroking/market/v1/quote (Caused by ConnectTimeoutError(<HTTPSConnection(host='apiconnect.angelone.in', port=443) at 0x1e7668ef590>, 'Connection to apiconnect.angelone.in timed out. (connect timeout=7)'))
+2026-06-05 15:57:01,186 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 15:57:47,825 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 15:57:52,636 INFO Loaded classification threshold: 0.48
+2026-06-05 15:57:59,310 INFO LightGBM model loaded.
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+2026-06-05 15:58:02,839 INFO HTTP Request: HEAD https://huggingface.co/NeoQuasar/Kronos-Tokenizer-2k/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-06-05 15:58:02,843 WARNING Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-06-05 15:58:02,906 INFO HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/NeoQuasar/Kronos-Tokenizer-2k/26966d0035065a0cae0ebad7af8ece35bc1fb51c/config.json "HTTP/1.1 200 OK"
+2026-06-05 15:58:03,342 INFO HTTP Request: HEAD https://huggingface.co/NeoQuasar/Kronos-Tokenizer-2k/resolve/main/model.safetensors "HTTP/1.1 302 Found"
+2026-06-05 15:58:03,449 INFO Loading pretrained NeoQuasar/Kronos-mini
+2026-06-05 15:58:03,697 INFO HTTP Request: HEAD https://huggingface.co/NeoQuasar/Kronos-mini/resolve/main/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-06-05 15:58:03,714 INFO HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/NeoQuasar/Kronos-mini/f4e68697d9d5aed55cef5c96aabc3376bcad9f81/config.json "HTTP/1.1 200 OK"
+2026-06-05 15:58:04,159 INFO HTTP Request: HEAD https://huggingface.co/NeoQuasar/Kronos-mini/resolve/main/model.safetensors "HTTP/1.1 302 Found"
+2026-06-05 15:58:04,861 INFO Kronos (mini) ready on cuda:0, max_context=2048
+2026-06-05 15:59:44,966 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 16:01:45,155 ERROR get_ltp error: 'list' object has no attribute 'items'
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+2026-06-05 16:03:57,691 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 16:03:58,654 ERROR get_ltp error: 'list' object has no attribute 'items'
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+2026-06-05 16:06:06,809 ERROR get_ltp error: 'list' object has no attribute 'items'
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+C:\Users\harsh\Desktop\HARSH\WEB-DEV-PROJECTS\stocksense\stocksense\venv\Lib\site-packages\shap\explainers\_tree.py:448: UserWarning: LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray
+  warnings.warn('LightGBM binary classifier with TreeExplainer shap values output has changed to a list of ndarray')
+2026-06-05 16:07:24,708 ERROR get_ltp error: 'list' object has no attribute 'items'
+2026-06-05 16:09:25,347 ERROR get_ltp error: 'list' object has no attribute 'items'
+[E 260605 16:11:33 smartConnect:221] Error occurred while making a POST request to https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote. Headers: {'Content-type': 'application/json', 'X-ClientLocalIP': '127.0.0.1', 'X-ClientPublicIP': '106.193.147.98', 'X-MACAddress': 'e0:e5:6f:c4:d2:c4', 'Accept': 'application/json', 'X-PrivateKey': 'gU6OyaWT', 'X-UserType': 'USER', 'X-SourceID': 'WEB', 'Authorization': 'Bearer eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IkFBQ0kxNzk4MzgiLCJyb2xlcyI6MCwidXNlcnR5cGUiOiJVU0VSIiwidG9rZW4iOiJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKMWMyVnlYM1I1Y0dVaU9pSmpiR2xsYm5RaUxDSjBiMnRsYmw5MGVYQmxJam9pZEhKaFpHVmZZV05qWlhOelgzUnZhMlZ1SWl3aVoyMWZhV1FpT2pNc0luTnZkWEpqWlNJNklqTWlMQ0prWlhacFkyVmZhV1FpT2lKa1kyRTRZbVF3TkMwNVlUUTVMVE14TlRVdFlqUm1aaTB3TkRJNU5XUmhNRGs1TXpjaUxDSnJhV1FpT2lKMGNtRmtaVjlyWlhsZmRqSWlMQ0p2Ylc1bGJXRnVZV2RsY21sa0lqb3pMQ0p3Y205a2RXTjBjeUk2ZXlKa1pXMWhkQ0k2ZXlKemRHRjBkWE1pT2lKaFkzUnBkbVVpZlN3aWJXWWlPbnNpYzNSaGRIVnpJam9pWVdOMGFYWmxJbjE5TENKcGMzTWlPaUowY21Ga1pWOXNiMmRwYmw5elpYSjJhV05sSWl3aWMzVmlJam9pUVVGRFNURTNPVGd6T0NJc0ltVjRjQ0k2TVRjNE1EYzBNVEV6TUN3aWJtSm1Jam94Tnpnd05qVTBOVFV3TENKcFlYUWlPakUzT0RBMk5UUTFOVEFzSW1wMGFTSTZJalppTjJFNE9HRmlMV1kwWVdZdE5EazBaaTFpTWpreExXRTBORGswTmpGalptRTNNeUlzSWxSdmEyVnVJam9pSW4wLlNuVl96MHh0VHVoVmZEZy1OUU1VZ0dqbENrR2tEWThzaEJRbnBENzdYLXlydVJmdVhISmdxUlIxRm45M2tVMVNPMXF4elhPdHZwSVhocEI3XzNqQUtJOFBGUWsyNzEzLWlxZkdoQ28wLTN4dTc3TnBtTWFxb1JqT2lvUnZQUUFSWUtjSXdfLXF4ZWU4eTF2Sko0TnBwMWNiTzdxWUFHQ3hHdkNBYm53RTg4byIsIkFQSS1LRVkiOiJnVTZPeWFXVCIsImlhdCI6MTc4MDY1NDczMCwiZXhwIjoxNzgwNjg0MjAwfQ.jBTYNZL17-t6NjMj_9NezR0O40GT5QdIbyOzs5bzZCUNslCar-AyE3VKgefjCK748pgF8K5uPCU3OQp84GX1DA'}, Request: {'mode': 'LTP', 'exchangeTokens': {'NSE': ['99926000'], 'BSE': ['99919000']}}, Response: HTTPSConnectionPool(host='apiconnect.angelone.in', port=443): Read timed out. (read timeout=7)
+2026-06-05 16:11:33,129 ERROR get_ltp error: HTTPSConnectionPool(host='apiconnect.angelone.in', port=443): Read timed out. (read timeout=7)
+2026-06-05 16:13:34,396 ERROR get_ltp error: 'list' object has no attribute 'items'
