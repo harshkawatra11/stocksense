@@ -99,8 +99,8 @@ export default function IntelligenceDashboard() {
       setRunning(false)
     }
 
-    // Add to signal feed if it's a final confirmed signal
-    if (ticker && signal !== 'SKIP' && signal !== 'HOLD' && (data.confidence as number) > 0.55) {
+    // Add to signal feed only on final claude-enriched BUY signals (has price/target/stop_loss)
+    if (data.type === 'claude_enriched' && signal === 'BUY' && (data.confidence as number) > 0.55) {
       setSignals(p => [data as unknown as Signal, ...p.slice(0, 99)])
     }
   }

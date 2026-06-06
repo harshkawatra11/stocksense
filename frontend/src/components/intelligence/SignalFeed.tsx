@@ -7,8 +7,7 @@ interface Props { signals: Signal[] }
 export default function SignalFeed({ signals }: Props) {
   const [selected, setSelected] = useState<Signal | null>(null)
 
-  const buys  = signals.filter(s => s.signal === 'BUY').length
-  const sells = signals.filter(s => s.signal === 'SELL').length
+  const buys = signals.filter(s => s.signal === 'BUY').length
 
   return (
     <>
@@ -16,7 +15,6 @@ export default function SignalFeed({ signals }: Props) {
         <div className="flex items-center gap-3 px-4 py-2 border-b border-border flex-shrink-0">
           <span className="text-xs font-medium text-text-secondary">LIVE SIGNAL FEED</span>
           <span className="text-xs px-2 py-0.5 rounded bg-bg-hover text-green">▲ BUY {buys}</span>
-          <span className="text-xs px-2 py-0.5 rounded bg-bg-hover text-red">▼ SELL {sells}</span>
         </div>
 
         <div className="flex-1 overflow-y-auto">
