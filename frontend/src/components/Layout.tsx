@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Tab } from '../types'
-import { BarChart2, Briefcase, List, TrendingUp, Globe, Cpu } from 'lucide-react'
+import { BarChart2, Briefcase, List, TrendingUp, Globe, Cpu, Zap } from 'lucide-react'
 import { useMarketStatus } from '../hooks/useMarketStatus'
 import { useBackendHealth } from '../hooks/useBackendHealth'
 import { useMarketIndices } from '../hooks/useMarketIndices'
@@ -17,6 +17,7 @@ const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'orders',       label: 'Orders',       icon: <BarChart2 size={18} /> },
   { id: 'charts',       label: 'Charts',       icon: <TrendingUp size={18} /> },
   { id: 'market',       label: 'Market',       icon: <Globe size={18} /> },
+  { id: 'live',         label: 'Live Signals', icon: <Zap size={18} /> },
   { id: 'intelligence', label: 'Intelligence', icon: <Cpu size={18} /> },
 ]
 

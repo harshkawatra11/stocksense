@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from data.db.database import init_db
-from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview
+from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview, live
 from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS as NSE_TICKERS
 from intelligence.signal_pipeline import (
     run_pipeline_batch,
@@ -50,6 +50,7 @@ app.include_router(accuracy.router, prefix="/api/accuracy", tags=["accuracy"])
 app.include_router(market_data.router, prefix="/api/market", tags=["market"])
 app.include_router(ohlcv.router, prefix="/api/ohlcv", tags=["ohlcv"])
 app.include_router(market_overview.router, prefix="/api/market", tags=["market"])
+app.include_router(live.router, prefix="/api/live", tags=["live"])
 
 
 @app.get("/api/health")

@@ -30,14 +30,27 @@ log = logging.getLogger(__name__)
 # ------------------------------------------------------------------ #
 
 async def task_incremental_ohlcv():
-    """Pull latest OHLCV from NSE Bhavcopy (runs after market close)."""
-    log.info("Starting incremental OHLCV update...")
+    """
+    Pull latest daily OHLCV. Primary source is Angel One getCandleData (works on
+    this network); NSE Bhavcopy is the fallback (often network-blocked here).
+    """
+    log.info("Starting incremental OHLCV update (Angel One)...")
+    try:
+        from data.pipeline.fetch_angel_daily import run_angel_backfill
+        summary = await run_angel_backfill(days_back=5)
+        log.info("Angel One OHLCV update complete: %s", summary)
+        if summary.get("updated", 0) > 0:
+            return
+        log.warning("Angel One updated 0 tickers — falling back to NSE Bhavcopy.")
+    except Exception as e:
+        log.error(f"Angel One OHLCV update failed: {e} — falling back to NSE Bhavcopy.", exc_info=True)
+
     try:
         from data.pipeline.fetch_historical import run_incremental
         await run_incremental(days_back=3)
-        log.info("Incremental OHLCV update complete.")
+        log.info("NSE Bhavcopy fallback update complete.")
     except Exception as e:
-        log.error(f"Incremental OHLCV update failed: {e}", exc_info=True)
+        log.error(f"NSE Bhavcopy fallback failed: {e}", exc_info=True)
 
 
 async def task_incremental_fo():
@@ -52,14 +65,25 @@ async def task_incremental_fo():
 
 
 async def task_signal_pipeline():
-    """Run ML signal pipeline on latest data."""
-    log.info("Starting signal pipeline...")
+    """Run the live multi-timeframe intelligence pipeline on the latest data."""
+    log.info("Starting multi-timeframe signal pipeline...")
     try:
-        from intelligence.signal_pipeline import run_pipeline
-        await run_pipeline()
-        log.info("Signal pipeline complete.")
+        from intelligence.signal_pipeline import run_pipeline_multi
+        sigs = await run_pipeline_multi(save=True)
+        log.info("Signal pipeline complete: %d BUY signals.", len(sigs))
     except Exception as e:
         log.error(f"Signal pipeline failed: {e}", exc_info=True)
+
+
+async def task_position_review():
+    """Re-analyze held positions vs their original predictions (HOLD/EXIT verdicts)."""
+    log.info("Starting position re-analysis...")
+    try:
+        from intelligence.position_monitor import review_all_positions
+        reviews = await review_all_positions()
+        log.info("Position re-analysis complete: %d positions reviewed.", len(reviews))
+    except Exception as e:
+        log.error(f"Position re-analysis failed: {e}", exc_info=True)
 
 
 async def task_eod_review():
@@ -167,6 +191,21 @@ def build_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+    # Position re-analysis: every 30 min during market hours, offset 10 min from the
+    # pipeline so Kronos (signals) and Kronos (re-analysis) don't fight for the 4GB GPU.
+    scheduler.add_job(
+        task_position_review,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-15",
+            minute="25,55",
+            timezone="Asia/Kolkata",
+        ),
+        id="position_review",
+        name="Position re-analysis",
+        replace_existing=True,
+    )
+
     # EOD review: Mon-Fri at 3:45 PM IST (15 min after market close)
     scheduler.add_job(
         task_eod_review,
@@ -216,17 +255,21 @@ async def main():
     scheduler.start()
     log.info(f"Scheduler started. Jobs: {[j.name for j in scheduler.get_jobs()]}")
 
-    # Graceful shutdown on SIGTERM/SIGINT
+    # Graceful shutdown. loop.add_signal_handler is not supported on Windows'
+    # ProactorEventLoop, so fall back to signal.signal there.
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
-    def _shutdown(sig):
-        log.info(f"Received {sig.name}, shutting down...")
+    def _shutdown(signame: str):
+        log.info(f"Received {signame}, shutting down...")
         scheduler.shutdown(wait=False)
-        stop_event.set()
+        loop.call_soon_threadsafe(stop_event.set)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, _shutdown, sig)
+        try:
+            loop.add_signal_handler(sig, _shutdown, sig.name)
+        except NotImplementedError:
+            signal.signal(sig, lambda s, f: _shutdown(signal.Signals(s).name))
 
     await stop_event.wait()
     log.info("Market runner stopped.")

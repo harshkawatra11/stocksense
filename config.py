@@ -106,6 +106,11 @@ class Settings:
         """Reserve capital (₹) held back, not deployed."""
         return float(os.getenv("CASH_RESERVE", "500"))
 
+    @property
+    def CLAUDE_SYNTHESIS_ENABLED(self) -> bool:
+        """Whether to run the Claude CLI final-synthesis stage on top signals."""
+        return os.getenv("CLAUDE_SYNTHESIS_ENABLED", "true").lower() in ("1", "true", "yes")
+
     # ------------------------------------------------------------------ #
     # Anthropic / Claude                                                   #
     # ------------------------------------------------------------------ #

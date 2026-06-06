@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
+from functools import lru_cache
 from typing import Optional
 
 from config import settings
@@ -16,6 +18,16 @@ log = logging.getLogger(__name__)
 
 CLAUDE_SONNET = settings.CLAUDE_SONNET_MODEL
 CLAUDE_OPUS = settings.CLAUDE_OPUS_MODEL
+
+
+@lru_cache(maxsize=1)
+def _claude_bin() -> str:
+    """
+    Resolve the `claude` executable. On Windows it's an npm shim (claude.cmd),
+    which subprocess.run can't find by bare name — shutil.which returns the full
+    path (incl. .cmd) so it launches correctly.
+    """
+    return shutil.which("claude") or "claude"
 
 
 def _extract_json(raw: str, expect: str = "object"):
@@ -75,22 +87,29 @@ def _extract_json(raw: str, expect: str = "object"):
 
 
 def _run_claude(prompt: str, model: str, system: Optional[str] = None, retries: int = 3) -> str:
-    cmd = ["claude", "-p", prompt, "--model", model]
+    # Pass the prompt via STDIN, not argv: prompts carry non-ASCII (₹, →, •) and can
+    # be long — routing through the Windows claude.CMD shim as an argument mangles
+    # them under cmd.exe's codepage. stdin + forced UTF-8 sidesteps both problems.
+    cmd = [_claude_bin(), "-p", "--model", model]
     if system:
-        cmd += ["--system", system]
+        # `claude -p` uses --append-system-prompt (NOT --system, which errors out).
+        cmd += ["--append-system-prompt", system]
 
     for attempt in range(retries):
         try:
             result = subprocess.run(
                 cmd,
+                input=prompt,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=180,
             )
             if result.returncode == 0:
-                return result.stdout.strip()
+                return (result.stdout or "").strip()
             else:
-                log.warning(f"Claude CLI error (attempt {attempt+1}): {result.stderr[:300]}")
+                log.warning(f"Claude CLI error (attempt {attempt+1}): {(result.stderr or '')[:300]}")
         except subprocess.TimeoutExpired:
             log.warning(f"Claude CLI timeout (attempt {attempt+1})")
         except FileNotFoundError:

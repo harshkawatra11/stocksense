@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Layout from './components/Layout'
 import IntelligenceDashboard from './components/intelligence/IntelligenceDashboard'
+import Live from './components/live/Live'
 import Portfolio from './components/portfolio/Portfolio'
 import MarketOverview from './components/market/MarketOverview'
 import Watchlist from './components/watchlist/Watchlist'
@@ -13,6 +14,7 @@ export default function App() {
   return (
     <Layout activeTab={activeTab} onTabChange={setActiveTab}>
       {activeTab === 'intelligence' && <IntelligenceDashboard />}
+      {activeTab === 'live' && <Live />}
       {activeTab === 'portfolio' && <Portfolio />}
       {activeTab === 'market' && <MarketOverview />}
       {activeTab === 'watchlist' && <Watchlist />}

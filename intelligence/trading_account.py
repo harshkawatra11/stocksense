@@ -107,6 +107,7 @@ async def get_actionable_signals(conn, limit: int = 30, only_affordable: bool = 
         SELECT s.id, s.ticker, s.timeframe, s.horizon_days, s.price_at_signal,
                s.target_price, s.stop_loss, s.final_confidence,
                s.affordable, s.shares_affordable, s.macro_sector_score,
+               s.target_eta_days, s.expected_move_pct, s.predicted_path,
                s.fired_at, st.sector, st.name
         FROM signals s
         JOIN stocks st ON st.ticker = s.ticker

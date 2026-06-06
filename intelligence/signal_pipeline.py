@@ -18,6 +18,7 @@ from models.kronos.combine import combine_signals
 from models.slm.infer import slm_enrich
 from intelligence.portfolio_guard import get_portfolio_tickers
 from intelligence.macro_context import get_macro_context, MacroContext
+from intelligence.activity import log_activity
 from config import settings
 
 log = logging.getLogger(__name__)
@@ -631,7 +632,6 @@ async def save_signal_multi(conn, signal: dict) -> int:
 
     # Surface affordable BUYs in the activity feed so the user can rate/act on them.
     if signal.get("affordable") and signal.get("signal") == "BUY":
-        from intelligence.activity import log_activity
         await log_activity(
             conn, event_type="SUGGESTED", ticker=signal["ticker"], signal_id=signal_id,
             note=signal.get("headline", ""),
@@ -672,7 +672,7 @@ async def run_pipeline_multi(tickers: list[str] | None = None, save: bool = True
                 if save and sigs:
                     for s in sigs:
                         try:
-                            await save_signal_multi(conn, s)
+                            s["id"] = await save_signal_multi(conn, s)
                         except Exception as e:
                             log.warning("save failed %s/%s: %s", s["ticker"], s["timeframe"], e)
                 return sigs
@@ -681,9 +681,64 @@ async def run_pipeline_multi(tickers: list[str] | None = None, save: bool = True
         results = await asyncio.gather(*[bounded(t) for t in tickers])
         for r in results:
             all_signals.extend(r)
+
+        # Claude CLI final synthesis on the top signals (best per ticker), with learnings.
+        if save and all_signals and settings.CLAUDE_SYNTHESIS_ENABLED:
+            async with pool.acquire() as conn:
+                await _claude_synthesis(conn, all_signals)
     finally:
         await pool.close()
 
     log.info("Multi-timeframe run done: %d signals across %d tickers",
              len(all_signals), len(tickers))
     return all_signals
+
+
+async def _claude_synthesis(conn, all_signals: list[dict]) -> None:
+    """
+    Send the strongest signals (best timeframe per ticker, capped at
+    TOP_SIGNALS_FOR_CLAUDE) to Claude Sonnet with recent learnings, then write the
+    verdict back onto the saved rows: claude_confidence, final_confidence, a claude
+    reasoning row, and demote REJECTs to HOLD.
+    """
+    from intelligence.claude_cli import intraday_signal_check
+
+    # Best signal per ticker (highest confidence across its timeframes).
+    best: dict[str, dict] = {}
+    for s in all_signals:
+        cur = best.get(s["ticker"])
+        if cur is None or s["confidence"] > cur["confidence"]:
+            best[s["ticker"]] = s
+    top = sorted(best.values(), key=lambda x: -x["confidence"])[: settings.TOP_SIGNALS_FOR_CLAUDE]
+    if not top:
+        return
+
+    learnings = await fetch_recent_learnings(conn)
+    log.info("Claude synthesis on %d top signals (%d learnings in context)…",
+             len(top), learnings.count("\n") + 1 if learnings else 0)
+    try:
+        enriched = intraday_signal_check(top, learnings_context=learnings)
+    except Exception as e:
+        log.warning("Claude synthesis failed: %s", e)
+        return
+
+    for s in enriched:
+        sid = s.get("id")
+        if not sid:
+            continue
+        claude_conf = s.get("claude_confidence")
+        final_conf = s.get("final_confidence", s.get("confidence"))
+        new_type = "HOLD" if s.get("claude_action") == "REJECT" else s.get("signal", "BUY")
+        await conn.execute(
+            "UPDATE signals SET claude_confidence=$1, final_confidence=$2, signal_type=$3 WHERE id=$4",
+            claude_conf, final_conf, new_type, sid,
+        )
+        if s.get("claude_reasoning"):
+            await conn.execute(
+                "INSERT INTO signal_reasoning (signal_id, model_name, reasoning) VALUES ($1,'claude',$2)",
+                sid, s["claude_reasoning"],
+            )
+        await log_activity(
+            conn, event_type="NOTE", ticker=s["ticker"], signal_id=sid,
+            note=f"Claude {s.get('claude_action','CONFIRM')}: {final_conf*100:.0f}% final",
+        )

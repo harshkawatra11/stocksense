@@ -51,4 +51,54 @@ export interface Learning {
   tags?: string[]
 }
 
-export type Tab = 'watchlist' | 'portfolio' | 'orders' | 'charts' | 'market' | 'intelligence'
+export interface LiveSignal {
+  id: number
+  ticker: string
+  name?: string
+  sector?: string
+  timeframe: string
+  horizon_days?: number
+  price_at_signal: number
+  target_price?: number
+  stop_loss?: number
+  final_confidence: number
+  affordable?: boolean
+  shares_affordable?: number
+  macro_sector_score?: number
+  target_eta_days?: number
+  expected_move_pct?: number
+  fired_at?: string
+}
+
+export interface Account {
+  cash_available: number
+  cash_reserve: number
+  deployable_note?: string
+}
+
+export interface ActivityEvent {
+  id: number
+  event_type: 'SUGGESTED' | 'RATED' | 'BOUGHT' | 'SOLD' | 'REANALYZED' | 'NOTE'
+  ticker?: string
+  name?: string
+  rating?: 'LIKE' | 'DISLIKE'
+  note?: string
+  payload?: Record<string, unknown>
+  created_at: string
+}
+
+export interface PositionReview {
+  ticker: string
+  days_elapsed?: number
+  eta_days?: number
+  entry_price?: number
+  target_price?: number
+  current_price?: number
+  progress_pct?: number
+  status: string
+  verdict: string
+  reasoning?: string
+  reviewed_at: string
+}
+
+export type Tab = 'watchlist' | 'portfolio' | 'orders' | 'charts' | 'market' | 'intelligence' | 'live'
