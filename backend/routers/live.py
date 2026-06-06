@@ -17,9 +17,32 @@ from intelligence.trading_account import (
 )
 from intelligence.activity import rate_signal, get_activity_feed
 from intelligence.position_monitor import review_all_positions
+from intelligence.data_freshness import get_data_freshness
+from intelligence.trading_mode import get_trading_mode
 
 router = APIRouter()
 DB_DSN = settings.DATABASE_DSN
+
+
+# ----------------------------- status ---------------------------- #
+@router.get("/data-status")
+async def data_status():
+    """Is the latest data LIVE intraday or PAST end-of-day? Drives the UI banner."""
+    conn = await asyncpg.connect(DB_DSN)
+    try:
+        return await get_data_freshness(conn)
+    finally:
+        await conn.close()
+
+
+@router.get("/mode")
+async def trading_mode():
+    """PAPER vs LIVE gate + progress toward unlocking LIVE execution."""
+    conn = await asyncpg.connect(DB_DSN)
+    try:
+        return await get_trading_mode(conn)
+    finally:
+        await conn.close()
 
 
 # ----------------------------- reads ----------------------------- #
@@ -181,6 +204,8 @@ async def run_pipeline(limit: int = 50):
             "SELECT ticker FROM stocks WHERE active = TRUE ORDER BY ticker LIMIT $1", limit
         )
         tickers = [r["ticker"] for r in rows]
+        freshness = await get_data_freshness(conn)
+        mode = await get_trading_mode(conn)
     finally:
         await conn.close()
 
@@ -188,6 +213,8 @@ async def run_pipeline(limit: int = 50):
     return {
         "generated": len(sigs),
         "tickers_scanned": len(tickers),
+        "data_status": freshness,
+        "mode": mode,
         "signals": [
             {"ticker": s["ticker"], "timeframe": s["timeframe"],
              "confidence": s["confidence"], "headline": s.get("headline"),

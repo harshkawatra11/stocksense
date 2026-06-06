@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from typing import Any, Callable
 
 import pyotp
 from SmartApi import SmartConnect
@@ -35,6 +35,25 @@ FEED_MODE_QUOTE = 2  # Full OHLCV quote
 FEED_MODE_SNAP = 3   # Snap quote (bid/ask depth)
 
 _session: SmartConnect | None = None
+
+
+def _iter_fetched(fetched: Any) -> list[dict]:
+    """
+    Normalize the ``data.fetched`` field of a getMarketData response into a flat
+    list of instrument dicts. SmartAPI returns it as a list, but harden against a
+    dict-of-lists shape so a future API change can't silently break the poller.
+    """
+    if isinstance(fetched, list):
+        return fetched
+    if isinstance(fetched, dict):
+        items: list[dict] = []
+        for v in fetched.values():
+            if isinstance(v, list):
+                items.extend(v)
+            elif isinstance(v, dict):
+                items.append(v)
+        return items
+    return []
 
 
 def _generate_totp() -> str:
@@ -110,7 +129,7 @@ def get_ltp(obj: SmartConnect, tokens: list[tuple[str, str, str]]) -> dict[str, 
 
         # SmartAPI returns data.fetched as a LIST of instrument dicts.
         result: dict[str, float] = {}
-        for item in resp["data"]["fetched"]:
+        for item in _iter_fetched(resp["data"]["fetched"]):
             sym = symbol_map.get(str(item.get("symbolToken")), item.get("tradingSymbol"))
             result[sym] = float(item.get("ltp", 0))
         return result
@@ -144,18 +163,17 @@ def get_quote(obj: SmartConnect, tokens: list[tuple[str, str, str]]) -> dict[str
             return {}
 
         result: dict[str, dict] = {}
-        for exchange, items in resp["data"]["fetched"].items():
-            for item in items:
-                sym = symbol_map.get(str(item["symbolToken"]), item["tradingSymbol"])
-                result[sym] = {
-                    "ltp": float(item.get("ltp", 0)),
-                    "open": float(item.get("open", 0)),
-                    "high": float(item.get("high", 0)),
-                    "low": float(item.get("low", 0)),
-                    "close": float(item.get("close", 0)),
-                    "volume": int(item.get("tradeVolume", 0)),
-                    "token": item.get("symbolToken"),
-                }
+        for item in _iter_fetched(resp["data"]["fetched"]):
+            sym = symbol_map.get(str(item.get("symbolToken")), item.get("tradingSymbol"))
+            result[sym] = {
+                "ltp": float(item.get("ltp", 0)),
+                "open": float(item.get("open", 0)),
+                "high": float(item.get("high", 0)),
+                "low": float(item.get("low", 0)),
+                "close": float(item.get("close", 0)),
+                "volume": int(item.get("tradeVolume", 0)),
+                "token": item.get("symbolToken"),
+            }
         return result
     except Exception as e:
         log.error("get_quote error: %s", e)

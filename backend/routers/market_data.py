@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 _cache: dict = {"data": None, "ts": 0.0}
 CACHE_TTL = 15  # seconds
 
+# Angel One is blocked on some networks (home ISP) — the fetch then times out on
+# every poll. Log the first occurrence of a given failure at WARNING, then stay
+# quiet (DEBUG) until the error message changes, so app.log isn't flooded.
+_last_fetch_error: str | None = None
+
 # Angel One instrument tokens
 # exchange, tradingsymbol, token, display_name
 INDICES = [
@@ -29,6 +34,7 @@ INDICES = [
 
 def _fetch_quotes_sync() -> list[dict]:
     """Synchronous Angel One LTP fetch — runs in a thread pool."""
+    global _last_fetch_error
     from data.pipeline.fetch_live import get_session, get_ltp
 
     try:
@@ -44,9 +50,15 @@ def _fetch_quotes_sync() -> list[dict]:
                 "ltp": ltp,
                 "available": ltp is not None,
             })
+        _last_fetch_error = None  # recovered — next failure logs fresh
         return result
     except Exception as e:
-        log.warning("Angel One quote fetch failed: %s", e)
+        msg = str(e)
+        if msg != _last_fetch_error:
+            log.warning("Angel One quote fetch failed (will quiet repeats): %s", msg)
+            _last_fetch_error = msg
+        else:
+            log.debug("Angel One quote fetch still failing: %s", msg)
         return [{"symbol": d, "ltp": None, "available": False} for _, _, _, d in INDICES]
 
 

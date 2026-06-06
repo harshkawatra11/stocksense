@@ -101,4 +101,21 @@ export interface PositionReview {
   reviewed_at: string
 }
 
-export type Tab = 'watchlist' | 'portfolio' | 'orders' | 'charts' | 'market' | 'intelligence' | 'live'
+export interface DataStatus {
+  latest_date: string | null
+  age_hours: number | null
+  source: 'live_intraday' | 'eod_daily'
+  is_live: boolean
+  label: string
+}
+
+export interface TradingMode {
+  mode: 'PAPER' | 'LIVE'
+  reason: string
+  resolved_count: number
+  span_days: number
+  rolling_accuracy: number | null
+  gate: { min_days: number; min_resolved: number; min_accuracy: number }
+}
+
+export type Tab = 'watchlist' | 'portfolio' | 'orders' | 'charts' | 'market' | 'intelligence' | 'live' | 'logs'

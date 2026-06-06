@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Tab } from '../types'
-import { BarChart2, Briefcase, List, TrendingUp, Globe, Cpu, Zap } from 'lucide-react'
+import { BarChart2, Briefcase, List, TrendingUp, Globe, Cpu, Zap, ScrollText } from 'lucide-react'
 import { useMarketStatus } from '../hooks/useMarketStatus'
 import { useBackendHealth } from '../hooks/useBackendHealth'
 import { useMarketIndices } from '../hooks/useMarketIndices'
@@ -19,6 +19,7 @@ const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'market',       label: 'Market',       icon: <Globe size={18} /> },
   { id: 'live',         label: 'Live Signals', icon: <Zap size={18} /> },
   { id: 'intelligence', label: 'Intelligence', icon: <Cpu size={18} /> },
+  { id: 'logs',         label: 'Logs & Audit', icon: <ScrollText size={18} /> },
 ]
 
 function IndexTicker({ isMarketOpen }: { isMarketOpen: boolean }) {

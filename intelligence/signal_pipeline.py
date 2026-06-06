@@ -653,6 +653,9 @@ async def run_pipeline_multi(tickers: list[str] | None = None, save: bool = True
 
     pool = await asyncpg.create_pool(settings.DATABASE_DSN, min_size=2, max_size=8)
     async with pool.acquire() as meta:
+        from intelligence.data_freshness import get_data_freshness
+        freshness = await get_data_freshness(meta)
+        log.info("Data freshness: %s", freshness["label"])
         portfolio_tickers = await get_portfolio_tickers(meta)
         sector_map = await fetch_sector_map(meta)
         if tickers is None:

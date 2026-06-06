@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ThumbsUp, ThumbsDown, ShoppingCart, X, RefreshCw, Play, Wallet, Clock, Target } from 'lucide-react'
-import type { LiveSignal, Account, ActivityEvent, PositionReview } from '../../types'
+import { ThumbsUp, ThumbsDown, ShoppingCart, X, RefreshCw, Play, Wallet, Clock, Target, AlertTriangle, FlaskConical } from 'lucide-react'
+import type { LiveSignal, Account, ActivityEvent, PositionReview, DataStatus, TradingMode } from '../../types'
 
 const api = {
   get: (p: string) => fetch(`/api${p}`).then(r => r.json()),
@@ -37,22 +37,30 @@ export default function Live() {
   const [account, setAccount] = useState<Account | null>(null)
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [reviews, setReviews] = useState<PositionReview[]>([])
+  const [dataStatus, setDataStatus] = useState<DataStatus | null>(null)
+  const [mode, setMode] = useState<TradingMode | null>(null)
   const [onlyAffordable, setOnlyAffordable] = useState(false)
   const [running, setRunning] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const isPaper = mode?.mode !== 'LIVE'  // default to paper until proven otherwise
+
   const refresh = useCallback(async () => {
-    const [sig, acc, act, rev] = await Promise.all([
+    const [sig, acc, act, rev, ds, md] = await Promise.all([
       api.get(`/live/signals?limit=40${onlyAffordable ? '&only_affordable=true' : ''}`),
       api.get('/live/account'),
       api.get('/live/activity?limit=60'),
       api.get('/live/positions/reviews'),
+      api.get('/live/data-status'),
+      api.get('/live/mode'),
     ])
     setSignals(Array.isArray(sig) ? sig : [])
     setAccount(acc)
     setActivity(Array.isArray(act) ? act : [])
     setReviews(Array.isArray(rev) ? rev : [])
+    setDataStatus(ds && ds.source ? ds : null)
+    setMode(md && md.mode ? md : null)
   }, [onlyAffordable])
 
   useEffect(() => { refresh() }, [refresh])
@@ -89,6 +97,19 @@ export default function Live() {
       {/* Header */}
       <div className="px-4 py-2.5 border-b border-border bg-bg-card flex items-center gap-4 flex-shrink-0">
         <span className="text-sm font-semibold text-white">Live Signals</span>
+        {/* Paper vs Live mode chip */}
+        {isPaper ? (
+          <span
+            title={mode?.reason || 'Tracking only until a track record exists'}
+            className="flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded bg-yellow/15 text-yellow border border-yellow/30">
+            <FlaskConical size={12} /> PAPER MODE
+            {mode && <span className="text-yellow/70 font-normal">· {mode.reason}</span>}
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded bg-green/15 text-green border border-green/30">
+            🟢 LIVE
+          </span>
+        )}
         {account && (
           <div className="flex items-center gap-2 text-xs">
             <Wallet size={13} className="text-green" />
@@ -111,6 +132,22 @@ export default function Live() {
           </button>
         </div>
       </div>
+
+      {/* Data freshness banner — is this LIVE intraday or PAST end-of-day? */}
+      {dataStatus && (
+        <div className={`px-4 py-1.5 text-xs border-b border-border flex items-center gap-2 flex-shrink-0 ${
+          dataStatus.is_live ? 'text-green bg-green/10' : 'text-yellow bg-yellow/10'
+        }`}>
+          {dataStatus.is_live
+            ? <>🟢 {dataStatus.label}{dataStatus.age_hours != null && <span className="opacity-70">· updated {dataStatus.age_hours}h ago</span>}</>
+            : <><AlertTriangle size={13} className="flex-shrink-0" /> {dataStatus.label}</>}
+          {running && (
+            <span className="ml-auto text-text-secondary">
+              Analysing… {dataStatus.latest_date && `(using ${dataStatus.is_live ? 'live' : 'EOD'} data from ${dataStatus.latest_date})`}
+            </span>
+          )}
+        </div>
+      )}
 
       {error && <div className="px-4 py-1.5 text-xs text-red bg-red/10 border-b border-border flex-shrink-0">{error}</div>}
 
@@ -162,6 +199,7 @@ export default function Live() {
                 <span className={s.affordable ? 'text-green' : 'text-text-secondary'}>
                   {s.affordable ? `${s.shares_affordable} share${s.shares_affordable === 1 ? '' : 's'} w/ ₹500` : 'not affordable w/ ₹500'}
                 </span>
+                {isPaper && <span className="text-yellow/70 italic ml-auto">tracked, not executed</span>}
               </div>
 
               {/* Actions */}
@@ -175,9 +213,16 @@ export default function Live() {
                   <ThumbsDown size={12} /> Dislike
                 </button>
                 <button onClick={() => buy(s)} disabled={!!busy || !s.affordable}
-                  title={s.affordable ? 'Buy' : 'Not affordable with current capital'}
-                  className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded bg-green/20 text-green hover:bg-green/30 disabled:opacity-40 disabled:cursor-not-allowed">
-                  <ShoppingCart size={12} /> Buy
+                  title={isPaper
+                    ? 'Paper trade — tracked for the learning loop, not executed'
+                    : (s.affordable ? 'Buy' : 'Not affordable with current capital')}
+                  className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded disabled:opacity-40 disabled:cursor-not-allowed ${
+                    isPaper
+                      ? 'bg-yellow/15 text-yellow hover:bg-yellow/25'
+                      : 'bg-green/20 text-green hover:bg-green/30'
+                  }`}>
+                  {isPaper ? <FlaskConical size={12} /> : <ShoppingCart size={12} />}
+                  {isPaper ? 'Paper Buy' : 'Buy'}
                 </button>
                 <button onClick={() => pass(s)} disabled={!!busy}
                   className="flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-bg-hover text-text-secondary hover:text-text-primary disabled:opacity-40 ml-auto">

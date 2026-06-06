@@ -54,6 +54,15 @@ async def record_decision(
     to the portfolio. Returns {decision_id, cash_after}. Raises on insufficient
     cash for a BUY so the caller can surface it.
     """
+    # Paper vs live gate: until the track record qualifies, a BUY is a tracked
+    # paper trade, not a real execution. The cash ledger still moves so the paper
+    # P&L is real and feeds the learning loop — only the framing changes.
+    from intelligence.trading_mode import get_trading_mode
+    mode_info = await get_trading_mode(conn)
+    is_paper = mode_info["mode"] == "PAPER"
+    if is_paper and action == "BUY" and not rationale.startswith("[PAPER]"):
+        rationale = f"[PAPER] {rationale}".rstrip()
+
     acct = await get_account(conn)
     cash = acct["cash_available"]
     cash_after = cash
@@ -85,12 +94,20 @@ async def record_decision(
         await log_activity(
             conn, event_type="BOUGHT" if action == "BUY" else "SOLD",
             ticker=ticker, signal_id=signal_id, note=rationale,
-            payload={"quantity": quantity, "price": price, "cash_after": cash_after},
+            payload={
+                "quantity": quantity, "price": price, "cash_after": cash_after,
+                "mode": "PAPER" if is_paper else "LIVE",
+            },
         )
 
-    log.info("Decision %s: %s %s x%s @ %s (cash after ₹%s)",
-             decision_id, action, ticker, quantity, price, cash_after)
-    return {"decision_id": decision_id, "cash_after": cash_after}
+    log.info("Decision %s: %s %s x%s @ %s (cash after ₹%s)%s",
+             decision_id, action, ticker, quantity, price, cash_after,
+             " [PAPER]" if is_paper else "")
+    return {
+        "decision_id": decision_id,
+        "cash_after": cash_after,
+        "mode": "PAPER" if is_paper else "LIVE",
+    }
 
 
 async def get_actionable_signals(conn, limit: int = 30, only_affordable: bool = False) -> list[dict]:
