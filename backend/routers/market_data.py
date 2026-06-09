@@ -15,13 +15,16 @@ from config import settings
 router = APIRouter()
 log = logging.getLogger(__name__)
 
+# Suppress SmartAPI library's own noisy ERROR-level connection logs
+logging.getLogger("smartConnect").setLevel(logging.CRITICAL)
+
 # Cache quote for 15 seconds to avoid hammering the API on rapid frontend polls
 _cache: dict = {"data": None, "ts": 0.0}
 CACHE_TTL = 15  # seconds
 
-# Angel One is blocked on some networks (home ISP) — the fetch then times out on
-# every poll. Log the first occurrence of a given failure at WARNING, then stay
-# quiet (DEBUG) until the error message changes, so app.log isn't flooded.
+# Circuit breaker: after a network failure back off for 5 minutes before retrying
+_BACKOFF_SECS = 300
+_fail_ts: float = 0.0   # time of last failure
 _last_fetch_error: str | None = None
 
 # Angel One instrument tokens
@@ -34,8 +37,12 @@ INDICES = [
 
 def _fetch_quotes_sync() -> list[dict]:
     """Synchronous Angel One LTP fetch — runs in a thread pool."""
-    global _last_fetch_error
+    global _last_fetch_error, _fail_ts
     from data.pipeline.fetch_live import get_session, get_ltp
+
+    # Circuit breaker: skip network call if we failed recently
+    if _fail_ts and (time.monotonic() - _fail_ts) < _BACKOFF_SECS:
+        return [{"symbol": d, "ltp": None, "available": False} for _, _, _, d in INDICES]
 
     try:
         obj = get_session()
@@ -50,15 +57,15 @@ def _fetch_quotes_sync() -> list[dict]:
                 "ltp": ltp,
                 "available": ltp is not None,
             })
-        _last_fetch_error = None  # recovered — next failure logs fresh
+        _last_fetch_error = None
+        _fail_ts = 0.0  # recovered — reset circuit breaker
         return result
     except Exception as e:
         msg = str(e)
+        _fail_ts = time.monotonic()  # arm circuit breaker
         if msg != _last_fetch_error:
-            log.warning("Angel One quote fetch failed (will quiet repeats): %s", msg)
+            log.warning("Angel One LTP unavailable, backing off %ds: %s", _BACKOFF_SECS, msg[:120])
             _last_fetch_error = msg
-        else:
-            log.debug("Angel One quote fetch still failing: %s", msg)
         return [{"symbol": d, "ltp": None, "available": False} for _, _, _, d in INDICES]
 
 
