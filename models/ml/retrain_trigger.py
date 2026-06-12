@@ -58,12 +58,27 @@ async def check_and_trigger_retrain(conn, auto_retrain: bool = False) -> bool:
     if auto_retrain:
         log.info("Launching LightGBM retraining (python -m models.ml.train)...")
         try:
+            from datetime import date
+            from pathlib import Path
+            log_dir = Path("logs") / date.today().isoformat()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            retrain_log = open(log_dir / "retrain.log", "a", encoding="utf-8")
             subprocess.Popen(
                 [sys.executable, "-m", "models.ml.train"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=retrain_log,
+                stderr=subprocess.STDOUT,
             )
-            log.info("Retraining process launched in background.")
+            log.info("Retraining process launched in background → %s", log_dir / "retrain.log")
+            try:
+                from intelligence.activity import log_activity
+                await log_activity(
+                    conn, event_type="RETRAIN",
+                    note=f"Auto-retrain launched: accuracy < {ACCURACY_FLOOR:.0%} "
+                         f"for {CONSECUTIVE_DAYS_THRESHOLD} days",
+                    payload={"recent_accuracy": [round(float(a), 3) for a in accs]},
+                )
+            except Exception as e:
+                log.warning("Could not log RETRAIN activity: %s", e)
         except Exception as e:
             log.error(f"Failed to launch retraining: {e}")
         return True

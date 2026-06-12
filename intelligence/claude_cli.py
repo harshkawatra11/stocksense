@@ -275,6 +275,66 @@ Be specific about what pattern failed, not generic platitudes."""
     return {"learnings": [], "summary": raw[:1000], "raw": raw}
 
 
+def calibration_call(day_stats: dict, current_params: list[dict], learnings: list[dict]) -> dict:
+    """
+    Nightly self-calibration — Claude Opus proposes bounded adjustments to the
+    brain's adaptive parameters based on the day's realized outcomes.
+    current_params: [{param_name, value, min_value, max_value}]
+    Returns {"changes": [{"param": str, "new_value": float, "reason": str}], "summary": str}.
+    An empty/unparseable response means NO changes — fail-safe by design.
+    """
+    params_block = "\n".join(
+        f"- {p['param_name']}: {p['value']} (allowed range {p['min_value']}–{p['max_value']})"
+        for p in current_params
+    )
+    learnings_text = "\n".join(
+        f"- {l.get('title')}: {(l.get('body') or '')[:200]}"
+        for l in (learnings or [])[:20]
+    ) or "(none today)"
+
+    prompt = f"""Nightly calibration for the StockSense autonomous paper-trading brain.
+
+TODAY'S OUTCOMES:
+{json.dumps(day_stats, indent=2, default=str)}
+
+CURRENT ADAPTIVE PARAMETERS (each clamped to its allowed range — you may only adjust these, nothing else):
+{params_block}
+
+TODAY'S LEARNINGS:
+{learnings_text}
+
+Decide whether any parameter should move, and by how much. Principles:
+- Small steps: never move a parameter more than ~10% of its allowed range in one night.
+- If win rate is poor or many auto-buys stopped out, consider raising confidence_threshold or lowering max_position_pct.
+- If the brain passed on signals that would have won, consider the opposite — but only with evidence from the outcomes above.
+- If there is not enough data to justify a change (e.g. <5 resolved trades), change NOTHING.
+
+Respond as JSON only:
+{{
+  "summary": "one-paragraph rationale",
+  "changes": [
+    {{"param": "exact_param_name", "new_value": float, "reason": "specific evidence-based reason"}}
+  ]
+}}
+An empty changes array is a perfectly good answer."""
+
+    system = """You are the calibration controller of an autonomous trading system.
+You are conservative: parameters move only on clear evidence, in small steps.
+You may ONLY propose changes to the listed parameters within their stated ranges.
+Respond with JSON only."""
+
+    raw = _run_claude(prompt, CLAUDE_OPUS, system=system)
+    if not raw:
+        return {"changes": [], "summary": "Calibration call returned no response — no changes."}
+
+    parsed = _extract_json(raw, expect="object")
+    if isinstance(parsed, dict) and isinstance(parsed.get("changes"), list):
+        return parsed
+
+    log.warning(f"Calibration JSON unparseable — no changes. Raw: {raw[:300]}")
+    return {"changes": [], "summary": "Unparseable calibration response — no changes.", "raw": raw[:1000]}
+
+
 def weekend_deep_review(week_learnings: list[dict], accuracy_stats: dict) -> dict:
     """
     Saturday morning — Claude Opus deep weekly analysis.

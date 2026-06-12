@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { createChart, ColorType, CandlestickSeries, HistogramSeries } from 'lightweight-charts'
+import { createChart, ColorType, CandlestickSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts'
+import type { SeriesMarker, Time } from 'lightweight-charts'
 import { Search, TrendingUp, TrendingDown } from 'lucide-react'
 
 const POPULAR = ['RELIANCE', 'HDFCBANK', 'INFY', 'TCS', 'ICICIBANK', 'WIPRO', 'AXISBANK', 'SBIN', 'TATAMOTORS', 'ADANIENT']
@@ -102,19 +103,33 @@ export default function Charts() {
       candles.map(c => ({ time: c.time as unknown as import('lightweight-charts').Time, open: c.open, high: c.high, low: c.low, close: c.close }))
     )
 
-    // Add price lines for signals (v5 compatible — no setMarkers)
-    signals
-      .filter(s => s.date && s.signal_type !== 'HOLD' && s.price_at_signal)
-      .forEach(s => {
-        candleSeries.createPriceLine({
-          price: s.price_at_signal,
-          color: s.signal_type === 'BUY' ? '#00d4aa' : '#ff4757',
-          lineWidth: 1,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `${s.signal_type} ${((s.final_confidence || 0) * 100).toFixed(0)}%`,
-        })
+    // Signal markers on the candles themselves — arrows at fire dates.
+    const candleTimes = new Set(candles.map(c => c.time))
+    const markers: SeriesMarker<Time>[] = signals
+      .filter(s => s.date && s.signal_type !== 'HOLD' && s.price_at_signal && candleTimes.has(s.date))
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(s => ({
+        time: s.date as unknown as Time,
+        position: s.signal_type === 'BUY' ? 'belowBar' : 'aboveBar',
+        color: s.signal_type === 'BUY' ? '#00d4aa' : '#ff4757',
+        shape: s.signal_type === 'BUY' ? 'arrowUp' : 'arrowDown',
+        text: `${s.signal_type} ${((s.final_confidence || 0) * 100).toFixed(0)}%`,
+      }))
+    if (markers.length > 0) createSeriesMarkers(candleSeries, markers)
+
+    // Keep a dashed price line only for the most recent signal (avoids clutter).
+    const latest = signals.filter(s => s.signal_type !== 'HOLD' && s.price_at_signal)
+      .sort((a, b) => b.date.localeCompare(a.date))[0]
+    if (latest) {
+      candleSeries.createPriceLine({
+        price: latest.price_at_signal,
+        color: latest.signal_type === 'BUY' ? '#00d4aa' : '#ff4757',
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: `${latest.signal_type} ${((latest.final_confidence || 0) * 100).toFixed(0)}%`,
       })
+    }
 
     chart.timeScale().fitContent()
 

@@ -19,10 +19,11 @@ _model = None
 _explainer = None  # module-level singleton — created once
 _feature_cols = None
 _threshold = 0.5
+_model_mtime: float = 0.0
 
 
 def load_model():
-    global _model, _explainer, _feature_cols, _threshold
+    global _model, _explainer, _feature_cols, _threshold, _model_mtime
     path = os.path.join(MODEL_SAVE_DIR, "lgbm_latest.pkl")
     if not os.path.exists(path):
         raise FileNotFoundError(f"No trained model at {path}. Run models/ml/train.py first.")
@@ -47,12 +48,22 @@ def load_model():
     # Build explainer once
     _explainer = shap.TreeExplainer(_model)
     _feature_cols = get_all_feature_columns()
+    _model_mtime = os.path.getmtime(path)
     log.info("LightGBM model loaded.")
 
 
 def get_model():
     if _model is None:
         load_model()
+    else:
+        # Hot-reload after an auto-retrain replaced lgbm_latest.pkl.
+        try:
+            path = os.path.join(MODEL_SAVE_DIR, "lgbm_latest.pkl")
+            if os.path.getmtime(path) > _model_mtime:
+                log.info("lgbm_latest.pkl changed on disk — reloading model.")
+                load_model()
+        except OSError:
+            pass
     return _model, _explainer, _feature_cols, _threshold
 
 

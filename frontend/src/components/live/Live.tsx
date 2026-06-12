@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ThumbsUp, ThumbsDown, ShoppingCart, X, RefreshCw, Play, Wallet, Clock, Target, AlertTriangle, FlaskConical } from 'lucide-react'
+import { ThumbsUp, ThumbsDown, RefreshCw, Wallet, Clock, Target, AlertTriangle, FlaskConical, Bot, ExternalLink } from 'lucide-react'
 import type { LiveSignal, Account, ActivityEvent, PositionReview, DataStatus, TradingMode } from '../../types'
 
 const api = {
@@ -19,12 +19,34 @@ const confColor = (c: number) =>
   c >= 0.75 ? 'text-green' : c >= 0.6 ? 'text-yellow' : 'text-text-secondary'
 
 const eventStyle: Record<string, { color: string; label: string }> = {
-  SUGGESTED:  { color: 'text-accent',  label: 'Suggested' },
-  RATED:      { color: 'text-yellow',  label: 'Rated' },
-  BOUGHT:     { color: 'text-green',   label: 'Bought' },
-  SOLD:       { color: 'text-red',     label: 'Sold' },
-  REANALYZED: { color: 'text-blue-400', label: 'Re-analyzed' },
-  NOTE:       { color: 'text-text-secondary', label: 'Note' },
+  SUGGESTED:    { color: 'text-accent',  label: 'Suggested' },
+  RATED:        { color: 'text-yellow',  label: 'Rated' },
+  BOUGHT:       { color: 'text-green',   label: 'Bought' },
+  SOLD:         { color: 'text-red',     label: 'Sold' },
+  REANALYZED:   { color: 'text-blue-400', label: 'Re-analyzed' },
+  NOTE:         { color: 'text-text-secondary', label: 'Note' },
+  AUTO_BUY:     { color: 'text-green',   label: '🤖 Auto-buy' },
+  AUTO_SELL:    { color: 'text-red',     label: '🤖 Auto-sell' },
+  AUTO_PASS:    { color: 'text-text-secondary', label: '🤖 Passed' },
+  PARAM_CHANGE: { color: 'text-accent',  label: '🤖 Tuned' },
+  RETRAIN:      { color: 'text-yellow',  label: '🤖 Retrain' },
+  JOB_RUN:      { color: 'text-text-secondary', label: 'Job' },
+}
+
+// Angel One stock pages live at angelone.in/stocks/<company-name-slug> ("Limited" → "ltd").
+// With a real company name we deep-link straight to the page; otherwise a plain
+// Google search (NOT "I'm Feeling Lucky", which mis-redirected) that reliably
+// surfaces the Angel One page as the top result.
+const angelOneUrl = (ticker: string, name?: string | null) => {
+  if (name && name.toUpperCase() !== ticker.toUpperCase()) {
+    const slug = name.toLowerCase()
+      .replace(/\blimited\b/g, 'ltd')
+      .replace(/[&.,()'/]/g, ' ')
+      .trim()
+      .replace(/\s+/g, '-')
+    return `https://www.angelone.in/stocks/${slug}`
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(`angelone.in ${ticker} share price`)}`
 }
 
 const statusStyle: Record<string, string> = {
@@ -40,7 +62,6 @@ export default function Live() {
   const [dataStatus, setDataStatus] = useState<DataStatus | null>(null)
   const [mode, setMode] = useState<TradingMode | null>(null)
   const [onlyAffordable, setOnlyAffordable] = useState(false)
-  const [running, setRunning] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,7 +84,11 @@ export default function Live() {
     setMode(md && md.mode ? md : null)
   }, [onlyAffordable])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+    const t = setInterval(refresh, 60_000) // the brain acts on its own — keep the view current
+    return () => clearInterval(t)
+  }, [refresh])
 
   const act = async (fn: () => Promise<unknown>, key: string) => {
     setBusy(key); setError(null)
@@ -72,25 +97,9 @@ export default function Live() {
     finally { setBusy(null) }
   }
 
+  // Human feedback only — buying, passing, and pipeline runs are the brain's job now.
   const rate = (s: LiveSignal, like: boolean) =>
     act(() => api.post('/live/rate', { signal_id: s.id, ticker: s.ticker, like, reason: like ? 'liked' : 'confidence too low' }), `rate-${s.id}-${like}`)
-
-  const buy = (s: LiveSignal) => {
-    const shares = s.shares_affordable && s.shares_affordable > 0 ? s.shares_affordable : 1
-    return act(() => api.post('/live/buy', { signal_id: s.id, ticker: s.ticker, quantity: shares, price: s.price_at_signal, rationale: `Bought ${shares} @ ${s.price_at_signal}` }), `buy-${s.id}`)
-  }
-
-  const pass = (s: LiveSignal) =>
-    act(() => api.post('/live/pass', { signal_id: s.id, ticker: s.ticker, reason: 'passed' }), `pass-${s.id}`)
-
-  const runPipeline = async () => {
-    setRunning(true); setError(null)
-    try { await api.post('/live/run?limit=50'); await refresh() }
-    catch (e) { setError(e instanceof Error ? e.message : 'Run failed') }
-    finally { setRunning(false) }
-  }
-
-  const reviewPositions = () => act(() => api.post('/live/positions/review'), 'review')
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-bg-primary">
@@ -123,12 +132,11 @@ export default function Live() {
           Affordable only
         </label>
         <div className="ml-auto flex items-center gap-2">
+          <span className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+            <Bot size={13} className="text-accent" /> brain trades autonomously every 30 min
+          </span>
           <button onClick={refresh} className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 bg-bg-hover text-text-secondary rounded hover:text-text-primary">
             <RefreshCw size={12} /> Refresh
-          </button>
-          <button onClick={runPipeline} disabled={running}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-accent text-white rounded disabled:opacity-50">
-            <Play size={12} /> {running ? 'Running…' : 'Run Pipeline'}
           </button>
         </div>
       </div>
@@ -141,11 +149,6 @@ export default function Live() {
           {dataStatus.is_live
             ? <>🟢 {dataStatus.label}{dataStatus.age_hours != null && <span className="opacity-70">· updated {dataStatus.age_hours}h ago</span>}</>
             : <><AlertTriangle size={13} className="flex-shrink-0" /> {dataStatus.label}</>}
-          {running && (
-            <span className="ml-auto text-text-secondary">
-              Analysing… {dataStatus.latest_date && `(using ${dataStatus.is_live ? 'live' : 'EOD'} data from ${dataStatus.latest_date})`}
-            </span>
-          )}
         </div>
       )}
 
@@ -156,13 +159,16 @@ export default function Live() {
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {signals.length === 0 && (
             <div className="text-xs text-text-secondary text-center mt-8">
-              No BUY signals yet. Click <span className="text-accent">Run Pipeline</span> to generate them.
+              No BUY signals yet — the brain generates them automatically every 30 minutes during market hours.
             </div>
           )}
           {signals.map(s => (
             <div key={s.id} className="bg-bg-card border border-border rounded-lg p-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-white">{s.ticker}</span>
+                {s.name && s.name.toUpperCase() !== s.ticker.toUpperCase() && (
+                  <span className="text-[11px] text-text-secondary truncate max-w-[180px]" title={s.name}>{s.name}</span>
+                )}
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-hover text-text-secondary">{s.timeframe}</span>
                 {s.sector && <span className="text-[10px] text-text-secondary">{s.sector}</span>}
                 <span className={`ml-auto text-xs font-medium ${confColor(s.final_confidence)}`}>
@@ -202,7 +208,7 @@ export default function Live() {
                 {isPaper && <span className="text-yellow/70 italic ml-auto">tracked, not executed</span>}
               </div>
 
-              {/* Actions */}
+              {/* Human feedback — the only human input; trades are autonomous */}
               <div className="mt-2.5 flex items-center gap-2">
                 <button onClick={() => rate(s, true)} disabled={!!busy}
                   className="flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-bg-hover text-text-secondary hover:text-green disabled:opacity-40">
@@ -212,22 +218,13 @@ export default function Live() {
                   className="flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-bg-hover text-text-secondary hover:text-red disabled:opacity-40">
                   <ThumbsDown size={12} /> Dislike
                 </button>
-                <button onClick={() => buy(s)} disabled={!!busy || !s.affordable}
-                  title={isPaper
-                    ? 'Paper trade — tracked for the learning loop, not executed'
-                    : (s.affordable ? 'Buy' : 'Not affordable with current capital')}
-                  className={`flex items-center gap-1 text-[11px] px-2.5 py-1 rounded disabled:opacity-40 disabled:cursor-not-allowed ${
-                    isPaper
-                      ? 'bg-yellow/15 text-yellow hover:bg-yellow/25'
-                      : 'bg-green/20 text-green hover:bg-green/30'
-                  }`}>
-                  {isPaper ? <FlaskConical size={12} /> : <ShoppingCart size={12} />}
-                  {isPaper ? 'Paper Buy' : 'Buy'}
-                </button>
-                <button onClick={() => pass(s)} disabled={!!busy}
-                  className="flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-bg-hover text-text-secondary hover:text-text-primary disabled:opacity-40 ml-auto">
-                  <X size={12} /> Pass
-                </button>
+                <a href={angelOneUrl(s.ticker, s.name)} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent hover:text-white transition-colors">
+                  <ExternalLink size={12} /> Buy on Angel One
+                </a>
+                <span className="ml-auto flex items-center gap-1 text-[10px] text-text-secondary italic">
+                  <Bot size={11} /> brain decides
+                </span>
               </div>
             </div>
           ))}
@@ -239,10 +236,7 @@ export default function Live() {
           <div className="border-b border-border">
             <div className="px-3 py-2 flex items-center gap-2">
               <span className="text-xs font-semibold text-white">Position Re-analysis</span>
-              <button onClick={reviewPositions} disabled={!!busy}
-                className="ml-auto flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-bg-hover text-text-secondary hover:text-text-primary disabled:opacity-40">
-                <RefreshCw size={10} /> Re-check
-              </button>
+              <span className="ml-auto text-[10px] text-text-secondary">auto, every 30 min</span>
             </div>
             <div className="max-h-52 overflow-y-auto px-3 pb-2 space-y-1.5">
               {reviews.length === 0 && <div className="text-[11px] text-text-secondary pb-2">No held positions yet.</div>}

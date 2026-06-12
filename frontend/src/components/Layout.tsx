@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { Tab } from '../types'
-import { BarChart2, Briefcase, List, TrendingUp, Globe, Cpu, Zap, ScrollText } from 'lucide-react'
+import { Briefcase, List, TrendingUp, Globe, Cpu, Zap, ScrollText, BrainCircuit } from 'lucide-react'
 import { useMarketStatus } from '../hooks/useMarketStatus'
 import { useBackendHealth } from '../hooks/useBackendHealth'
 import { useMarketIndices } from '../hooks/useMarketIndices'
@@ -12,13 +12,13 @@ interface Props {
 }
 
 const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
-  { id: 'watchlist',    label: 'Watchlist',    icon: <List size={18} /> },
-  { id: 'portfolio',    label: 'Portfolio',    icon: <Briefcase size={18} /> },
-  { id: 'orders',       label: 'Orders',       icon: <BarChart2 size={18} /> },
-  { id: 'charts',       label: 'Charts',       icon: <TrendingUp size={18} /> },
-  { id: 'market',       label: 'Market',       icon: <Globe size={18} /> },
+  { id: 'brain',        label: 'Brain',        icon: <BrainCircuit size={18} /> },
   { id: 'live',         label: 'Live Signals', icon: <Zap size={18} /> },
   { id: 'intelligence', label: 'Intelligence', icon: <Cpu size={18} /> },
+  { id: 'portfolio',    label: 'Portfolio',    icon: <Briefcase size={18} /> },
+  { id: 'charts',       label: 'Charts',       icon: <TrendingUp size={18} /> },
+  { id: 'market',       label: 'Market',       icon: <Globe size={18} /> },
+  { id: 'watchlist',    label: 'Watchlist',    icon: <List size={18} /> },
   { id: 'logs',         label: 'Logs & Audit', icon: <ScrollText size={18} /> },
 ]
 

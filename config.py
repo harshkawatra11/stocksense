@@ -142,6 +142,22 @@ class Settings:
         return os.getenv("KRONOS_MODEL_SIZE", "mini")
 
     # ------------------------------------------------------------------ #
+    # Groww (primary live feed — TOTP auth, no IP whitelisting)            #
+    # ------------------------------------------------------------------ #
+    @property
+    def GROWW_API_KEY(self) -> str:
+        return os.getenv("GROWW_API_KEY", "")
+
+    @property
+    def GROWW_API_SECRET(self) -> str:
+        return os.getenv("GROWW_API_SECRET", "")
+
+    @property
+    def GROWW_TOTP_SECRET(self) -> str:
+        """TOTP secret from the Groww API page — preferred: no daily approval, no IP binding."""
+        return os.getenv("GROWW_TOTP_SECRET", "")
+
+    # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
     # ------------------------------------------------------------------ #
     @property

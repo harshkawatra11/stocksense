@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from intelligence.portfolio_guard import add_to_portfolio
+from intelligence.portfolio_guard import add_to_portfolio, remove_from_portfolio
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,9 @@ async def record_decision(
     acct = await get_account(conn)
     cash = acct["cash_available"]
     cash_after = cash
+    pnl: float | None = None
+    outcome: str | None = None
+    resolved_at = None
 
     if action == "BUY":
         if not price or quantity < 1:
@@ -79,13 +82,48 @@ async def record_decision(
         await set_cash(conn, cash_after, acct["cash_reserve"])
         await add_to_portfolio(conn, ticker, quantity, price, notes=rationale)
 
+    elif action == "SELL":
+        if not price:
+            raise ValueError("SELL requires a price")
+        pos = await conn.fetchrow(
+            "SELECT quantity, avg_price FROM portfolio WHERE ticker = $1 AND active = TRUE "
+            "ORDER BY buy_date DESC LIMIT 1",
+            ticker,
+        )
+        if not pos:
+            raise ValueError(f"SELL rejected: no active position in {ticker}")
+        held_qty = int(pos["quantity"])
+        avg_price = float(pos["avg_price"])
+        if quantity < 1 or quantity > held_qty:
+            quantity = held_qty  # v1: full close
+        proceeds = round(price * quantity, 2)
+        pnl = round((price - avg_price) * quantity, 2)
+        outcome = "win" if pnl > 0 else ("loss" if pnl < 0 else "flat")
+        resolved_at = datetime.now(timezone.utc)
+        cash_after = round(cash + proceeds, 2)
+        await set_cash(conn, cash_after, acct["cash_reserve"])
+        await remove_from_portfolio(conn, ticker)
+        # Resolve the originating open BUY decision so the ledger pairs up.
+        await conn.execute(
+            """
+            UPDATE decisions SET outcome = $2, pnl = $3, resolved_at = $4
+            WHERE id = (
+                SELECT id FROM decisions
+                WHERE ticker = $1 AND action = 'BUY' AND resolved_at IS NULL
+                ORDER BY decided_at DESC LIMIT 1
+            )
+            """,
+            ticker, outcome, pnl, resolved_at,
+        )
+
     decision_id = await conn.fetchval(
         """
-        INSERT INTO decisions (signal_id, ticker, action, quantity, price, cash_after, rationale, decided_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id
+        INSERT INTO decisions (signal_id, ticker, action, quantity, price, cash_after,
+                               rationale, outcome, pnl, decided_at, resolved_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
         """,
         signal_id, ticker, action, quantity, price, cash_after, rationale,
-        datetime.now(timezone.utc),
+        outcome, pnl, datetime.now(timezone.utc), resolved_at,
     )
 
     # Mirror BUY/SELL into the activity lifecycle feed.
@@ -96,6 +134,7 @@ async def record_decision(
             ticker=ticker, signal_id=signal_id, note=rationale,
             payload={
                 "quantity": quantity, "price": price, "cash_after": cash_after,
+                "pnl": pnl, "outcome": outcome,
                 "mode": "PAPER" if is_paper else "LIVE",
             },
         )
@@ -129,6 +168,7 @@ async def get_actionable_signals(conn, limit: int = 30, only_affordable: bool = 
         FROM signals s
         JOIN stocks st ON st.ticker = s.ticker
         {where}
+          AND st.active = TRUE          -- only currently-tradeable stocks (buyable on Angel One)
           AND s.fired_at >= NOW() - INTERVAL '1 day'
         ORDER BY s.affordable DESC NULLS LAST, s.final_confidence DESC
         LIMIT $1

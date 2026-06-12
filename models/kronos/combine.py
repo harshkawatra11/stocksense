@@ -11,11 +11,12 @@ log = logging.getLogger(__name__)
 # Module-level weight cache — refreshed by scheduler hourly
 _lgbm_weight: float = 0.40
 _kronos_weight: float = 0.60
+_agreement_boost: float = 0.05  # adaptive via brain_params
 
 
 async def refresh_weights_from_db():
     """Call from scheduler to update weights based on 7-day rolling accuracy."""
-    global _lgbm_weight, _kronos_weight
+    global _lgbm_weight, _kronos_weight, _agreement_boost
     try:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
         try:
@@ -28,6 +29,11 @@ async def refresh_weights_from_db():
                 GROUP BY model_name
                 """,
             )
+            boost = await conn.fetchval(
+                "SELECT value FROM brain_params WHERE param_name = 'agreement_boost'"
+            )
+            if boost is not None:
+                _agreement_boost = float(boost)
         finally:
             await conn.close()
 
@@ -74,9 +80,9 @@ def combine_signals(ml_result: dict, kronos_result: dict) -> dict:
             "agreement": True,
         }
 
-    # Agreement bonus
+    # Agreement bonus (adaptive — tuned by nightly calibration within bounds)
     if ml_sig == kr_sig and ml_sig != "HOLD":
-        agreement_boost = 0.05
+        agreement_boost = _agreement_boost
     elif ml_sig != kr_sig and "HOLD" not in (ml_sig, kr_sig):
         # Disagreement — penalize, pass to SLM for arbitration
         reasoning = (

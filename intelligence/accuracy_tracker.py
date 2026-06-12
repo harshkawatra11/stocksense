@@ -133,7 +133,8 @@ async def run_accuracy_tracker():
         log.info(f"Dynamic weights — LightGBM: {lgbm_w:.2f}, Kronos: {kronos_w:.2f}")
 
         from models.ml.retrain_trigger import check_and_trigger_retrain
-        await check_and_trigger_retrain(conn, auto_retrain=False)
+        # Autonomous: when accuracy degrades for 7 straight days, retrain without asking.
+        await check_and_trigger_retrain(conn, auto_retrain=True)
 
     finally:
         await conn.close()

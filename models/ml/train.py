@@ -253,6 +253,18 @@ async def train(tickers=None):
     except Exception as e:
         log.warning(f"Could not save feature_importance: {e}")
 
+    # Mark retrain completion in the audit trail so the brain's history is complete.
+    try:
+        from intelligence.activity import log_activity
+        await log_activity(
+            conn, event_type="RETRAIN",
+            note=f"Retrain complete: {version} (AUC {auc:.3f}, threshold {optimal_threshold:.2f})",
+            payload={"version": version, "auc": float(auc),
+                     "threshold": float(optimal_threshold), "test_rows": int(n_test)},
+        )
+    except Exception as e:
+        log.warning(f"Could not log RETRAIN completion: {e}")
+
     await conn.close()
     return final_model, meta
 

@@ -7,10 +7,11 @@ import MarketOverview from './components/market/MarketOverview'
 import Watchlist from './components/watchlist/Watchlist'
 import Charts from './components/charts/Charts'
 import LogsPanel from './components/logs/LogsPanel'
+import Brain from './components/brain/Brain'
 import type { Tab } from './types'
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('intelligence')
+  const [activeTab, setActiveTab] = useState<Tab>('brain')
 
   return (
     <Layout activeTab={activeTab} onTabChange={setActiveTab}>
@@ -21,11 +22,7 @@ export default function App() {
       {activeTab === 'watchlist' && <Watchlist />}
       {activeTab === 'charts' && <Charts />}
       {activeTab === 'logs' && <LogsPanel />}
-      {activeTab === 'orders' && (
-        <div className="flex items-center justify-center h-full text-text-secondary">
-          Orders — connect Angel One SmartAPI in Phase 2
-        </div>
-      )}
+      {activeTab === 'brain' && <Brain />}
     </Layout>
   )
 }

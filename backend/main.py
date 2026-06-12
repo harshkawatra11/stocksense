@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from data.db.database import init_db
-from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview, live
+from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview, live, brain
 from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS as NSE_TICKERS
 from intelligence.signal_pipeline import (
     run_pipeline_batch,
@@ -51,6 +51,7 @@ app.include_router(market_data.router, prefix="/api/market", tags=["market"])
 app.include_router(ohlcv.router, prefix="/api/ohlcv", tags=["ohlcv"])
 app.include_router(market_overview.router, prefix="/api/market", tags=["market"])
 app.include_router(live.router, prefix="/api/live", tags=["live"])
+app.include_router(brain.router, prefix="/api/brain", tags=["brain"])
 
 
 @app.get("/api/health")
@@ -143,3 +144,21 @@ async def stream_signals():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ----- serve the built frontend (single-process local deployment) ----- #
+# Must stay at the very end: the catch-all would shadow any route defined after it.
+import os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist")
+if os.path.isdir(_DIST):
+    app.mount("/assets", StaticFiles(directory=os.path.join(_DIST, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        candidate = os.path.join(_DIST, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_DIST, "index.html"))

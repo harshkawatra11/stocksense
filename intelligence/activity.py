@@ -21,7 +21,11 @@ from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
-EVENT_TYPES = {"SUGGESTED", "RATED", "BOUGHT", "SOLD", "REANALYZED", "NOTE"}
+EVENT_TYPES = {
+    "SUGGESTED", "RATED", "BOUGHT", "SOLD", "REANALYZED", "NOTE",
+    # Autonomous-brain events — every self-directed action is auditable.
+    "AUTO_BUY", "AUTO_SELL", "AUTO_PASS", "PARAM_CHANGE", "RETRAIN", "JOB_RUN",
+}
 
 
 async def log_activity(

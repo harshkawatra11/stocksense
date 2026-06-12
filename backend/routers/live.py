@@ -83,6 +83,38 @@ async def activity(limit: int = 100):
         await conn.close()
 
 
+@router.get("/reasoning")
+async def reasoning(limit: int = 200, hours: int = 48):
+    """Per-model reasoning trail from the latest pipeline runs — feeds the
+    Intelligence terminals so they fill on their own, no manual run needed."""
+    conn = await asyncpg.connect(DB_DSN)
+    try:
+        rows = await conn.fetch(
+            """SELECT r.id, r.model_name, r.reasoning, r.created_at,
+                      s.ticker, s.signal_type, s.timeframe, s.final_confidence
+               FROM signal_reasoning r
+               JOIN signals s ON s.id = r.signal_id
+               WHERE r.created_at >= NOW() - ($2 || ' hours')::interval
+               ORDER BY r.id DESC LIMIT $1""",
+            limit, str(hours),
+        )
+        return [
+            {
+                "id": r["id"],
+                "model_name": r["model_name"],
+                "reasoning": r["reasoning"],
+                "created_at": r["created_at"].isoformat(),
+                "ticker": r["ticker"],
+                "signal_type": r["signal_type"],
+                "timeframe": r["timeframe"],
+                "final_confidence": float(r["final_confidence"]) if r["final_confidence"] is not None else None,
+            }
+            for r in rows
+        ]
+    finally:
+        await conn.close()
+
+
 @router.get("/decisions")
 async def decisions(limit: int = 50):
     conn = await asyncpg.connect(DB_DSN)

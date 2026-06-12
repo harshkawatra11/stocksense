@@ -19,7 +19,7 @@ export default function SignalFeed({ signals }: Props) {
 
         <div className="flex-1 overflow-y-auto">
           {signals.length === 0 ? (
-            <p className="text-xs text-text-secondary px-4 py-3">No signals yet. Click Run Pipeline above.</p>
+            <p className="text-xs text-text-secondary px-4 py-3">No signals yet — the brain generates them automatically during market hours.</p>
           ) : (
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-bg-card">

@@ -79,6 +79,7 @@ export interface Account {
 export interface ActivityEvent {
   id: number
   event_type: 'SUGGESTED' | 'RATED' | 'BOUGHT' | 'SOLD' | 'REANALYZED' | 'NOTE'
+    | 'AUTO_BUY' | 'AUTO_SELL' | 'AUTO_PASS' | 'PARAM_CHANGE' | 'RETRAIN' | 'JOB_RUN'
   ticker?: string
   name?: string
   rating?: 'LIKE' | 'DISLIKE'
@@ -118,4 +119,74 @@ export interface TradingMode {
   gate: { min_days: number; min_resolved: number; min_accuracy: number }
 }
 
-export type Tab = 'watchlist' | 'portfolio' | 'orders' | 'charts' | 'market' | 'intelligence' | 'live' | 'logs'
+export interface BrainParam {
+  param_name: string
+  value: number
+  min_value: number
+  max_value: number
+  updated_at: string
+  updated_by: string
+  reason: string
+}
+
+export interface BrainParamChange {
+  param_name: string
+  old_value: number | null
+  new_value: number
+  changed_by: string
+  reason: string
+  changed_at: string
+}
+
+export interface JobRun {
+  job_id: string
+  started_at: string
+  finished_at: string | null
+  status: 'running' | 'ok' | 'error'
+  summary: string
+  error: string | null
+  cadence?: string
+}
+
+export interface EquityPoint {
+  date: string
+  cash: number
+  market_value: number
+  equity: number
+}
+
+export interface Decision {
+  id: number
+  ticker: string
+  action: 'BUY' | 'SELL' | 'PASS' | 'SKIP'
+  quantity: number
+  price: number | null
+  cash_after: number | null
+  rationale: string
+  outcome: string | null
+  pnl: number | null
+  decided_at: string
+  resolved_at: string | null
+  timeframe?: string
+  final_confidence?: number
+}
+
+export interface BrainStatus {
+  autonomous: boolean
+  mode: TradingMode
+  data: DataStatus
+  params: BrainParam[]
+  jobs: JobRun[]
+  account: {
+    cash_available: number
+    cash_reserve: number
+    positions: number
+    market_value: number
+    equity: number
+  }
+  today: { buys: number; sells: number; passes: number; realized_pnl: number }
+  model: { lgbm_latest_mtime: string | null }
+  groww_feed: { configured: boolean }
+}
+
+export type Tab = 'watchlist' | 'portfolio' | 'brain' | 'charts' | 'market' | 'intelligence' | 'live' | 'logs'

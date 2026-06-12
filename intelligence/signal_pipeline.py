@@ -23,6 +23,10 @@ from config import settings
 
 log = logging.getLogger(__name__)
 
+# Adaptive params snapshot for the current run — refreshed at the top of
+# run_pipeline_multi so all tickers in a run see one consistent set.
+_run_params: dict[str, float] = {}
+
 
 # ------------------------------------------------------------------ #
 # Live multi-timeframe helpers                                        #
@@ -35,15 +39,16 @@ def annotate_affordability(price: float) -> tuple[bool, int]:
 
 
 def apply_macro_nudge(
-    confidence: float, signal: str, sector: str | None, macro: MacroContext
+    confidence: float, signal: str, sector: str | None, macro: MacroContext,
+    cap: float = 0.10,
 ) -> tuple[float, float]:
     """
-    Nudge confidence by the sector's macro news sentiment (±0.10 max).
-    For BUY, a bullish sector raises confidence, a bearish one lowers it.
-    Returns (new_confidence, sector_score).
+    Nudge confidence by the sector's macro news sentiment (±cap max — adaptive
+    via brain_params). For BUY, a bullish sector raises confidence, a bearish
+    one lowers it. Returns (new_confidence, sector_score).
     """
     score = macro.sector_score(sector)  # -1.0 .. +1.0
-    delta = 0.10 * score if signal == "BUY" else (-0.10 * score if signal == "SELL" else 0.0)
+    delta = cap * score if signal == "BUY" else (-cap * score if signal == "SELL" else 0.0)
     return max(0.0, min(0.97, confidence + delta)), score
 
 
@@ -529,11 +534,14 @@ async def run_single_ticker_multi(
         if settings.BUY_ONLY and signal != "BUY":
             continue
 
-        # Macro news/sector nudge.
-        conf, sector_score = apply_macro_nudge(conf, signal, sector, macro)
+        # Macro news/sector nudge (cap adaptive via brain_params).
+        conf, sector_score = apply_macro_nudge(
+            conf, signal, sector, macro, cap=_run_params.get("macro_nudge_cap", 0.10)
+        )
 
-        # Confidence gate (per-horizon).
-        if conf < settings.CONFIDENCE_THRESHOLD:
+        # Confidence gate (per-horizon, adaptive via brain_params).
+        gate = _run_params.get("confidence_threshold", settings.CONFIDENCE_THRESHOLD)
+        if conf < gate:
             continue
 
         # Target + fractional ETA from the forecast path (the "it'll touch ₹X in ~Y days").
@@ -654,6 +662,10 @@ async def run_pipeline_multi(tickers: list[str] | None = None, save: bool = True
     pool = await asyncpg.create_pool(settings.DATABASE_DSN, min_size=2, max_size=8)
     async with pool.acquire() as meta:
         from intelligence.data_freshness import get_data_freshness
+        from intelligence.brain_params import get_params
+        global _run_params
+        _run_params = await get_params(meta, force_refresh=True)
+        log.info("Brain params: %s", _run_params)
         freshness = await get_data_freshness(meta)
         log.info("Data freshness: %s", freshness["label"])
         portfolio_tickers = await get_portfolio_tickers(meta)

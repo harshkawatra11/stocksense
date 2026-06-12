@@ -1,18 +1,24 @@
 """
-StockSense market scheduler.
-Runs periodic data pipeline tasks: incremental OHLCV + F&O updates,
-signal pipeline, and EOD review.
+StockSense market scheduler — the always-on autonomous brain.
+
+If this process is running, the brain is running: data updates itself, signals
+fire, paper trades execute, positions exit, parameters calibrate, the model
+retrains — with no buttons anywhere. Every job execution is recorded in the
+job_runs table (the heartbeat the UI reads) and in logs/<date>/app.log.
 
 Intended to run as: python -m scheduler.market_runner
 """
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import signal
 import sys
-from datetime import datetime, time as dtime, timezone
+from datetime import date, datetime, time as dtime, timezone
+from pathlib import Path
 
+import asyncpg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -24,123 +30,253 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+# ------------------------------------------------------------------ #
+# Daily file logging — same files the Logs panel tails                 #
+# ------------------------------------------------------------------ #
+_file_handler: logging.FileHandler | None = None
+_file_handler_day: str | None = None
+
+
+def _ensure_daily_log_handler():
+    """Attach (and roll) a logs/<date>/app.log handler on the root logger."""
+    global _file_handler, _file_handler_day
+    today = date.today().isoformat()
+    if _file_handler_day == today and _file_handler is not None:
+        return
+    root = logging.getLogger()
+    if _file_handler is not None:
+        root.removeHandler(_file_handler)
+        _file_handler.close()
+    log_dir = Path("logs") / today
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _file_handler = logging.FileHandler(log_dir / "app.log", encoding="utf-8")
+    _file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    root.addHandler(_file_handler)
+    _file_handler_day = today
+
+
+# ------------------------------------------------------------------ #
+# Job heartbeat — every run lands in job_runs                          #
+# ------------------------------------------------------------------ #
+
+def instrumented(job_id: str):
+    """Wrap a task: record start/finish/status/summary in job_runs."""
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            _ensure_daily_log_handler()
+            run_id = None
+            try:
+                conn = await asyncpg.connect(settings.DATABASE_DSN)
+                try:
+                    run_id = await conn.fetchval(
+                        "INSERT INTO job_runs (job_id, started_at) VALUES ($1, NOW()) RETURNING id",
+                        job_id,
+                    )
+                finally:
+                    await conn.close()
+            except Exception as e:
+                log.warning("job_runs start insert failed for %s: %s", job_id, e)
+
+            status, summary, error = "ok", "", None
+            try:
+                result = await fn(*args, **kwargs)
+                if isinstance(result, str):
+                    summary = result[:500]
+                elif isinstance(result, dict):
+                    summary = str(result)[:500]
+            except Exception as e:
+                status, error = "error", str(e)[:1000]
+                log.error("Job %s failed: %s", job_id, e, exc_info=True)
+            finally:
+                if run_id is not None:
+                    try:
+                        conn = await asyncpg.connect(settings.DATABASE_DSN)
+                        try:
+                            await conn.execute(
+                                "UPDATE job_runs SET finished_at = NOW(), status = $2, "
+                                "summary = $3, error = $4 WHERE id = $1",
+                                run_id, status, summary, error,
+                            )
+                        finally:
+                            await conn.close()
+                    except Exception as e:
+                        log.warning("job_runs finish update failed for %s: %s", job_id, e)
+        return wrapper
+    return deco
+
 
 # ------------------------------------------------------------------ #
 # Task functions                                                        #
 # ------------------------------------------------------------------ #
 
-async def task_incremental_ohlcv():
+@instrumented("incremental_ohlcv")
+async def task_incremental_ohlcv(days_back: int = 5) -> str:
     """
-    Pull latest daily OHLCV. Primary source is Angel One getCandleData (works on
-    this network); NSE Bhavcopy is the fallback (often network-blocked here).
+    Pull latest daily OHLCV. Source order:
+      1. Groww (TOTP auth — works on rotating home IPs; needs creds in .env)
+      2. NSE Bhavcopy new format (2024-07-08+, reliable on this network)
+      3. NSE Bhavcopy old format incremental
+      4. Angel One (last resort — IP-bound, usually blocked here)
     """
-    log.info("Starting incremental OHLCV update (Angel One)...")
     try:
-        from data.pipeline.fetch_angel_daily import run_angel_backfill
-        summary = await run_angel_backfill(days_back=5)
-        log.info("Angel One OHLCV update complete: %s", summary)
-        if summary.get("updated", 0) > 0:
-            return
-        log.warning("Angel One updated 0 tickers — falling back to NSE Bhavcopy.")
+        from data.pipeline.fetch_groww import run_groww_daily_backfill, creds_present
+        if creds_present():
+            summary = await run_groww_daily_backfill(days_back=days_back)
+            log.info("Groww OHLCV update: %s", summary)
+            if summary.get("updated", 0) > 0:
+                return f"groww: {summary}"
+            log.warning("Groww updated 0 tickers — falling back to NSE Bhavcopy.")
+        else:
+            log.info("Groww creds absent — using NSE Bhavcopy.")
     except Exception as e:
-        log.error(f"Angel One OHLCV update failed: {e} — falling back to NSE Bhavcopy.", exc_info=True)
+        log.error("Groww OHLCV update failed: %s — falling back.", e)
+
+    try:
+        from datetime import timedelta
+        from data.pipeline.fetch_historical_new import run as run_new_bhavcopy
+        end = date.today()
+        start = end - timedelta(days=days_back)
+        await run_new_bhavcopy(start=start, end=end, resume=False)
+        return "bhavcopy_new ok"
+    except Exception as e:
+        log.error("New-format Bhavcopy failed: %s — falling back.", e)
 
     try:
         from data.pipeline.fetch_historical import run_incremental
-        await run_incremental(days_back=3)
-        log.info("NSE Bhavcopy fallback update complete.")
+        await run_incremental(days_back=days_back)
+        return "bhavcopy_old ok"
     except Exception as e:
-        log.error(f"NSE Bhavcopy fallback failed: {e}", exc_info=True)
+        log.error("Old-format Bhavcopy failed: %s — trying Angel One.", e)
 
-
-async def task_incremental_fo():
-    """Pull latest F&O data from NSE Bhavcopy."""
-    log.info("Starting incremental F&O update...")
     try:
-        from data.pipeline.fetch_f_and_o import run_fo_incremental
-        await run_fo_incremental(days_back=3)
-        log.info("Incremental F&O update complete.")
+        from data.pipeline.fetch_angel_daily import run_angel_backfill
+        summary = await run_angel_backfill(days_back=days_back)
+        return f"angel: {summary}"
     except Exception as e:
-        log.error(f"Incremental F&O update failed: {e}", exc_info=True)
+        log.error("All OHLCV sources failed: %s", e)
+        raise
 
 
-async def task_signal_pipeline():
-    """Run the live multi-timeframe intelligence pipeline on the latest data."""
-    log.info("Starting multi-timeframe signal pipeline...")
+@instrumented("data_freshness")
+async def task_data_freshness() -> str:
+    """Pre-market check (8:45 IST): if daily data is stale, backfill deeper."""
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
-        from intelligence.signal_pipeline import run_pipeline_multi
-        sigs = await run_pipeline_multi(save=True)
-        log.info("Signal pipeline complete: %d BUY signals.", len(sigs))
-    except Exception as e:
-        log.error(f"Signal pipeline failed: {e}", exc_info=True)
-
-
-async def task_position_review():
-    """Re-analyze held positions vs their original predictions (HOLD/EXIT verdicts)."""
-    log.info("Starting position re-analysis...")
-    try:
-        from intelligence.position_monitor import review_all_positions
-        reviews = await review_all_positions()
-        log.info("Position re-analysis complete: %d positions reviewed.", len(reviews))
-    except Exception as e:
-        log.error(f"Position re-analysis failed: {e}", exc_info=True)
-
-
-async def task_eod_review():
-    """Run end-of-day Claude review."""
-    log.info("Starting EOD review...")
-    try:
-        from intelligence.eod_review import run_eod_review
-        await run_eod_review()
-        log.info("EOD review complete.")
-    except Exception as e:
-        log.error(f"EOD review failed: {e}", exc_info=True)
-
-
-async def task_refresh_weights():
-    """Refresh combine.py model weights from rolling DB accuracy."""
-    try:
-        from models.kronos.combine import refresh_weights_from_db
-        await refresh_weights_from_db()
-    except Exception as e:
-        log.warning(f"Weight refresh failed: {e}")
-
-
-async def task_accuracy_tracker():
-    """Compute rolling 7-day accuracy + dynamic weight adjustment."""
-    log.info("Starting accuracy tracker...")
-    try:
-        from intelligence.accuracy_tracker import run_accuracy_tracker
-        await run_accuracy_tracker()
-        log.info("Accuracy tracker complete.")
-    except Exception as e:
-        log.error(f"Accuracy tracker failed: {e}", exc_info=True)
-
-
-async def task_weekend_review():
-    """Saturday deep review via Claude Opus."""
-    log.info("Starting weekend review...")
-    try:
-        from scheduler.weekend_job import run_weekend_review
-        await run_weekend_review()
-        log.info("Weekend review complete.")
-    except Exception as e:
-        log.error(f"Weekend review failed: {e}", exc_info=True)
-
-
-async def task_ticker_sync():
-    """Sync NSE equity ticker list to DB."""
-    log.info("Syncing NSE ticker list...")
-    try:
-        import asyncpg
-        from data.pipeline.nse_ticker_loader import load_from_nse_csv, sync_to_db
-        tickers = load_from_nse_csv()
-        conn = await asyncpg.connect(settings.DATABASE_DSN)
-        count = await sync_to_db(conn, tickers)
+        latest = await conn.fetchval("SELECT MAX(time) FROM ohlcv_daily")
+    finally:
         await conn.close()
-        log.info(f"Ticker sync complete: {count} tickers.")
-    except Exception as e:
-        log.error(f"Ticker sync failed: {e}", exc_info=True)
+    if latest is None:
+        return "no data at all — skipping (seed required)"
+    age_days = (datetime.now(timezone.utc) - latest).days
+    if age_days <= 1:
+        return f"fresh (latest {latest.date()}, age {age_days}d)"
+    log.warning("Daily data stale (%sd old) — backfilling %s days.", age_days, age_days + 3)
+    await task_incremental_ohlcv.__wrapped__(days_back=age_days + 3)
+    return f"backfilled {age_days + 3} days (was {age_days}d stale)"
+
+
+@instrumented("groww_intraday")
+async def task_groww_intraday() -> str:
+    """Live quote snapshot every 5 min during market hours (no-op without creds)."""
+    from data.pipeline.fetch_groww import run_groww_intraday_snapshot, creds_present
+    if not creds_present():
+        return "skipped: no groww creds"
+    result = await run_groww_intraday_snapshot()
+    return str(result)
+
+
+@instrumented("incremental_fo")
+async def task_incremental_fo() -> str:
+    """Pull latest F&O data from NSE Bhavcopy."""
+    from data.pipeline.fetch_f_and_o import run_fo_incremental
+    await run_fo_incremental(days_back=3)
+    return "ok"
+
+
+@instrumented("signal_pipeline")
+async def task_signal_pipeline() -> str:
+    """
+    The core loop: run the multi-timeframe pipeline, then let the brain act on
+    its own signals. No human in the loop — every decision is logged.
+    """
+    from intelligence.signal_pipeline import run_pipeline_multi
+    from intelligence.auto_trader import auto_trade
+
+    sigs = await run_pipeline_multi(save=True)
+    log.info("Signal pipeline complete: %d BUY signals.", len(sigs))
+
+    trade_summary = await auto_trade()
+    return (f"{len(sigs)} signals; auto: {len(trade_summary['bought'])} bought, "
+            f"{len(trade_summary['passed'])} passed")
+
+
+@instrumented("position_review")
+async def task_position_review() -> str:
+    """Re-analyze held positions, then act on EXIT verdicts automatically."""
+    from intelligence.position_monitor import review_all_positions
+    from intelligence.auto_trader import auto_exit
+
+    reviews = await review_all_positions()
+    log.info("Position re-analysis complete: %d positions reviewed.", len(reviews))
+
+    exit_summary = await auto_exit(reviews)
+    return f"{len(reviews)} reviewed; {len(exit_summary['sold'])} auto-exited"
+
+
+@instrumented("eod_review")
+async def task_eod_review() -> str:
+    """Run end-of-day Claude review."""
+    from intelligence.eod_review import run_eod_review
+    await run_eod_review()
+    return "ok"
+
+
+@instrumented("calibration")
+async def task_calibration() -> str:
+    """Nightly self-calibration: Claude proposes bounded brain-param changes."""
+    from intelligence.calibration import run_calibration
+    result = await run_calibration()
+    return f"{len(result['applied'])} change(s): {result['summary'][:200]}"
+
+
+@instrumented("refresh_weights")
+async def task_refresh_weights() -> str:
+    """Refresh combine.py model weights from rolling DB accuracy."""
+    from models.kronos.combine import refresh_weights_from_db
+    await refresh_weights_from_db()
+    return "ok"
+
+
+@instrumented("accuracy_tracker")
+async def task_accuracy_tracker() -> str:
+    """Rolling 7-day accuracy + dynamic weights + auto-retrain check."""
+    from intelligence.accuracy_tracker import run_accuracy_tracker
+    await run_accuracy_tracker()
+    return "ok"
+
+
+@instrumented("weekend_review")
+async def task_weekend_review() -> str:
+    """Saturday deep review via Claude Opus."""
+    from scheduler.weekend_job import run_weekend_review
+    await run_weekend_review()
+    return "ok"
+
+
+@instrumented("ticker_sync")
+async def task_ticker_sync() -> str:
+    """Sync NSE equity ticker list to DB."""
+    from data.pipeline.nse_ticker_loader import load_from_nse_csv, sync_to_db
+    tickers = load_from_nse_csv()
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        count = await sync_to_db(conn, tickers)
+    finally:
+        await conn.close()
+    return f"{count} tickers"
 
 
 # ------------------------------------------------------------------ #
@@ -149,97 +285,92 @@ async def task_ticker_sync():
 
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
+    common = dict(replace_existing=True, coalesce=True,
+                  max_instances=1, misfire_grace_time=300)
 
     # Ticker sync: daily at 8:00 AM IST
     scheduler.add_job(
         task_ticker_sync,
         CronTrigger(hour=8, minute=0),
-        id="ticker_sync",
-        name="NSE ticker list sync",
-        replace_existing=True,
+        id="ticker_sync", name="NSE ticker list sync", **common,
+    )
+
+    # Pre-market data freshness check: 8:45 IST Mon-Fri
+    scheduler.add_job(
+        task_data_freshness,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=45),
+        id="data_freshness", name="Pre-market data freshness check", **common,
+    )
+
+    # Groww intraday snapshot: every 5 min during market hours
+    scheduler.add_job(
+        task_groww_intraday,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5"),
+        id="groww_intraday", name="Groww live quote snapshot", **common,
     )
 
     # OHLCV incremental: Mon-Fri at 6:30 PM IST (after NSE closes at 3:30 PM)
     scheduler.add_job(
         task_incremental_ohlcv,
         CronTrigger(day_of_week="mon-fri", hour=18, minute=30),
-        id="incremental_ohlcv",
-        name="Incremental OHLCV update",
-        replace_existing=True,
+        id="incremental_ohlcv", name="Incremental OHLCV update", **common,
     )
 
     # F&O incremental: Mon-Fri at 6:45 PM IST
     scheduler.add_job(
         task_incremental_fo,
         CronTrigger(day_of_week="mon-fri", hour=18, minute=45),
-        id="incremental_fo",
-        name="Incremental F&O update",
-        replace_existing=True,
+        id="incremental_fo", name="Incremental F&O update", **common,
     )
 
-    # Signal pipeline: every 30 min during market hours (9:15-15:45 IST, Mon-Fri)
+    # Signal pipeline + autonomous trading: every 30 min during market hours
     scheduler.add_job(
         task_signal_pipeline,
-        CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-15",
-            minute="15,45",
-            timezone="Asia/Kolkata",
-        ),
-        id="signal_pipeline",
-        name="Signal pipeline",
-        replace_existing=True,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="15,45"),
+        id="signal_pipeline", name="Signal pipeline + auto-trade", **common,
     )
 
-    # Position re-analysis: every 30 min during market hours, offset 10 min from the
-    # pipeline so Kronos (signals) and Kronos (re-analysis) don't fight for the 4GB GPU.
+    # Position re-analysis + autonomous exits: offset 10 min from the pipeline
+    # so Kronos (signals) and Kronos (re-analysis) don't fight for the 4GB GPU.
     scheduler.add_job(
         task_position_review,
-        CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-15",
-            minute="25,55",
-            timezone="Asia/Kolkata",
-        ),
-        id="position_review",
-        name="Position re-analysis",
-        replace_existing=True,
+        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="25,55"),
+        id="position_review", name="Position re-analysis + auto-exit", **common,
     )
 
     # EOD review: Mon-Fri at 3:45 PM IST (15 min after market close)
     scheduler.add_job(
         task_eod_review,
         CronTrigger(day_of_week="mon-fri", hour=15, minute=45),
-        id="eod_review",
-        name="EOD Claude review",
-        replace_existing=True,
+        id="eod_review", name="EOD Claude review", **common,
+    )
+
+    # Nightly calibration: 4:15 PM IST, after EOD review has resolved the day.
+    scheduler.add_job(
+        task_calibration,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=15),
+        id="calibration", name="Brain parameter calibration", **common,
     )
 
     # Refresh combine weights every hour during market hours
     scheduler.add_job(
         task_refresh_weights,
         CronTrigger(day_of_week="mon-fri", hour="9-16", minute=5),
-        id="refresh_weights",
-        name="Refresh model combine weights",
-        replace_existing=True,
+        id="refresh_weights", name="Refresh model combine weights", **common,
     )
 
-    # Accuracy tracker: Mon-Fri at 8:00 PM IST (after EOD review)
+    # Accuracy tracker + auto-retrain check: Mon-Fri at 8:00 PM IST
     scheduler.add_job(
         task_accuracy_tracker,
         CronTrigger(day_of_week="mon-fri", hour=20, minute=0),
-        id="accuracy_tracker",
-        name="Rolling accuracy + weight adjustment",
-        replace_existing=True,
+        id="accuracy_tracker", name="Rolling accuracy + auto-retrain", **common,
     )
 
     # Weekend deep review: Saturday 9:00 AM IST
     scheduler.add_job(
         task_weekend_review,
         CronTrigger(day_of_week="sat", hour=9, minute=0),
-        id="weekend_review",
-        name="Weekend Claude Opus deep review",
-        replace_existing=True,
+        id="weekend_review", name="Weekend Claude Opus deep review", **common,
     )
 
     return scheduler
@@ -250,7 +381,8 @@ def build_scheduler() -> AsyncIOScheduler:
 # ------------------------------------------------------------------ #
 
 async def main():
-    log.info("StockSense market runner starting...")
+    _ensure_daily_log_handler()
+    log.info("StockSense market runner starting (autonomous mode — no switches)...")
     scheduler = build_scheduler()
     scheduler.start()
     log.info(f"Scheduler started. Jobs: {[j.name for j in scheduler.get_jobs()]}")

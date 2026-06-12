@@ -1,111 +1,85 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { Signal, TerminalLine } from '../../types'
 import TerminalBase from './terminals/TerminalBase'
 import SignalFeed from './SignalFeed'
 import LearningsView from './learnings/LearningsView'
-import { Play, Square } from 'lucide-react'
+import { Bot } from 'lucide-react'
 
 type SubTab = 'live' | 'learnings'
 
+interface ReasoningRow {
+  id: number
+  model_name: string
+  reasoning: string
+  created_at: string
+  ticker: string
+  signal_type: string
+  timeframe: string
+  final_confidence: number | null
+}
+
+const istTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })
+
+// First informative line of a model's reasoning blob.
+const gist = (reasoning: string) => {
+  const lines = reasoning.split('\n').map(l => l.trim()).filter(Boolean)
+  return (lines[1] || lines[0] || '').replace(/^[•\-*]\s*/, '').slice(0, 160)
+}
+
+const toLine = (r: ReasoningRow): TerminalLine => {
+  const conf = r.final_confidence != null ? ` ${(r.final_confidence * 100).toFixed(0)}%` : ''
+  const color = r.signal_type === 'BUY' ? 'green' : r.signal_type === 'SELL' ? 'red' : 'yellow'
+  return {
+    ts: istTime(r.created_at),
+    ticker: r.ticker,
+    color,
+    text: `${r.ticker} ${r.timeframe}  ${r.signal_type}${conf}  ${gist(r.reasoning)}`,
+  }
+}
+
 export default function IntelligenceDashboard() {
   const [subTab, setSubTab] = useState<SubTab>('live')
-  const [running, setRunning] = useState(false)
   const [signals, setSignals] = useState<Signal[]>([])
-
-  const [mlLines, setMlLines]         = useState<TerminalLine[]>([])
+  const [mlLines, setMlLines] = useState<TerminalLine[]>([])
   const [kronosLines, setKronosLines] = useState<TerminalLine[]>([])
-  const [slmLines, setSlmLines]       = useState<TerminalLine[]>([])
+  const [slmLines, setSlmLines] = useState<TerminalLine[]>([])
   const [claudeLines, setClaudeLines] = useState<TerminalLine[]>([])
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null)
 
-  const esRef = useRef<EventSource | null>(null)
+  // Passive observatory: tail what the brain already reasoned, oldest → newest.
+  const refresh = useCallback(async () => {
+    try {
+      const [rows, sigs] = await Promise.all([
+        fetch('/api/live/reasoning?limit=400&hours=48').then(r => r.json()) as Promise<ReasoningRow[]>,
+        fetch('/api/live/signals?limit=40').then(r => r.json()),
+      ])
+      if (Array.isArray(rows)) {
+        const ordered = [...rows].reverse()
+        setMlLines(ordered.filter(r => r.model_name === 'lgbm').map(toLine).slice(-300))
+        setKronosLines(ordered.filter(r => r.model_name === 'kronos').map(toLine).slice(-300))
+        setSlmLines(ordered.filter(r => r.model_name === 'macro' || r.model_name === 'slm').map(toLine).slice(-300))
+        setClaudeLines(ordered.filter(r => r.model_name === 'claude' || r.model_name === 'combined').map(toLine).slice(-300))
+        if (rows.length > 0) setLastUpdate(istTime(rows[0].created_at))
+      }
+      if (Array.isArray(sigs)) {
+        // /api/live/signals field names → SignalFeed's Signal shape
+        setSignals(sigs.map((s: Record<string, unknown>) => ({
+          ...s,
+          signal: s.signal_type,
+          price: s.price_at_signal,
+          target: s.target_price,
+          confidence: s.final_confidence,
+        })) as unknown as Signal[])
+      }
+    } catch { /* backend briefly down — next poll recovers */ }
+  }, [])
 
-  const ts = () => new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })
-
-  const appendML     = (l: TerminalLine) => setMlLines(p => [...p.slice(-300), l])
-  const appendKronos = (l: TerminalLine) => setKronosLines(p => [...p.slice(-300), l])
-  const appendSLM    = (l: TerminalLine) => setSlmLines(p => [...p.slice(-300), l])
-  const appendClaude = (l: TerminalLine) => setClaudeLines(p => [...p.slice(-300), l])
-
-  const startStream = () => {
-    if (esRef.current) esRef.current.close()
-    setRunning(true)
-    appendML({ ts: ts(), text: '--- Starting pipeline batch ---', color: 'grey' })
-    appendKronos({ ts: ts(), text: '--- Waiting for ML output ---', color: 'grey' })
-    appendSLM({ ts: ts(), text: '--- Portfolio guard active ---', color: 'grey' })
-    appendClaude({ ts: ts(), text: '--- Awaiting top signals ---', color: 'grey' })
-
-    const es = new EventSource('/api/stream/signals')
-    esRef.current = es
-
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        handleEvent(data)
-      } catch {}
-    }
-
-    es.onerror = () => {
-      setRunning(false)
-      appendClaude({ ts: ts(), text: '--- Stream ended ---', color: 'grey' })
-      es.close()
-    }
-  }
-
-  const stopStream = () => {
-    esRef.current?.close()
-    setRunning(false)
-  }
-
-  const handleEvent = (data: Record<string, unknown>) => {
-    const t = ts()
-    const ticker = (data.ticker as string) || ''
-    const signal = (data.signal as string) || 'HOLD'
-    const conf   = ((data.confidence as number) || 0) * 100
-
-    const sigColor = signal === 'BUY' ? 'green' : signal === 'SELL' ? 'red' : 'yellow'
-
-    if (data.type === 'ml_result' || data.ml_reasoning) {
-      appendML({ ts: t, ticker, color: sigColor,
-        text: `${ticker}  ${signal}  ${conf.toFixed(0)}%  ${(data.ml_reasoning as string || '').split('\n')[1]?.trim() || ''}` })
-    }
-
-    if (data.type === 'kronos_result' || data.kronos_reasoning) {
-      appendKronos({ ts: t, ticker, color: sigColor,
-        text: `${ticker}  ${(data.kronos_reasoning as string || '').split('\n')[1]?.trim() || ''}` })
-    }
-
-    if (data.type === 'slm_result' || data.slm_reasoning) {
-      const slmText = data.slm_reasoning as string || ''
-      const skipFlag = signal === 'SKIP'
-      appendSLM({ ts: t, ticker, color: skipFlag ? 'grey' : sigColor,
-        text: `${ticker}  ${skipFlag ? '✗ SKIP (not in portfolio)' : slmText.split('\n')[1]?.trim() || signal}` })
-    }
-
-    if (data.type === 'claude_checking') {
-      appendClaude({ ts: t, color: 'grey',
-        text: `--- Reviewing ${data.count} signals ---` })
-    }
-
-    if (data.type === 'claude_enriched' && data.claude_reasoning) {
-      const action = (data.claude_action as string) || 'CONFIRM'
-      appendClaude({ ts: t, ticker, color: action === 'CONFIRM' ? 'green' : 'red',
-        text: `${ticker}  ${action === 'CONFIRM' ? '✅' : '❌'} ${action}  ${(data.claude_reasoning as string).split('\n')[1]?.trim() || ''}` })
-    }
-
-    if (data.type === 'batch_complete') {
-      const all = [mlLines, kronosLines, slmLines, claudeLines]
-      void all
-      appendClaude({ ts: t, color: 'grey', text: `--- Batch complete: ${data.total} signals processed ---` })
-      setRunning(false)
-    }
-
-    // Add to signal feed only on final claude-enriched BUY signals (has price/target/stop_loss)
-    if (data.type === 'claude_enriched' && signal === 'BUY' && (data.confidence as number) > 0.55) {
-      setSignals(p => [data as unknown as Signal, ...p.slice(0, 99)])
-    }
-  }
-
-  useEffect(() => () => { esRef.current?.close() }, [])
+  useEffect(() => {
+    refresh()
+    const t = setInterval(refresh, 30_000) // pipeline runs every 30 min; tail it continuously
+    return () => clearInterval(t)
+  }, [refresh])
 
   return (
     <div className="h-full flex flex-col bg-bg-primary overflow-hidden">
@@ -117,14 +91,10 @@ export default function IntelligenceDashboard() {
             {t === 'live' ? '⚡ Live Intelligence' : '📚 Learnings'}
           </button>
         ))}
-        <div className="ml-auto flex items-center gap-2">
-          {subTab === 'live' && (
-            <button onClick={running ? stopStream : startStream}
-              className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-medium ${
-                running ? 'bg-red text-white' : 'bg-green text-bg-primary'}`}>
-              {running ? <><Square size={12} /> Stop</> : <><Play size={12} /> Run Pipeline</>}
-            </button>
-          )}
+        <div className="ml-auto flex items-center gap-2 text-[11px] text-text-secondary">
+          <Bot size={13} className="text-accent" />
+          auto — terminals tail the brain's pipeline runs
+          {lastUpdate && <span>· last reasoning {lastUpdate} IST</span>}
         </div>
       </div>
 
@@ -134,7 +104,7 @@ export default function IntelligenceDashboard() {
           <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-border overflow-hidden">
             <TerminalBase title="TERMINAL 1 — ML MODEL (LightGBM)" lines={mlLines} />
             <TerminalBase title="TERMINAL 2 — KRONOS FOUNDATION" lines={kronosLines} />
-            <TerminalBase title="TERMINAL 3 — SLM NSE COMMANDER" lines={slmLines} />
+            <TerminalBase title="TERMINAL 3 — MACRO / SLM" lines={slmLines} />
             <TerminalBase title="TERMINAL 4 — CLAUDE SONNET" lines={claudeLines} />
           </div>
 
