@@ -12,11 +12,9 @@ import logging
 import requests
 
 from config import settings
+from models.slm.ollama_client import ollama_available, ollama_generate as _client_generate
 
 log = logging.getLogger(__name__)
-
-OLLAMA_URL = settings.OLLAMA_URL
-SLM_MODEL = settings.SLM_MODEL
 
 OLLAMA_RETRIES = 3
 OLLAMA_RETRY_DELAY = 0.5  # seconds
@@ -50,37 +48,19 @@ def _load_skills() -> str:
 
 
 def _ollama_available() -> bool:
-    try:
-        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
-        return r.status_code == 200
-    except Exception:
-        return False
+    """Delegates to the shared client (works for local Ollama and Ollama Cloud)."""
+    return ollama_available()
 
 
 def _ollama_generate(user_prompt: str, system_prompt: str) -> str:
-    """Call Ollama with retries. Returns raw response text ('' on total failure)."""
-    last_err = None
+    """Per-ticker SLM call via the shared client, with a few retries. '' on total failure."""
     for attempt in range(OLLAMA_RETRIES):
-        try:
-            response = requests.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    "model": SLM_MODEL,
-                    "prompt": user_prompt,
-                    "system": system_prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.3},
-                },
-                timeout=60,
-            )
-            if response.status_code == 200:
-                return response.json().get("response", "")
-            last_err = f"HTTP {response.status_code}"
-        except Exception as e:
-            last_err = str(e)
+        out = _client_generate(user_prompt, system_prompt, options={"temperature": 0.3}, timeout=60)
+        if out:
+            return out
         if attempt < OLLAMA_RETRIES - 1:
             time.sleep(OLLAMA_RETRY_DELAY)
-    log.warning(f"Ollama generate failed after {OLLAMA_RETRIES} attempts: {last_err}")
+    log.warning("Ollama generate failed after %d attempts", OLLAMA_RETRIES)
     return ""
 
 

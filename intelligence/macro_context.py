@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 import requests
 
 from config import settings
-from models.slm.infer import _ollama_available
+from models.slm.ollama_client import ollama_available as _ollama_available, ollama_generate
 
 log = logging.getLogger(__name__)
 
@@ -40,41 +40,15 @@ MACRO_NUM_PREDICT = 700    # cap output tokens — the JSON is bounded in size
 
 def _macro_generate(user_prompt: str, system_prompt: str) -> str:
     """
-    Dedicated Ollama call for the macro layer: longer timeout + bounded output
-    than models/slm/infer._ollama_generate (which is tuned for short per-ticker calls).
-    Warms the model first so the scoring call doesn't eat the cold-load on its clock.
+    Dedicated macro-layer call via the shared Ollama client (local or cloud):
+    longer timeout + bounded JSON output, with a warm-up so a cold local load
+    doesn't eat the scoring call's clock.
     """
-    url = f"{settings.OLLAMA_URL}/api/generate"
-    # Warm-up: load the model into memory with a trivial request.
-    try:
-        requests.post(
-            url,
-            json={"model": settings.SLM_MODEL, "prompt": "ok", "stream": False,
-                  "options": {"num_predict": 1}},
-            timeout=MACRO_TIMEOUT,
-        )
-    except Exception as e:
-        log.warning("Macro warm-up failed: %s", e)
-
-    try:
-        resp = requests.post(
-            url,
-            json={
-                "model": settings.SLM_MODEL,
-                "prompt": user_prompt,
-                "system": system_prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.2, "num_predict": MACRO_NUM_PREDICT},
-            },
-            timeout=MACRO_TIMEOUT,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("response", "")
-        log.warning("Macro generate HTTP %s", resp.status_code)
-    except Exception as e:
-        log.warning("Macro generate failed: %s", e)
-    return ""
+    return ollama_generate(
+        user_prompt, system_prompt,
+        options={"temperature": 0.2, "num_predict": MACRO_NUM_PREDICT},
+        format_json=True, warm_up=True, timeout=MACRO_TIMEOUT,
+    )
 
 # ------------------------------------------------------------------ #
 # News sources — RSS feeds confirmed reachable on the blocked network #
