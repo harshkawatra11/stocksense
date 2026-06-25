@@ -1,0 +1,162 @@
+"""
+Synthesis layer — bring-your-own CLI.
+
+The final synthesis/validation calls run through whichever CLI the user connected:
+Claude Code (Anthropic), Codex (OpenAI), or Gemini (Google). The active backend and
+its models come from the provider config (intelligence/provider_config.py), chosen in
+the first-run modal. All three are driven non-interactively with the prompt on stdin.
+
+Public API:
+    run(prompt, role, system="") -> str   # role: "fast" | "deep"
+    detect() -> dict                        # which CLIs are installed
+    active_backend() / active_label()       # current choice, for tagging output
+
+No API keys here — each CLI carries its own auth (the user logs in once with that CLI).
+"""
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from functools import lru_cache
+
+from intelligence.provider_config import get_active
+
+log = logging.getLogger(__name__)
+
+DEFAULT_TIMEOUT = 180
+DEFAULT_RETRIES = 3
+
+# Per-backend metadata: the CLI binary to resolve and a human label.
+BACKENDS = {
+    "claude": {"bin": "claude", "label": "Claude"},
+    "codex":  {"bin": "codex",  "label": "Codex"},
+    "gemini": {"bin": "gemini", "label": "Gemini"},
+}
+
+
+@lru_cache(maxsize=8)
+def _which(binary: str) -> str | None:
+    """Resolve a CLI on PATH. On Windows npm shims are .cmd; shutil.which finds them."""
+    return shutil.which(binary)
+
+
+def active_backend() -> str:
+    b = get_active().get("synthesis", {}).get("backend", "claude")
+    return b if b in BACKENDS else "claude"
+
+
+def active_label() -> str:
+    return BACKENDS[active_backend()]["label"]
+
+
+def _model_for(role: str) -> str:
+    synth = get_active().get("synthesis", {})
+    return synth.get("deep_model", "") if role == "deep" else synth.get("fast_model", "")
+
+
+def detect() -> dict:
+    """{backend: {installed: bool, label: str, bin: str|None}} for the setup modal."""
+    out = {}
+    for name, meta in BACKENDS.items():
+        path = _which(meta["bin"])
+        out[name] = {"installed": path is not None, "label": meta["label"], "path": path}
+    return out
+
+
+# ------------------------------------------------------------------ #
+# Per-backend runners — each returns response text ('' on failure)    #
+# ------------------------------------------------------------------ #
+def _run_claude(prompt: str, model: str, system: str, timeout: int) -> str:
+    # Prompt on stdin (not argv): it carries non-ASCII (₹, →, •) and can be long;
+    # routing through the Windows claude.CMD shim as an argument mangles it.
+    cmd = [_which("claude") or "claude", "-p"]
+    if model:
+        cmd += ["--model", model]
+    if system:
+        cmd += ["--append-system-prompt", system]  # claude -p uses this, NOT --system
+    result = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=timeout)
+    if result.returncode == 0:
+        return (result.stdout or "").strip()
+    log.warning("claude CLI error: %s", (result.stderr or "")[:300])
+    return ""
+
+
+def _run_codex(prompt: str, model: str, system: str, timeout: int) -> str:
+    # Codex exec has no system flag, so fold system into the prompt. The final
+    # answer is written to a file via --output-last-message (stdout carries event noise).
+    binary = _which("codex") or "codex"
+    full = f"{system}\n\n{prompt}" if system else prompt
+    with tempfile.NamedTemporaryFile("r", suffix=".txt", delete=False, encoding="utf-8") as tf:
+        out_path = tf.name
+    try:
+        cmd = [binary, "exec", "--skip-git-repo-check", "--color", "never",
+               "--output-last-message", out_path]
+        if model:
+            cmd += ["-m", model]
+        result = subprocess.run(cmd, input=full, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=timeout)
+        if result.returncode != 0:
+            log.warning("codex CLI error: %s", (result.stderr or "")[:300])
+        with open(out_path, encoding="utf-8") as f:
+            text = f.read().strip()
+        return text or (result.stdout or "").strip()
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+
+
+def _run_gemini(prompt: str, model: str, system: str, timeout: int) -> str:
+    # Gemini CLI: prompt on stdin, optional -m model. No separate system flag in the
+    # non-interactive path, so fold system in. (Verify flags against the installed CLI.)
+    binary = _which("gemini") or "gemini"
+    full = f"{system}\n\n{prompt}" if system else prompt
+    cmd = [binary]
+    if model:
+        cmd += ["-m", model]
+    result = subprocess.run(cmd, input=full, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=timeout)
+    if result.returncode == 0:
+        return (result.stdout or "").strip()
+    log.warning("gemini CLI error: %s", (result.stderr or "")[:300])
+    return ""
+
+
+_RUNNERS = {"claude": _run_claude, "codex": _run_codex, "gemini": _run_gemini}
+
+
+def run(prompt: str, role: str = "fast", system: str = "",
+        retries: int = DEFAULT_RETRIES, timeout: int = DEFAULT_TIMEOUT) -> str:
+    """
+    Run the prompt through the active synthesis CLI. role selects the model tier
+    ("fast" for per-signal review, "deep" for EOD/calibration/weekend). Returns the
+    response text, or '' if the CLI is missing/failing (caller treats '' as no-op).
+    """
+    backend = active_backend()
+    binary = BACKENDS[backend]["bin"]
+    if _which(binary) is None:
+        log.warning("Synthesis CLI '%s' not found on PATH — skipping synthesis", binary)
+        return ""
+
+    model = _model_for(role)
+    runner = _RUNNERS[backend]
+
+    for attempt in range(retries):
+        try:
+            out = runner(prompt, model, system, timeout)
+            if out:
+                return out
+        except subprocess.TimeoutExpired:
+            log.warning("%s CLI timeout (attempt %d)", backend, attempt + 1)
+        except FileNotFoundError:
+            log.warning("%s CLI vanished from PATH", backend)
+            return ""
+        if attempt < retries - 1:
+            time.sleep(2 ** attempt)
+    return ""

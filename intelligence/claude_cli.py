@@ -1,33 +1,23 @@
 """
-Claude CLI interface — all calls via subprocess `claude -p`.
-Never uses Anthropic API directly. Uses Claude Code CLI subscription.
+Synthesis call builders — prompts and parsing for the final-validation layer.
+
+The prompts and JSON parsing live here; the actual model execution is delegated to
+intelligence/llm_cli.run(), which routes to whichever CLI the user connected
+(Claude Code, Codex, or Gemini). The two constants below act as role selectors:
+CLAUDE_SONNET -> "fast" tier, CLAUDE_OPUS -> "deep" tier. No API keys, ever.
 """
-import subprocess
 import json
 import logging
-import os
 import re
-import shutil
-import time
-from functools import lru_cache
 from typing import Optional
 
 from config import settings
+from intelligence import llm_cli
 
 log = logging.getLogger(__name__)
 
 CLAUDE_SONNET = settings.CLAUDE_SONNET_MODEL
 CLAUDE_OPUS = settings.CLAUDE_OPUS_MODEL
-
-
-@lru_cache(maxsize=1)
-def _claude_bin() -> str:
-    """
-    Resolve the `claude` executable. On Windows it's an npm shim (claude.cmd),
-    which subprocess.run can't find by bare name — shutil.which returns the full
-    path (incl. .cmd) so it launches correctly.
-    """
-    return shutil.which("claude") or "claude"
 
 
 def _extract_json(raw: str, expect: str = "object"):
@@ -87,38 +77,13 @@ def _extract_json(raw: str, expect: str = "object"):
 
 
 def _run_claude(prompt: str, model: str, system: Optional[str] = None, retries: int = 3) -> str:
-    # Pass the prompt via STDIN, not argv: prompts carry non-ASCII (₹, →, •) and can
-    # be long — routing through the Windows claude.CMD shim as an argument mangles
-    # them under cmd.exe's codepage. stdin + forced UTF-8 sidesteps both problems.
-    cmd = [_claude_bin(), "-p", "--model", model]
-    if system:
-        # `claude -p` uses --append-system-prompt (NOT --system, which errors out).
-        cmd += ["--append-system-prompt", system]
-
-    for attempt in range(retries):
-        try:
-            result = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=180,
-            )
-            if result.returncode == 0:
-                return (result.stdout or "").strip()
-            else:
-                log.warning(f"Claude CLI error (attempt {attempt+1}): {(result.stderr or '')[:300]}")
-        except subprocess.TimeoutExpired:
-            log.warning(f"Claude CLI timeout (attempt {attempt+1})")
-        except FileNotFoundError:
-            raise RuntimeError("claude CLI not found. Ensure Claude Code is installed.")
-
-        if attempt < retries - 1:
-            time.sleep(2 ** attempt)
-
-    return ""
+    """
+    Delegate to the active synthesis CLI. The `model` argument selects the tier:
+    the fast model (CLAUDE_SONNET) maps to role "fast", anything else to "deep".
+    Named `_run_claude` for historical reasons; the backend may be Codex or Gemini.
+    """
+    role = "fast" if model == CLAUDE_SONNET else "deep"
+    return llm_cli.run(prompt, role=role, system=system or "", retries=retries)
 
 
 def intraday_signal_check(signals: list[dict], learnings_context: str = "") -> list[dict]:
@@ -187,7 +152,7 @@ and Indian corporate earnings cycles. You think fast and sharp. Under 2 minutes 
             s["claude_action"] = action
             s["claude_confidence"] = adj_conf
             s["claude_reasoning"] = (
-                f"Claude Sonnet ({action}):\n"
+                f"{llm_cli.active_label()} ({action}):\n"
                 f"  • {note}\n"
                 f"  • Final confidence: {adj_conf*100:.1f}%"
             )
