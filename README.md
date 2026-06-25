@@ -485,9 +485,30 @@ All settings are in `config.py`, backed by a `.env` file (gitignored).
 - Angel One SmartAPI account
 
 ### Recommended
-- **Ollama** with `qwen2.5:7b` — macro/news layer. Falls back to NEUTRAL sector scores if offline.
-- **Claude Code CLI** (`claude`) — synthesis pass. Skipped gracefully if unavailable.
-- **GPU** (4GB+ VRAM) — for Qwen2.5 inference and Kronos fine-tuning.
+- **GPU** (4GB+ VRAM) — only if you run the macro layer on local Ollama, or fine-tune Kronos.
+
+---
+
+## Choose your engine
+
+StockSense runs on **your** LLMs — no provider API key is wired in. On first launch the app
+shows a setup screen to connect two layers; both degrade gracefully if absent.
+
+**Synthesis layer** (final signal validation) — install and log in to **one** CLI:
+
+| Engine | Install | Log in |
+|--------|---------|--------|
+| Claude Code | `npm i -g @anthropic-ai/claude-code` | run `claude`, then `/login` |
+| Codex (OpenAI) | `npm i -g @openai/codex` | `codex login` |
+| Gemini (Google) | `npm i -g @google/gemini-cli` | run `gemini`, then `/auth` |
+
+**Macro / news layer** (sector sentiment) — pick one:
+- **Local Ollama** (free, needs a GPU/decent CPU): `ollama pull qwen2.5:7b`
+- **Ollama Cloud** (no local GPU): set `OLLAMA_API_KEY`, point `OLLAMA_URL` at the cloud base,
+  and set `SLM_MODEL` to a hosted model such as Nemotron 3 Ultra.
+
+The choice is saved in the `app_config` table; secrets stay in `.env` only. You can re-open the
+setup screen from the app header to switch engines later.
 
 ---
 
@@ -519,6 +540,8 @@ This starts Docker + TimescaleDB, checks Ollama, then opens three windows: backe
 docker exec -i stocksense-db-1 psql -U postgres -d stocksense < data/db/schema.sql
 docker exec -i stocksense-db-1 psql -U postgres -d stocksense < data/db/schema_v2_live.sql
 docker exec -i stocksense-db-1 psql -U postgres -d stocksense < data/db/schema_v3_intelligence.sql
+docker exec -i stocksense-db-1 psql -U postgres -d stocksense < data/db/schema_v4_brain.sql
+docker exec -i stocksense-db-1 psql -U postgres -d stocksense < data/db/schema_v5_providers.sql
 ```
 
 ### 4. Backfill historical data
