@@ -131,6 +131,23 @@ def _run_gemini(prompt: str, model: str, system: str, timeout: int) -> str:
 _RUNNERS = {"claude": _run_claude, "codex": _run_codex, "gemini": _run_gemini}
 
 
+def verify_backend(backend: str, timeout: int = 45) -> tuple[bool, str]:
+    """Prove a specific backend is installed AND authenticated by running one tiny prompt.
+    Used by the setup modal's Verify button before the choice is saved."""
+    meta = BACKENDS.get(backend)
+    if not meta:
+        return False, f"unknown backend '{backend}'"
+    if _which(meta["bin"]) is None:
+        return False, f"{meta['bin']} CLI not found on PATH — install it first"
+    try:
+        out = _RUNNERS[backend]("Reply with exactly the word: OK", "", "You are terse.", timeout)
+        return (bool(out), (out[:120] if out else "no output (CLI may not be logged in)"))
+    except subprocess.TimeoutExpired:
+        return False, "timed out"
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)[:160]
+
+
 def run(prompt: str, role: str = "fast", system: str = "",
         retries: int = DEFAULT_RETRIES, timeout: int = DEFAULT_TIMEOUT) -> str:
     """
