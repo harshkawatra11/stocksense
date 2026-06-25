@@ -1,3 +1,21 @@
+// ---- LLM provider setup (first-run modal) ----
+export interface SynthCliInfo { installed: boolean; label: string; path: string | null }
+
+export interface ProviderStatus {
+  is_configured: boolean
+  active: {
+    macro: { mode: string; model: string; base_url?: string }
+    synthesis: { backend: string; fast_model: string; deep_model: string }
+  }
+  synthesis_clis: Record<string, SynthCliInfo>
+  macro: { endpoint_reachable: boolean; has_cloud_key: boolean }
+}
+
+export interface ProviderOptions {
+  synthesis: { backend: string; label: string; install: string; login: string }[]
+  macro: { mode: string; label: string; install: string; note: string }[]
+}
+
 export interface Signal {
   id?: number
   ticker: string
