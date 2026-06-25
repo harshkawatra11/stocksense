@@ -42,6 +42,11 @@ class Settings:
     def SLM_MODEL(self) -> str:
         return os.getenv("SLM_MODEL", "qwen2.5:7b")
 
+    @property
+    def OLLAMA_API_KEY(self) -> str:
+        """Set this to use Ollama Cloud (e.g. Nemotron 3 Ultra). Empty = local Ollama."""
+        return os.getenv("OLLAMA_API_KEY", "")
+
     # ------------------------------------------------------------------ #
     # Pipeline tuning                                                      #
     # ------------------------------------------------------------------ #
@@ -125,6 +130,33 @@ class Settings:
     @property
     def CLAUDE_OPUS_MODEL(self) -> str:
         return os.getenv("CLAUDE_OPUS_MODEL", "claude-opus-4-8")
+
+    # ------------------------------------------------------------------ #
+    # Synthesis layer — pluggable CLI backend (claude | codex | gemini)   #
+    # Defaults below are fallbacks; the live choice is stored in the       #
+    # app_config table and read via intelligence/provider_config.py.       #
+    # ------------------------------------------------------------------ #
+    @property
+    def LLM_SYNTH_BACKEND(self) -> str:
+        return os.getenv("LLM_SYNTH_BACKEND", "claude").lower()
+
+    # codex CLI (OpenAI). Empty model = let codex use its configured default.
+    @property
+    def CODEX_FAST_MODEL(self) -> str:
+        return os.getenv("CODEX_FAST_MODEL", "")
+
+    @property
+    def CODEX_DEEP_MODEL(self) -> str:
+        return os.getenv("CODEX_DEEP_MODEL", "")
+
+    # gemini CLI (Google).
+    @property
+    def GEMINI_FAST_MODEL(self) -> str:
+        return os.getenv("GEMINI_FAST_MODEL", "gemini-2.5-flash")
+
+    @property
+    def GEMINI_DEEP_MODEL(self) -> str:
+        return os.getenv("GEMINI_DEEP_MODEL", "gemini-2.5-pro")
 
     # ------------------------------------------------------------------ #
     # Kronos forecast                                                      #

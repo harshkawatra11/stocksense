@@ -174,11 +174,20 @@ async def auto_exit(reviews: list[dict], conn=None) -> dict:
     if own_conn:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
+        # Real holdings tracked here are watch-only: the brain reviews and alerts
+        # on them, but must never paper-sell them out from under itself.
+        watch_only = {
+            row["ticker"] for row in await conn.fetch(
+                "SELECT ticker FROM portfolio WHERE active = TRUE AND watch_only = TRUE"
+            )
+        }
         sold, errors = [], []
         for r in reviews or []:
             if (r.get("verdict") or "").upper() != "EXIT":
                 continue
             ticker = r["ticker"]
+            if ticker in watch_only:
+                continue  # alert only; never auto-close a real position
             price = r.get("current_price")
             if not price:
                 price = await conn.fetchval(
