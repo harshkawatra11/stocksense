@@ -16,19 +16,28 @@ Tick contract handed to on_tick — DO NOT change these key names, other
 agents' consumer code depends on this exact shape:
     {"symbol": <ticker>, "ltp": <float>, "close": <float | None>, "ts": <unix epoch float>}
 
+on_tick MUST be an async callable (e.g. quote_cache.update). The SDK's
+MarketDataStreamerV3 runs its WebSocket loop on its own background thread —
+confirmed empirically: start_feed() returns immediately after streamer.connect()
+without blocking, so "message" events fire from a thread other than the caller's
+asyncio event loop. Calling an async on_tick directly (or awaiting it) from that
+thread is invalid; this module bridges via asyncio.run_coroutine_threadsafe onto
+the loop that was running when start_feed() was called.
+
 Usage:
     from data.pipeline.upstox_feed import start_feed
 
-    def handle_tick(tick: dict) -> None:
+    async def handle_tick(tick: dict) -> None:
         print(tick)  # {"symbol": "RELIANCE", "ltp": 1234.5, "close": 1230.0, "ts": 1720700000.123}
 
-    start_feed(["NSE_EQ|INE002A01018"], handle_tick)
+    await start_feed(["NSE_EQ|INE002A01018"], handle_tick)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from typing import Callable
+from typing import Awaitable, Callable
 
 from config import settings
 from data.pipeline.upstox_client import get_data_token
@@ -61,7 +70,10 @@ def _extract_ltpc(tick_data: dict) -> tuple[float | None, float | None]:
     return ltp, close
 
 
-def _make_message_handler(on_tick: Callable[[dict], None]) -> Callable[[dict], None]:
+def _make_message_handler(
+    on_tick: Callable[[dict], Awaitable[None]],
+    loop: asyncio.AbstractEventLoop,
+) -> Callable[[dict], None]:
     def handle_message(message: dict) -> None:
         try:
             feeds = message.get("feeds") or {}
@@ -72,12 +84,22 @@ def _make_message_handler(on_tick: Callable[[dict], None]) -> Callable[[dict], N
                     # No usable price in this delta (e.g. a market-status-only
                     # message) — skip rather than emit a fabricated tick.
                     continue
-                on_tick({
+                tick = {
                     "symbol": symbol,
                     "ltp": ltp,
                     "close": close,
                     "ts": time.time(),
-                })
+                }
+                # This callback runs on the SDK's background WS thread, not the
+                # asyncio event loop — schedule the async on_tick onto the loop
+                # that was running when start_feed() was called, don't call it
+                # directly (that silently drops the tick: "coroutine was never
+                # awaited", no exception raised, no data written).
+                future = asyncio.run_coroutine_threadsafe(on_tick(tick), loop)
+                future.add_done_callback(
+                    lambda f, t=tick: log.error("Upstox feed: on_tick failed for %s: %s", t, f.exception())
+                    if f.exception() else None
+                )
         except Exception as e:
             # Explicitly logged — do not swallow. A bad tick shouldn't kill
             # the stream, but it must be visible.
@@ -86,11 +108,13 @@ def _make_message_handler(on_tick: Callable[[dict], None]) -> Callable[[dict], N
     return handle_message
 
 
-async def start_feed(instrument_keys: list[str], on_tick: Callable[[dict], None], symbol_map: dict[str, str] | None = None) -> "object":
+async def start_feed(instrument_keys: list[str], on_tick: Callable[[dict], Awaitable[None]], symbol_map: dict[str, str] | None = None) -> "object":
     """
     Start the Upstox MarketDataStreamerV3 in ltpc mode for the given
-    instrument keys and call on_tick(dict) for every price update, with the
-    dict shape documented at the top of this module.
+    instrument keys and call `await on_tick(dict)` for every price update,
+    with the dict shape documented at the top of this module. on_tick MUST
+    be an async function — it's invoked via run_coroutine_threadsafe from
+    the SDK's background WS thread (see _make_message_handler).
 
     symbol_map: optional {instrument_key: ticker} override — if omitted, the
     raw instrument_key is used as "symbol" (callers that already resolved
@@ -118,6 +142,8 @@ async def start_feed(instrument_keys: list[str], on_tick: Callable[[dict], None]
     if symbol_map:
         _key_to_symbol.update(symbol_map)
 
+    loop = asyncio.get_running_loop()
+
     try:
         import upstox_client
         from upstox_client.feeder.market_data_streamer_v3 import MarketDataStreamerV3
@@ -136,7 +162,7 @@ async def start_feed(instrument_keys: list[str], on_tick: Callable[[dict], None]
             mode="ltpc",
         )
         streamer.auto_reconnect(True, interval=10, retry_count=3)
-        streamer.on("message", _make_message_handler(on_tick))
+        streamer.on("message", _make_message_handler(on_tick, loop))
         streamer.on("error", lambda err: log.error("Upstox feed error: %s", err))
         streamer.on("close", lambda *a: log.warning("Upstox feed closed: %s", a))
         streamer.connect()
@@ -148,11 +174,20 @@ async def start_feed(instrument_keys: list[str], on_tick: Callable[[dict], None]
 
 
 if __name__ == "__main__":
-    import asyncio
-
     logging.basicConfig(level=logging.INFO)
 
-    def _print_tick(tick: dict) -> None:
+    async def _print_tick(tick: dict) -> None:
         print(tick)
 
-    asyncio.run(start_feed(["NSE_INDEX|Nifty 50"], _print_tick, symbol_map={"NSE_INDEX|Nifty 50": "Nifty 50"}))
+    async def _main():
+        streamer = await start_feed(
+            ["NSE_INDEX|Nifty 50"], _print_tick, symbol_map={"NSE_INDEX|Nifty 50": "Nifty 50"}
+        )
+        if streamer is None:
+            return
+        # start_feed()/streamer.connect() don't block — hold the process open
+        # for a bit so ticks (if the market's open) actually have a chance
+        # to arrive and print, instead of exiting the instant connect() returns.
+        await asyncio.sleep(30)
+
+    asyncio.run(_main())
