@@ -1,5 +1,8 @@
 .claude/worktrees/
 
+# Archived/superseded docs, logs, old repo backup
+archive/
+
 # Secrets
 .env
 
