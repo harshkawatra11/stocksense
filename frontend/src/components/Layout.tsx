@@ -4,6 +4,8 @@ import { Briefcase, List, TrendingUp, Globe, Cpu, Zap, ScrollText, BrainCircuit 
 import { useMarketStatus } from '../hooks/useMarketStatus'
 import { useBackendHealth } from '../hooks/useBackendHealth'
 import { useMarketIndices } from '../hooks/useMarketIndices'
+import { useRealtimePrices } from '../hooks/useRealtimePrices'
+import PriceAgeDot from './PriceAgeDot'
 import SystemHealthBar from './SystemHealthBar'
 
 interface Props {
@@ -24,7 +26,8 @@ const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
 ]
 
 function IndexTicker({ isMarketOpen }: { isMarketOpen: boolean }) {
-  const indices = useMarketIndices(isMarketOpen)
+  const { prices: livePrices, connected: wsConnected } = useRealtimePrices()
+  const indices = useMarketIndices(isMarketOpen, livePrices)
 
   return (
     <div className="flex gap-5 text-xs">
@@ -40,7 +43,8 @@ function IndexTicker({ isMarketOpen }: { isMarketOpen: boolean }) {
           : up ? 'text-green' : 'text-red'
 
         return (
-          <span key={q.symbol} className="text-text-secondary">
+          <span key={q.symbol} className="text-text-secondary flex items-center gap-1">
+            {q.live && <PriceAgeDot ts={q.ts} connected={wsConnected} />}
             {q.symbol}{' '}
             <span className={`font-medium ${changeColor}`}>
               {ltpStr}

@@ -1,7 +1,8 @@
 """
-Provider configuration — which LLM engines power the two AI layers.
+Provider configuration — which LLM engines power the two AI layers, plus the
+market-data provider chain.
 
-Two layers are pluggable:
+Two LLM layers are pluggable:
   - macro:     local Ollama or Ollama Cloud (Nemotron 3 Ultra). See models/slm/ollama_client.py.
   - synthesis: a bring-your-own CLI (claude | codex | gemini). See intelligence/llm_cli.py.
 
@@ -12,6 +13,19 @@ run (load_provider_config) and the backend refreshes whenever the config changes
 get_active() falls back to environment defaults so standalone scripts still work.
 
 No secrets here: the Ollama Cloud key lives in .env only; we persist has_key, never the key.
+
+Market-data provider chain (not LLM-related, but same "pluggable provider" shape):
+  1. Upstox   — primary live feed once wired (data/pipeline/upstox_client.py / upstox_feed.py).
+  2. Angel One — explicit fallback only. See backend/routers/market_data.py (index quotes,
+                 with its own circuit breaker) and data/pipeline/fetch_angel_daily.py
+                 (EOD backfill fallback inside scheduler/market_runner.py's
+                 task_incremental_ohlcv). Angel One is IP-bound and frequently blocked on
+                 home networks — it exists purely as a safety net, never call it as primary.
+  3. None     — if both are unavailable, market-data endpoints degrade gracefully
+                 (available=false) rather than raising.
+  Groww's intraday snapshot path is retired/archived (see WHAT_TO_DO_NEXT.txt Section 2.8)
+  and is NOT part of this chain — its code remains in data/pipeline/fetch_groww.py, unused,
+  in case of resubscription.
 """
 from __future__ import annotations
 
@@ -22,6 +36,17 @@ from config import settings
 log = logging.getLogger(__name__)
 
 SYNTH_BACKENDS = ("claude", "codex", "gemini")
+
+# Market-data provider chain, in priority order. Purely descriptive/logging use today;
+# consumers (backend/routers/market_data.py, scheduler/market_runner.py) each still do
+# their own defensive try/import fallback, but should treat this tuple as the source of
+# truth for ordering and labels when logging which provider served a given request.
+MARKET_DATA_PROVIDERS = ("upstox", "angel_one")  # "upstox" primary, "angel_one" fallback-only
+
+
+def market_data_provider_chain() -> tuple[str, ...]:
+    """Priority-ordered market-data providers: Upstox (primary) -> Angel One (fallback)."""
+    return MARKET_DATA_PROVIDERS
 
 # Module cache of the active config, set by load_provider_config().
 _active: dict | None = None

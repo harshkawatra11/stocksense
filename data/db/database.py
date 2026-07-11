@@ -148,6 +148,23 @@ class SLMTrainingPair(Base):
     created_at = Column(TIMESTAMPTZ)
 
 
+class PendingTradeConfirmation(Base):
+    """Human-confirmed trade approval queue — STUB.
+    Execution wiring intentionally deferred — see WHAT_TO_DO_NEXT.txt Section 5.
+    Records human approve/reject decisions only; nothing places real orders yet."""
+    __tablename__ = "pending_trade_confirmations"
+    id = Column(Integer, primary_key=True)
+    signal_id = Column(Integer)
+    ticker = Column(String(20), nullable=False)
+    action = Column(String(10), nullable=False)  # BUY | SELL
+    quantity = Column(Integer, nullable=False)
+    price = Column(Numeric(12, 2), nullable=False)
+    reasoning = Column(Text)
+    status = Column(String(20), default="PENDING")  # PENDING | APPROVED | REJECTED | EXPIRED
+    created_at = Column(TIMESTAMPTZ)
+    resolved_at = Column(TIMESTAMPTZ)
+
+
 async def get_session():
     async with AsyncSessionLocal() as session:
         yield session

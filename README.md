@@ -419,7 +419,9 @@ Key `.env` variables (full list in [`.env.example`](.env.example)):
 | `LLM_SYNTH_BACKEND` | default synthesis CLI (`claude` / `codex` / `gemini`) |
 | `CODEX_*_MODEL` · `GEMINI_*_MODEL` · `CLAUDE_*_MODEL` | per-backend fast/deep models |
 | `CONFIDENCE_THRESHOLD` · `MAX_TICKERS_PER_RUN` · `PIPELINE_INTERVAL_MINUTES` | pipeline tuning |
-| `ANGEL_ONE_*` · `GROWW_*` | optional data / live feeds |
+| `UPSTOX_*` | primary live market-data feed (data/pipeline/upstox_client.py) |
+| `ANGEL_ONE_*` | fallback-only market-data provider (used if Upstox is unavailable) |
+| `GROWW_*` | archived — intraday snapshot path retired, pending resubscription |
 
 ---
 
@@ -431,13 +433,14 @@ All times **IST**, driven by APScheduler in [`scheduler/market_runner.py`](sched
 | :--- | :--- | :--- |
 | `ticker_sync` | daily 08:00 | refresh NSE universe |
 | `data_freshness` | Mon–Fri 08:45 | pre-market freshness check |
-| `groww_intraday` | Mon–Fri 09:00–15:00, every 5 min | live quote snapshots (if Groww configured) |
 | `signal_pipeline` + auto-trade | Mon–Fri 09:15 → 15:45, :15/:45 | generate signals, then `auto_trade` |
 | `position_review` + auto-exit | Mon–Fri 09:25 → 15:55, :25/:55 | re-analyze positions, then `auto_exit` |
 | `refresh_weights` | Mon–Fri 09:05 → 16:05, hourly | re-weight model combine on accuracy |
 | `eod_review` | Mon–Fri 15:45 | LLM end-of-day review → learnings |
 | `calibration` | Mon–Fri 16:15 | bounded `brain_params` self-tuning |
-| `incremental_ohlcv` / `incremental_fo` | Mon–Fri 18:30 / 18:45 | post-close data pull |
+| `incremental_ohlcv` | Mon–Fri 18:30 | post-close data pull (Upstox primary → NSE Bhavcopy → Angel One fallback) |
+| `upstox_bhavcopy_reconciliation` | Mon–Fri 18:35 | warns (non-blocking) if Upstox vs Bhavcopy closes differ >0.1% |
+| `incremental_fo` | Mon–Fri 18:45 | post-close F&O data pull |
 | `accuracy_tracker` + retrain | Mon–Fri 20:00 | rolling accuracy → auto-retrain |
 | `weekend_review` | Sat 09:00 | deep weekly review |
 
@@ -462,7 +465,7 @@ All times **IST**, driven by APScheduler in [`scheduler/market_runner.py`](sched
 
 ## 🗺️ Roadmap
 
-- [ ] Groww live intraday feed (TOTP auth, no IP whitelisting) → sub-day timeframes (30m / 2h)
+- [ ] Upstox live intraday feed (primary) → sub-day timeframes (30m / 2h); Groww archived pending resubscription
 - [ ] Auto-trim exits (sell half at first target, trail the rest)
 - [ ] Verify Gemini CLI flags + confirm Ollama Cloud model ids
 - [ ] Backtest harness with walk-forward, out-of-sample edge reporting

@@ -228,14 +228,16 @@ async def sync_to_db(conn, tickers: list[dict[str, Any]]) -> int:
     for t in tickers:
         await conn.execute(
             """
-            INSERT INTO stocks (ticker, name, exchange, active)
-            VALUES ($1, $2, 'NSE', TRUE)
+            INSERT INTO stocks (ticker, name, exchange, active, isin)
+            VALUES ($1, $2, 'NSE', TRUE, $3)
             ON CONFLICT (ticker) DO UPDATE SET
                 name = EXCLUDED.name,
-                active = TRUE
+                active = TRUE,
+                isin = COALESCE(EXCLUDED.isin, stocks.isin)
             """,
             t["ticker"],
             t["name"],
+            t.get("isin") or None,
         )
         count += 1
     log.info(f"Upserted {count} tickers into stocks table")

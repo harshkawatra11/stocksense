@@ -2,6 +2,14 @@
 Live market data endpoint — fetches index quotes from Angel One SmartAPI.
 Returns Nifty 50 and Sensex LTP + change. Falls back gracefully if
 Angel One is unavailable (network timeout, missing credentials, etc.).
+
+Provider role: Angel One is the FALLBACK-ONLY market-data provider in this app's
+provider chain (see intelligence/provider_config.py: market_data_provider_chain()).
+Upstox is the primary live feed once wired (data/pipeline/upstox_client.py /
+upstox_feed.py). Angel One is IP-bound and frequently blocked on home networks —
+this module (and its circuit breaker below) exists purely as a safety net for when
+Upstox is unavailable or not yet configured, not as the default source. Do not
+promote this to primary without updating provider_config.py's chain.
 """
 import asyncio
 import logging
@@ -36,7 +44,11 @@ INDICES = [
 
 
 def _fetch_quotes_sync() -> list[dict]:
-    """Synchronous Angel One LTP fetch — runs in a thread pool."""
+    """Synchronous Angel One LTP fetch — runs in a thread pool.
+
+    Fallback-only path (see module docstring): called when there's no primary
+    (Upstox) index-quote source wired into this endpoint yet.
+    """
     global _last_fetch_error, _fail_ts
     from data.pipeline.fetch_live import get_session, get_ltp
 

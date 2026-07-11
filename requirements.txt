@@ -28,3 +28,4 @@ aiofiles>=23.0.0
 smartapi-python>=1.5.5
 pyotp>=2.9.0
 growwapi
+upstox-python-sdk

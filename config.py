@@ -190,6 +190,21 @@ class Settings:
         return os.getenv("GROWW_TOTP_SECRET", "")
 
     # ------------------------------------------------------------------ #
+    # Upstox (live data layer — REST candles + WS V3 ltpc feed)            #
+    # ------------------------------------------------------------------ #
+    @property
+    def UPSTOX_CLIENT_ID(self) -> str:
+        return os.getenv("UPSTOX_CLIENT_ID", "")
+
+    @property
+    def UPSTOX_CLIENT_SECRET(self) -> str:
+        return os.getenv("UPSTOX_CLIENT_SECRET", "")
+
+    @property
+    def UPSTOX_REDIRECT_URI(self) -> str:
+        return os.getenv("UPSTOX_REDIRECT_URI", "http://localhost:8000/api/upstox/callback")
+
+    # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
     # ------------------------------------------------------------------ #
     @property

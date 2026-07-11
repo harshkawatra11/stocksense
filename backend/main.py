@@ -10,8 +10,43 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from data.db.database import init_db
-from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview, live, brain, providers, system_health
+from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview, live, brain, providers, system_health, ws_prices, confirmations
+from backend.services.quote_cache import start_quote_cache_feed
 from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS as NSE_TICKERS
+from data.pipeline.upstox_client import resolve_instrument_keys
+from intelligence.portfolio_guard import get_portfolio_tickers as get_held_tickers
+
+# Index instrument keys aren't ISIN-based like equities — hardcode the two
+# indices the frontend tracks (useMarketIndices.ts expects exactly these
+# symbol strings). See docs/UPSTOX_API_NOTES.md §4 for the key format.
+_INDEX_SYMBOL_MAP = {
+    "NSE_INDEX|Nifty 50": "Nifty 50",
+    "NSE_INDEX|Sensex": "Sensex",
+}
+
+
+async def _build_live_watchlist() -> tuple[list[str], dict[str, str]]:
+    """
+    Instrument keys to subscribe on the live feed: the two tracked indices
+    plus every ticker currently held in the paper portfolio (the set that
+    actually needs live P&L). Falls back to just the indices if DB/ticker
+    resolution isn't ready yet — never blocks startup.
+    """
+    instrument_keys = list(_INDEX_SYMBOL_MAP.keys())
+    symbol_map = dict(_INDEX_SYMBOL_MAP)
+    try:
+        conn = await asyncpg.connect(settings.DATABASE_DSN)
+        try:
+            held = await get_held_tickers(conn)
+        finally:
+            await conn.close()
+        resolved = await resolve_instrument_keys(list(held))
+        for ticker, key in resolved.items():
+            instrument_keys.append(key)
+            symbol_map[key] = ticker
+    except Exception:
+        log.exception("Could not resolve held-ticker instrument keys — live feed will cover indices only")
+    return instrument_keys, symbol_map
 from intelligence.signal_pipeline import (
     run_pipeline_batch,
     run_pipeline_batch_streaming,
@@ -28,6 +63,14 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+
+    # Live quote cache feed: indices + currently-held tickers. Held-ticker
+    # coverage is deliberately narrow at startup — watchlist/top-signal
+    # tickers can be added to the live set later without changing this
+    # wiring (quote_cache.update tolerates new symbols showing up anytime).
+    instrument_keys, symbol_map = await _build_live_watchlist()
+    asyncio.create_task(start_quote_cache_feed(instrument_keys, symbol_map=symbol_map))
+
     log.info("StockSense backend started")
     yield
     log.info("StockSense backend shutting down")
@@ -54,6 +97,15 @@ app.include_router(live.router, prefix="/api/live", tags=["live"])
 app.include_router(brain.router, prefix="/api/brain", tags=["brain"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(system_health.router, prefix="/api/system", tags=["system"])
+app.include_router(ws_prices.router, prefix="/api/ws", tags=["ws"])
+app.include_router(confirmations.router, prefix="/api/confirmations", tags=["confirmations"])
+
+try:
+    from backend.routers import upstox_auth
+    app.include_router(upstox_auth.router, prefix="/api/upstox", tags=["upstox"])
+except ImportError:
+    log.info("backend.routers.upstox_auth not present yet — skipping mount (producer-side stub pending)")
+    # TODO: once the parallel producer agent adds backend/routers/upstox_auth.py, this will auto-mount.
 
 
 @app.get("/api/health")

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ThumbsUp, ThumbsDown, RefreshCw, Wallet, Clock, Target, AlertTriangle, FlaskConical, Bot, ExternalLink } from 'lucide-react'
 import type { LiveSignal, Account, ActivityEvent, PositionReview, DataStatus, TradingMode, ComponentStatus } from '../../types'
+import { useRealtimePrices } from '../../hooks/useRealtimePrices'
+import PriceAgeDot from '../PriceAgeDot'
 
 const COMPONENT_DOT: Record<ComponentStatus['status'], string> = {
   ok: 'bg-green', degraded: 'bg-yellow', unavailable: 'bg-red',
@@ -82,6 +84,43 @@ const statusStyle: Record<string, string> = {
   behind: 'text-yellow', expired: 'text-red', stopped: 'text-red',
 }
 
+/** Live LTP next to the frozen price_at_signal, with % move and a freshness dot. */
+function LivePriceBadge({
+  ticker, priceAtSignal, ltp, ts, connected,
+}: { ticker: string; priceAtSignal: number; ltp: number | null | undefined; ts: number | null | undefined; connected: boolean }) {
+  const [flash, setFlash] = useState(false)
+  const [prevLtp, setPrevLtp] = useState<number | null | undefined>(ltp)
+
+  useEffect(() => {
+    if (ltp != null && ltp !== prevLtp) {
+      setFlash(true)
+      const t = setTimeout(() => setFlash(false), 500)
+      setPrevLtp(ltp)
+      return () => clearTimeout(t)
+    }
+  }, [ltp, prevLtp])
+
+  if (ltp == null) return null
+
+  const movePct = ((ltp - priceAtSignal) / priceAtSignal) * 100
+  const up = movePct >= 0
+
+  return (
+    <span
+      key={ticker}
+      className={`flex items-center gap-1 text-xs transition-colors duration-500 rounded px-1 ${
+        flash ? (up ? 'bg-green/20' : 'bg-red/20') : ''
+      }`}
+    >
+      <PriceAgeDot ts={ts} connected={connected} />
+      <span className="text-text-primary">₹{ltp.toFixed(1)}</span>
+      <span className={up ? 'text-green' : 'text-red'}>
+        {up ? '▲' : '▼'}{Math.abs(movePct).toFixed(2)}%
+      </span>
+    </span>
+  )
+}
+
 export default function Live() {
   const [signals, setSignals] = useState<LiveSignal[]>([])
   const [account, setAccount] = useState<Account | null>(null)
@@ -92,6 +131,7 @@ export default function Live() {
   const [onlyAffordable, setOnlyAffordable] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const { prices: livePrices, connected: wsConnected } = useRealtimePrices()
 
   const isPaper = mode?.mode !== 'LIVE'  // default to paper until proven otherwise
 
@@ -206,7 +246,14 @@ export default function Live() {
 
               {/* The intelligent headline: buy @ X → Y (+Z%) in ~ETAd */}
               <div className="mt-2 flex items-center gap-2 text-sm">
-                <span className="text-text-primary">₹{s.price_at_signal.toFixed(1)}</span>
+                <span className="text-text-secondary">signal ₹{s.price_at_signal.toFixed(1)}</span>
+                <LivePriceBadge
+                  ticker={s.ticker}
+                  priceAtSignal={s.price_at_signal}
+                  ltp={livePrices[s.ticker]?.ltp}
+                  ts={livePrices[s.ticker]?.ts}
+                  connected={wsConnected}
+                />
                 {s.target_price && (
                   <>
                     <Target size={12} className="text-green" />

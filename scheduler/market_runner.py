@@ -180,12 +180,111 @@ async def task_data_freshness() -> str:
 
 @instrumented("groww_intraday")
 async def task_groww_intraday() -> str:
-    """Live quote snapshot every 5 min during market hours (no-op without creds)."""
+    """Live quote snapshot every 5 min during market hours (no-op without creds).
+
+    RETIRED from the scheduler (see build_scheduler() below) — this wrote fake
+    flat-OHLC "1-minute" candles into ohlcv_1min from a 5-minute-stale LTP
+    snapshot. Function left in place, unregistered, in case it's needed for
+    manual/ad-hoc use. See WHAT_TO_DO_NEXT.txt Section 2.8.
+    """
     from data.pipeline.fetch_groww import run_groww_intraday_snapshot, creds_present
     if not creds_present():
         return "skipped: no groww creds"
     result = await run_groww_intraday_snapshot()
     return str(result)
+
+
+@instrumented("upstox_bhavcopy_reconciliation")
+async def task_upstox_bhavcopy_reconciliation() -> str:
+    """
+    Nightly sanity check (18:35 IST, right after incremental_ohlcv at 18:30):
+    compares each ticker's Upstox-sourced daily close against the NSE Bhavcopy
+    close already stored in ohlcv_daily for the same date, and logs a warning
+    (via intelligence.activity.log_activity) if they differ by more than 0.1%.
+
+    Additive and non-blocking: a mismatch is a warning, not a hard failure, and
+    this job never writes/overwrites ohlcv_daily — it only compares and logs.
+
+    Upstox is being wired in by a separate workstream (data/pipeline/upstox_client.py).
+    Until that lands, this defensively no-ops (logs + returns) rather than failing,
+    same pattern used elsewhere in this codebase for optional dependencies.
+    """
+    try:
+        from data.pipeline.upstox_client import (
+            creds_present, resolve_instrument_keys, get_historical_candles,
+        )
+    except (ImportError, AttributeError) as e:
+        log.info("upstox_client not available/incomplete yet (%s) — skipping Bhavcopy reconciliation.", e)
+        return f"skipped: upstox_client not available ({e})"
+
+    if not creds_present():
+        return "skipped: no upstox creds"
+
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        today = date.today()
+        rows = await conn.fetch(
+            "SELECT ticker, close FROM ohlcv_daily WHERE time::date = $1",
+            today,
+        )
+        if not rows:
+            return f"no ohlcv_daily rows for {today} yet — skipping"
+        # Cap the check to a bounded sample so a large universe doesn't hammer the
+        # Upstox API nightly; this is a sanity spot-check, not exhaustive audit.
+        bhavcopy_closes = {r["ticker"]: float(r["close"]) for r in rows if r["close"] is not None}
+        sample_tickers = list(bhavcopy_closes.keys())[:200]
+
+        try:
+            instrument_keys = await resolve_instrument_keys(sample_tickers)
+            upstox_closes: dict[str, float] = {}
+            iso_today = today.isoformat()
+            for ticker in sample_tickers:
+                inst_key = instrument_keys.get(ticker)
+                if not inst_key:
+                    continue
+                candles = await get_historical_candles(
+                    inst_key, unit="days", interval="1", to_date=iso_today,
+                )
+                if candles:
+                    # Newest candle isn't guaranteed to be last — pick by timestamp.
+                    latest = max(candles, key=lambda c: c.get("timestamp", ""))
+                    close = latest.get("close")
+                    if close is not None:
+                        upstox_closes[ticker] = float(close)
+        except Exception as e:
+            log.warning("Upstox daily-close fetch failed during reconciliation: %s", e)
+            return f"skipped: upstox fetch failed ({e})"
+
+        mismatches = []
+        for ticker, bhav_close in bhavcopy_closes.items():
+            up_close = upstox_closes.get(ticker)
+            if up_close is None or bhav_close == 0:
+                continue
+            pct_diff = abs(up_close - bhav_close) / bhav_close * 100
+            if pct_diff > 0.1:
+                mismatches.append((ticker, bhav_close, up_close, pct_diff))
+
+        if mismatches:
+            from intelligence.activity import log_activity
+            summary_note = (
+                f"{len(mismatches)} ticker(s) mismatched >0.1%% between Upstox and "
+                f"Bhavcopy closes on {today}: " +
+                ", ".join(f"{t} (bhav={b:.2f} upstox={u:.2f} diff={d:.2f}%)"
+                          for t, b, u, d in mismatches[:10])
+            )
+            log.warning(summary_note)
+            await log_activity(
+                conn,
+                event_type="NOTE",
+                note=summary_note[:500],
+                payload={"mismatches": [
+                    {"ticker": t, "bhavcopy_close": b, "upstox_close": u, "pct_diff": d}
+                    for t, b, u, d in mismatches
+                ]},
+            )
+        return f"{len(mismatches)} mismatch(es) out of {len(upstox_closes)} tickers checked (sampled {len(sample_tickers)})"
+    finally:
+        await conn.close()
 
 
 @instrumented("incremental_fo")
@@ -302,18 +401,34 @@ def build_scheduler() -> AsyncIOScheduler:
         id="data_freshness", name="Pre-market data freshness check", **common,
     )
 
-    # Groww intraday snapshot: every 5 min during market hours
-    scheduler.add_job(
-        task_groww_intraday,
-        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5"),
-        id="groww_intraday", name="Groww live quote snapshot", **common,
-    )
+    # Groww intraday snapshot job: RETIRED (see WHAT_TO_DO_NEXT.txt Section 2.8 —
+    # "the fake-candle problem"). This job wrote a single 5-minute-stale LTP into
+    # ohlcv_1min as a flat OHLC "1-minute candle" (open=high=low=close, zero volume),
+    # which looked like granular intraday data but wasn't. Upstox is becoming the
+    # primary live feed (data/pipeline/upstox_client.py / upstox_feed.py); Groww's
+    # code is left intact and unused in fetch_groww.py in case of resubscription
+    # (archive, don't delete — WHAT_TO_DO_NEXT.txt Section 5). Do not re-enable
+    # this job without also fixing the flat-candle issue.
+    # scheduler.add_job(
+    #     task_groww_intraday,
+    #     CronTrigger(day_of_week="mon-fri", hour="9-15", minute="*/5"),
+    #     id="groww_intraday", name="Groww live quote snapshot", **common,
+    # )
 
     # OHLCV incremental: Mon-Fri at 6:30 PM IST (after NSE closes at 3:30 PM)
     scheduler.add_job(
         task_incremental_ohlcv,
         CronTrigger(day_of_week="mon-fri", hour=18, minute=30),
         id="incremental_ohlcv", name="Incremental OHLCV update", **common,
+    )
+
+    # Nightly Upstox-vs-Bhavcopy close reconciliation: Mon-Fri at 6:35 PM IST,
+    # right after incremental_ohlcv (6:30 PM). No-ops until Upstox is wired in
+    # (see task_upstox_bhavcopy_reconciliation docstring).
+    scheduler.add_job(
+        task_upstox_bhavcopy_reconciliation,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=35),
+        id="upstox_bhavcopy_reconciliation", name="Upstox vs Bhavcopy close reconciliation", **common,
     )
 
     # F&O incremental: Mon-Fri at 6:45 PM IST

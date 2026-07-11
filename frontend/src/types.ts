@@ -88,6 +88,10 @@ export interface LiveSignal {
   expected_move_pct?: number
   fired_at?: string
   components_json?: ComponentStatuses | null
+  /** Live LTP as of the last WS tick, joined in on the client (not persisted). */
+  live_ltp?: number | null
+  /** Unix seconds timestamp of the live_ltp tick. */
+  live_ts?: number | null
 }
 
 export interface Account {
