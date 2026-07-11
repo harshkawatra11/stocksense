@@ -2,6 +2,9 @@
 Upstox live tick feed — thin wrapper around the official SDK's
 MarketDataStreamerV3 (WS V3, ltpc mode). See docs/UPSTOX_API_NOTES.md §4/§6.
 
+Authenticates via upstox_client.get_data_token() — prefers UPSTOX_ANALYTICS_TOKEN
+(no daily re-auth) and falls back to the daily OAuth token if unset.
+
 Do NOT hand-roll protobuf decoding here — the SDK already does it. This
 module's only job is: authenticate, subscribe to the given instrument keys,
 translate each SDK tick into the exact dict shape the consumer-side
@@ -28,7 +31,7 @@ import time
 from typing import Callable
 
 from config import settings
-from data.pipeline.upstox_client import get_valid_token
+from data.pipeline.upstox_client import get_data_token
 
 log = logging.getLogger(__name__)
 
@@ -107,9 +110,9 @@ async def start_feed(instrument_keys: list[str], on_tick: Callable[[dict], None]
         log.warning("Upstox feed: no instrument keys given — nothing to subscribe to")
         return None
 
-    token = await get_valid_token()
+    token = await get_data_token()
     if token is None:
-        log.warning("Upstox feed: no valid access token — cannot start feed (re-auth required via /api/upstox/login)")
+        log.warning("Upstox feed: no valid token — set UPSTOX_ANALYTICS_TOKEN, or re-auth via /api/upstox/login for a daily token")
         return None
 
     if symbol_map:

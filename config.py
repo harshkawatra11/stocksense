@@ -212,6 +212,14 @@ class Settings:
     def UPSTOX_REDIRECT_URI(self) -> str:
         return os.getenv("UPSTOX_REDIRECT_URI", "http://localhost:8000/api/upstox/callback")
 
+    @property
+    def UPSTOX_ANALYTICS_TOKEN(self) -> str:
+        """Generated once from the Upstox developer portal, no daily re-auth needed.
+        Powers Market Data + Realtime & Streaming APIs — preferred over the
+        daily OAuth token for everything this app's data layer needs. See
+        data/pipeline/upstox_client.get_data_token()."""
+        return os.getenv("UPSTOX_ANALYTICS_TOKEN", "")
+
     # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
     # ------------------------------------------------------------------ #

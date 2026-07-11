@@ -69,6 +69,38 @@ No IP whitelisting is required for any of this (data APIs). IP whitelisting
 only applies to the **Order API**, and only once SEBI's Apr-2026 circular is
 enforced for algo order flow — irrelevant while StockSense stays paper-only.
 
+## 2b. Analytics Token — CORRECTION, confirmed 2026-07-11 from official docs screenshots
+
+The daily-OAuth-token design above is not the only option, and for StockSense's
+data-only needs it's not even the preferred one. Upstox publishes a distinct
+**Analytics Token**:
+
+- Generated **once** from the developer portal — no daily re-authorization.
+- Specifically powers the **Market Data** and **Realtime & Streaming APIs**
+  (exactly what `upstox_feed.py` and `get_historical_candles` need).
+- Also unlocks read-only **Portfolio** and **Account & Funds** APIs, but only
+  when called from a registered static IP (not relevant to StockSense today).
+- curl shape: `Authorization: Bearer {analytics_token}` — no other change to
+  request shape vs. the daily token.
+
+**Implementation**: `data/pipeline/upstox_client.get_data_token()` prefers
+`settings.UPSTOX_ANALYTICS_TOKEN` (env var `UPSTOX_ANALYTICS_TOKEN`) and
+falls back to the daily OAuth token (`get_valid_token()`) if unset. Generate
+one from the developer portal's "Learn how to generate an analytics token"
+link and drop it in `.env` — this removes the daily-re-auth requirement for
+the entire live-data path.
+
+## 2c. Sandbox — risk-free order-API rehearsal
+
+`sandbox.upstox.com/v2` emulates the real API (place/modify/cancel orders)
+with no time restrictions and a separate sandbox access token — no real
+money, no real market impact. This is the natural place to rehearse the
+confirmation-gated execution path (`pending_trade_confirmations` table,
+`backend/routers/confirmations.py`) end-to-end before any live-order wiring
+is even considered: build and test the approve/reject flow against sandbox
+orders first, entirely decoupled from the "should this ever go live"
+decision.
+
 ## 3. REST — Historical & intraday candles (V3)
 
 ```
@@ -232,6 +264,13 @@ itself. It IS worth having installed for you personally, for quick manual
 portfolio checks from within a Claude Code session, separate from the app.
 
 ## 8. Upstox Agent Skill — the one the user asked about (order execution capable)
+
+**Verified 2026-07-11 against the official page** (upstox.com/developer/api-documentation/agent-skills) via user-provided screenshots — every detail below matches what was already researched via WebFetch; nothing changed. Additional confirmed details from that pass:
+- Prerequisites: Node.js (for the `skills` CLI), Python 3.8+ with `pip install upstox-python-sdk`, an active Upstox account with API access, an access token from the developer portal, and one of Claude Code or Codex.
+- `/plugin marketplace add` takes a **repository** name (`upstox-plugin-marketplace`); `/plugin install` takes a **marketplace** name (`@upstox-plugins-official`) — easy to transpose, the official docs call this out explicitly. The same marketplace also offers a separate `upstox-mcp` plugin for read-only account access (Section 7 above).
+- Config file alternative to the env var: copy `skills/upstox/config.json.example` to `skills/upstox/config.json` and fill in `access_token` — this file is git-ignored by the skill's own `.gitignore`, so a token placed there is never committed.
+- Official framing, verbatim: *"Your agent stays a knowledgeable assistant, not an autonomous trader."* — this is Upstox's own design intent, and it matches the human-approve/reject model StockSense has adopted (Stage 1's `pending_trade_confirmations` scaffolding).
+- **This stage (Stage 1.5) deliberately did NOT run any `/plugin install` or `npx skills add` command** — doing so would install order-execution capability into whichever Claude Code session runs it, which is the same "unattended real-money action" risk already ruled out for the app itself. This section stays documentation-only; see the recommendation below.
 
 **GitHub:** https://github.com/upstox/upstox-skills
 **Standard:** open `SKILL.md` format (same family of thing as the Skills

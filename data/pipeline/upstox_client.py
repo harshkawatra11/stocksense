@@ -12,13 +12,25 @@ cache in memory across process restarts — instead we cache the token + its
 acquisition timestamp in the `upstox_token` DB table (schema_v7_upstox.sql)
 and treat "acquired today, IST" as valid.
 
+Analytics Token (correction, 2026-07-11): Upstox also offers a special
+"Analytics Token" — generated ONCE from the developer portal, no daily
+re-authorization, and it specifically powers the Market Data and
+Realtime & Streaming APIs (the only APIs this module's data layer needs).
+The daily OAuth access token below still exists and is still required for
+order-capable APIs (not in scope — StockSense stays paper-only), but the
+live feed and historical candles should prefer the Analytics Token when
+one is configured, since it removes the daily-re-auth requirement entirely
+for the data path. See docs/UPSTOX_API_NOTES.md and the "Learn how to
+generate an analytics token" page under Upstox's Getting Started docs.
+
 Provides:
-  - get_authorization_url(state=None)      : build the OAuth dialog URL
+  - get_authorization_url(state=None)      : build the OAuth dialog URL (order-API path)
   - exchange_code_for_token(code)          : POST code -> access_token, stores it
   - store_token(token)                     : persist a token (used by the callback route)
-  - get_valid_token()                      : cached token if acquired today (IST), else None
+  - get_valid_token()                      : cached daily OAuth token if acquired today (IST), else None
+  - get_data_token()                       : Analytics Token if configured, else falls back to get_valid_token()
   - resolve_instrument_key(ticker)         : "NSE_EQ|<ISIN>" lookup from stocks.isin
-  - get_historical_candles(...)            : REST V3 historical/intraday candles
+  - get_historical_candles(...)            : REST V3 historical/intraday candles (uses get_data_token)
 
 Everything degrades explicitly: missing creds or a failed/expired token makes
 get_valid_token() return None and callers must re-auth via the OAuth flow —
@@ -151,6 +163,26 @@ async def get_valid_token() -> str | None:
     return row["token"]
 
 
+async def get_data_token() -> str | None:
+    """
+    Token to use for Market Data / Realtime & Streaming APIs (live feed,
+    historical candles) — the calls this module's data layer actually needs.
+
+    Prefers the Analytics Token (settings.UPSTOX_ANALYTICS_TOKEN): generated
+    once from the developer portal, no daily re-authorization required. Falls
+    back to the daily OAuth access token (get_valid_token()) if no analytics
+    token is configured, so the data layer still works via the OAuth flow
+    while you're setting up the analytics token for the first time.
+
+    Order-capable APIs must NOT use this function — they require the daily
+    OAuth access token specifically; call get_valid_token() directly for those
+    (not currently used anywhere, since StockSense stays paper-only today).
+    """
+    if settings.UPSTOX_ANALYTICS_TOKEN:
+        return settings.UPSTOX_ANALYTICS_TOKEN
+    return await get_valid_token()
+
+
 # --------------------------------------------------------------------------- #
 # Instrument key resolution                                                   #
 # --------------------------------------------------------------------------- #
@@ -213,9 +245,9 @@ async def get_historical_candles(
     oldest-to-newest is NOT guaranteed by Upstox — caller should sort if order matters.
     Returns [] on missing token or request failure (no silent fallback data).
     """
-    token = await get_valid_token()
+    token = await get_data_token()
     if token is None:
-        log.warning("No valid Upstox token — cannot fetch historical candles for %s (re-auth required)", instrument_key)
+        log.warning("No valid Upstox token — cannot fetch historical candles for %s (re-auth required, or set UPSTOX_ANALYTICS_TOKEN)", instrument_key)
         return []
 
     path_parts = [instrument_key, unit, interval, to_date]
@@ -262,6 +294,9 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
         print("Authorization URL:", get_authorization_url(state="test"))
         token = await get_valid_token()
-        print("Cached token present:", bool(token))
+        print("Cached daily OAuth token present:", bool(token))
+        data_token = await get_data_token()
+        print("Data token (analytics-first, falls back to daily) present:", bool(data_token))
+        print("Analytics token configured:", bool(settings.UPSTOX_ANALYTICS_TOKEN))
 
     asyncio.run(main())

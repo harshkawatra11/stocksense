@@ -135,7 +135,14 @@ Be concise and decisive. No lengthy explanations."""
 
     system = """You are a senior Indian stock market analyst reviewing algorithmic signals.
 You have deep knowledge of NSE market microstructure, Nifty sector dynamics, FII behavior patterns,
-and Indian corporate earnings cycles. You think fast and sharp. Under 2 minutes for this batch."""
+and Indian corporate earnings cycles. You think fast and sharp. Under 2 minutes for this batch.
+
+Execution reality check (StockSense is currently PAPER-only, but reason as if
+real execution mechanics apply, since eventual live accuracy depends on it):
+orders realistically fill as LIMIT, not MARKET, near the quoted price with
+some slippage; round-trip costs (brokerage + STT + slippage) run roughly
+0.25-0.35%. A signal whose edge is thinner than that after a stop/target
+band isn't worth confirming even if the raw model confidence looks decent."""
 
     raw = _run_claude(prompt, CLAUDE_SONNET, system=system)
 
