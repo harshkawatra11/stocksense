@@ -134,7 +134,10 @@ and Indian corporate earnings cycles. You think fast and sharp. Under 2 minutes 
     raw = _run_claude(prompt, CLAUDE_SONNET, system=system)
 
     if not raw:
-        log.warning("Claude returned empty response for intraday check")
+        status = llm_cli.get_component_status()
+        log.warning("Claude returned empty response for intraday check (%s)", status["detail"])
+        for s in signals:
+            s["synthesis_status"] = status
         return signals
 
     # Parse JSON from response
@@ -230,7 +233,11 @@ Be specific about what pattern failed, not generic platitudes."""
     raw = _run_claude(prompt, CLAUDE_OPUS, system=system)
 
     if not raw:
-        return {"learnings": [], "summary": "Claude Opus review failed — no response."}
+        status = llm_cli.get_component_status()
+        return {
+            "learnings": [], "summary": "Claude Opus review failed — no response.",
+            "synthesis_status": status,
+        }
 
     parsed = _extract_json(raw, expect="object")
     if isinstance(parsed, dict):
@@ -290,7 +297,11 @@ Respond with JSON only."""
 
     raw = _run_claude(prompt, CLAUDE_OPUS, system=system)
     if not raw:
-        return {"changes": [], "summary": "Calibration call returned no response — no changes."}
+        status = llm_cli.get_component_status()
+        return {
+            "changes": [], "summary": "Calibration call returned no response — no changes.",
+            "synthesis_status": status,
+        }
 
     parsed = _extract_json(raw, expect="object")
     if isinstance(parsed, dict) and isinstance(parsed.get("changes"), list):

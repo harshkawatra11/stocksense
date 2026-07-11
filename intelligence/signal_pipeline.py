@@ -5,6 +5,7 @@ Supports both batch (non-streaming) and per-stage SSE streaming modes.
 """
 import asyncio
 import asyncpg
+import json
 import math
 import pandas as pd
 import logging
@@ -12,13 +13,14 @@ from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 from data.pipeline.feature_engineering import compute_features
-from models.ml.predict import predict_with_reasoning
-from models.kronos.integration import forecast as kronos_forecast
+from models.ml.predict import predict_with_reasoning, get_model_status
+from models.kronos.integration import forecast as kronos_forecast, get_kronos_status
 from models.kronos.combine import combine_signals
 from models.slm.infer import slm_enrich
 from intelligence.portfolio_guard import get_portfolio_tickers
 from intelligence.macro_context import get_macro_context, MacroContext
 from intelligence.activity import log_activity
+from intelligence import llm_cli
 from config import settings
 
 log = logging.getLogger(__name__)
@@ -137,6 +139,82 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> float | None:
     return float(atr) if pd.notna(atr) else None
 
 
+# ------------------------------------------------------------------ #
+# Stage 0 truth layer — component health                              #
+# ------------------------------------------------------------------ #
+# Shared status contract (see WHAT_TO_DO_NEXT.txt Section 4 / Stage 0):
+#   {status: "ok"|"degraded"|"unavailable", detail: <str>, source: <enum>}
+# Components: kronos (finetuned|pretrained|mock|unavailable),
+#             lightgbm (status + stale: bool, no source),
+#             llm_synthesis (claude|codex|gemini|skipped),
+#             macro (ollama_local|ollama_cloud|neutral_fallback)
+#
+# Each producer module exposes its own status getter — this is a thin
+# passthrough that assembles them into one snapshot dict:
+#   models/ml/predict.py       -> get_model_status()   (source: loaded|stale|hot_reload_check_failed|unavailable)
+#   models/kronos/integration.py -> get_kronos_status() (source: finetuned|pretrained|mock|unavailable)
+#   intelligence/llm_cli.py    -> get_component_status() (source: claude|codex|gemini|skipped)
+#   intelligence/macro_context.py -> MacroContext.component_status/_source/_detail
+
+def _lightgbm_status() -> dict:
+    try:
+        return get_model_status()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "unavailable", "detail": f"lightgbm status check failed: {e}", "source": "unavailable"}
+
+
+def _kronos_status() -> dict:
+    try:
+        return get_kronos_status()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "unavailable", "detail": f"kronos status check failed: {e}", "source": "unavailable"}
+
+
+def _llm_synthesis_status() -> dict:
+    try:
+        return llm_cli.get_component_status()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "unavailable", "detail": f"llm_synthesis status check failed: {e}", "source": "skipped"}
+
+
+def _macro_status(macro: "MacroContext | None" = None) -> dict:
+    if macro is None:
+        return {"status": "unavailable", "detail": "no macro context produced yet",
+                "source": "neutral_fallback"}
+    return {
+        "status": macro.component_status,
+        "detail": macro.component_detail,
+        "source": macro.component_source,
+    }
+
+
+def get_component_statuses(macro: "MacroContext | None" = None) -> dict:
+    """
+    Stage 0 truth-layer snapshot: collects the {status, detail, source} of every
+    pipeline component as of "right now" into one dict, ready to be persisted as
+    components_json alongside each signal (DB column/migration owned by another
+    agent — see save_signal_multi below for the write side already wired up).
+
+    Shape (each component key maps to {status, detail, source}):
+        {
+          "lightgbm":      {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "loaded"|"stale"|"hot_reload_check_failed"|"unavailable"},
+          "kronos":        {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "finetuned"|"pretrained"|"mock"|"unavailable"},
+          "llm_synthesis": {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "claude"|"codex"|"gemini"|"skipped"},
+          "macro":         {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "ollama_local"|"ollama_cloud"|"neutral_fallback"},
+        }
+
+    Called once per signal (cheap — no network calls of its own beyond what each
+    component already tracks in-process) and attached to the saved row as
+    components_json, and exposed via GET /api/system/health.
+    """
+    return {
+        "kronos": _kronos_status(),
+        "lightgbm": _lightgbm_status(),
+        "llm_synthesis": _llm_synthesis_status(),
+        "macro": _macro_status(macro),
+    }
+
+
 async def fetch_sector_map(conn) -> dict[str, str]:
     """ticker -> sector from the stocks DB table. Loaded once per run."""
     rows = await conn.fetch("SELECT ticker, sector FROM stocks WHERE sector IS NOT NULL")
@@ -215,6 +293,9 @@ async def run_single_ticker_streaming(
             "confidence": ml_result.get("confidence", 0.5),
             "reasoning": "Kronos unavailable — using ML signal only",
             "predicted_close": current_price,
+            "component_status": "unavailable",
+            "component_source": "unavailable",
+            "component_detail": f"forecast() raised: {e}",
         }
         yield {
             "type": "kronos_result",
@@ -307,6 +388,9 @@ async def run_single_ticker(
             "confidence": ml_result["confidence"],
             "reasoning": "Kronos unavailable — using ML signal only",
             "predicted_close": current_price,
+            "component_status": "unavailable",
+            "component_source": "unavailable",
+            "component_detail": f"forecast() raised: {e}",
         }
 
     # Step 3: Combine
@@ -524,6 +608,9 @@ async def run_single_ticker_multi(
                 "signal": ml_result.get("signal", "HOLD"),
                 "confidence": ml_result.get("confidence", 0.5),
                 "reasoning": f"Kronos unavailable for {tf['label']} — ML-only",
+                "component_status": "unavailable",
+                "component_source": "unavailable",
+                "component_detail": f"forecast() failed for {tf['label']}: {e}",
             }
 
         combined = combine_signals(ml_result, kr)
@@ -552,6 +639,7 @@ async def run_single_ticker_multi(
         target = f_target if f_target else atr_target
         stop = atr_stop
         affordable, shares = annotate_affordability(price)
+        components = get_component_statuses(macro)
 
         out.append({
             "ticker": ticker,
@@ -586,6 +674,7 @@ async def run_single_ticker_multi(
                 f"BUY {ticker} @ ₹{price:.1f}"
             ),
             "fired_at": datetime.now(timezone.utc).isoformat(),
+            "components": components,
         })
 
     return out
@@ -593,7 +682,6 @@ async def run_single_ticker_multi(
 
 async def save_signal_multi(conn, signal: dict) -> int:
     """Persist a multi-timeframe live signal (truthful timeframe + annotations)."""
-    import json
     signal_id = await conn.fetchval(
         """
         INSERT INTO signals (
@@ -601,8 +689,9 @@ async def save_signal_multi(conn, signal: dict) -> int:
             target_price, stop_loss,
             ml_confidence, kronos_confidence, slm_confidence, final_confidence,
             affordable, shares_affordable, macro_sector_score,
-            target_eta_days, expected_move_pct, predicted_path, fired_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+            target_eta_days, expected_move_pct, predicted_path, fired_at,
+            components_json
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
         RETURNING id
         """,
         signal["ticker"],
@@ -623,6 +712,7 @@ async def save_signal_multi(conn, signal: dict) -> int:
         signal.get("expected_move_pct"),
         json.dumps(signal.get("predicted_path")) if signal.get("predicted_path") else None,
         datetime.now(timezone.utc),
+        json.dumps(signal.get("components")) if signal.get("components") else None,
     )
 
     for model_name, key in [
@@ -737,6 +827,11 @@ async def _claude_synthesis(conn, all_signals: list[dict]) -> None:
         log.warning("Claude synthesis failed: %s", e)
         return
 
+    # The synthesis CLI's real status is only known now, after it actually ran —
+    # patch it into each saved row's components_json (llm_synthesis was a
+    # placeholder/"not yet called" value when the row was first saved).
+    synth_status = _llm_synthesis_status()
+
     for s in enriched:
         sid = s.get("id")
         if not sid:
@@ -745,8 +840,10 @@ async def _claude_synthesis(conn, all_signals: list[dict]) -> None:
         final_conf = s.get("final_confidence", s.get("confidence"))
         new_type = "HOLD" if s.get("claude_action") == "REJECT" else s.get("signal", "BUY")
         await conn.execute(
-            "UPDATE signals SET claude_confidence=$1, final_confidence=$2, signal_type=$3 WHERE id=$4",
-            claude_conf, final_conf, new_type, sid,
+            "UPDATE signals SET claude_confidence=$1, final_confidence=$2, signal_type=$3, "
+            "components_json = COALESCE(components_json, '{}'::jsonb) || jsonb_build_object('llm_synthesis', $5::jsonb) "
+            "WHERE id=$4",
+            claude_conf, final_conf, new_type, sid, json.dumps(synth_status),
         )
         if s.get("claude_reasoning"):
             await conn.execute(

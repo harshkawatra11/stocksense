@@ -34,6 +34,13 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
+def is_cloud() -> bool:
+    """True if the active Ollama endpoint is configured with an API key (Ollama Cloud)
+    rather than a local instance. Used by callers that need to report source honestly
+    (e.g. macro_context's Stage 0 status: 'ollama_local' vs 'ollama_cloud')."""
+    return bool(settings.OLLAMA_API_KEY)
+
+
 def ollama_available(timeout: int = 3) -> bool:
     """True if the configured Ollama endpoint (local or cloud) answers."""
     try:

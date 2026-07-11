@@ -20,6 +20,14 @@ export interface ModelAccuracyRow {
   avg_confidence: number
 }
 
+export interface NetExpectancy {
+  n: number
+  win_rate: number | null
+  net_win_rate: number | null
+  net_expectancy_bps: number | null
+  gross_expectancy_bps: number | null
+}
+
 export async function fetchAccuracySummary(): Promise<AccuracySummary | null> {
   const r = await fetch(`${BASE}/accuracy/summary`)
   if (!r.ok) return null
@@ -38,4 +46,10 @@ export async function fetchDailyAccuracy(): Promise<{ date: string; total: numbe
   if (!r.ok) return []
   const d = await r.json()
   return Array.isArray(d) ? d : []
+}
+
+export async function fetchNetExpectancy(n = 60): Promise<NetExpectancy | null> {
+  const r = await fetch(`${BASE}/accuracy/net-expectancy?n=${n}`)
+  if (!r.ok) return null
+  return r.json()
 }

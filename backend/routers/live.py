@@ -7,6 +7,8 @@ re-analysis — plus the user actions: rate a signal, buy, pass, and trigger a r
 """
 from __future__ import annotations
 
+import json
+
 import asyncpg
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -48,7 +50,9 @@ async def trading_mode():
 # ----------------------------- reads ----------------------------- #
 @router.get("/signals")
 async def actionable_signals(limit: int = 30, only_affordable: bool = False):
-    """Latest BUY signals, affordable-first. Each has target + target_eta_days."""
+    """Latest BUY signals, affordable-first. Each has target + target_eta_days.
+    Includes components_json (Stage 0 truth layer) when present, so the frontend
+    can show per-signal provenance — e.g. "Kronos: pretrained (not NSE)"."""
     conn = await asyncpg.connect(DB_DSN)
     try:
         sigs = await get_actionable_signals(conn, limit=limit, only_affordable=only_affordable)
@@ -58,6 +62,13 @@ async def actionable_signals(limit: int = 30, only_affordable: bool = False):
                       "macro_sector_score", "target_eta_days", "expected_move_pct"):
                 if s.get(k) is not None:
                     s[k] = float(s[k])
+            # components_json comes back as a JSON string from asyncpg — parse it.
+            cj = s.get("components_json")
+            if isinstance(cj, str):
+                try:
+                    s["components_json"] = json.loads(cj)
+                except (TypeError, ValueError):
+                    s["components_json"] = None
         return sigs
     finally:
         await conn.close()

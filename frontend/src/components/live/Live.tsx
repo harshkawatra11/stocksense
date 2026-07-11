@@ -1,6 +1,34 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ThumbsUp, ThumbsDown, RefreshCw, Wallet, Clock, Target, AlertTriangle, FlaskConical, Bot, ExternalLink } from 'lucide-react'
-import type { LiveSignal, Account, ActivityEvent, PositionReview, DataStatus, TradingMode } from '../../types'
+import type { LiveSignal, Account, ActivityEvent, PositionReview, DataStatus, TradingMode, ComponentStatus } from '../../types'
+
+const COMPONENT_DOT: Record<ComponentStatus['status'], string> = {
+  ok: 'bg-green', degraded: 'bg-yellow', unavailable: 'bg-red',
+}
+const COMPONENT_LABEL: Record<string, string> = {
+  kronos: 'Kronos', lightgbm: 'LGBM', llm_synthesis: 'Synth', macro: 'Macro',
+}
+
+/** Small honest per-signal provenance badges — e.g. "Kronos: pretrained (not NSE)". */
+function ComponentBadges({ components }: { components: LiveSignal['components_json'] }) {
+  if (!components) return null
+  return (
+    <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+      {(Object.entries(components) as [string, ComponentStatus][]).map(([name, c]) => (
+        <span
+          key={name}
+          title={`${COMPONENT_LABEL[name] || name}: ${c.status}${c.source ? ` (${c.source})` : ''} — ${c.detail}`}
+          className="flex items-center gap-1 text-[10px] text-text-secondary/80 cursor-default"
+        >
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${COMPONENT_DOT[c.status]}`} />
+          {COMPONENT_LABEL[name] || name}
+          {c.source && c.source !== 'skipped' && <span className="opacity-60">·{c.source}</span>}
+          {c.source === 'skipped' && <span className="opacity-60">·skipped</span>}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 const api = {
   get: (p: string) => fetch(`/api${p}`).then(r => r.json()),
@@ -207,6 +235,9 @@ export default function Live() {
                 </span>
                 {isPaper && <span className="text-yellow/70 italic ml-auto">tracked, not executed</span>}
               </div>
+
+              {/* Stage 0 truth layer — what actually produced this signal */}
+              <ComponentBadges components={s.components_json} />
 
               {/* Human feedback — the only human input; trades are autonomous */}
               <div className="mt-2.5 flex items-center gap-2">

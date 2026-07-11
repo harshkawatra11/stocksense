@@ -61,12 +61,29 @@ def ensure_kronos():
         sys.path.insert(0, KRONOS_DIR)
 
 
+# Stage 0 truth-layer status of the currently-loaded Kronos model.
+# source: "finetuned" | "pretrained" | "mock" | "unavailable"
+# status:  "ok"        | "degraded"  | "unavailable" | "unavailable"
+_kronos_status: dict = {
+    "status": "unavailable", "detail": "model not loaded yet", "source": "unavailable",
+}
+
+
+def get_kronos_status() -> dict:
+    """Stage 0 status of the currently-loaded Kronos model, per the shared status contract."""
+    return dict(_kronos_status)
+
+
 def load_kronos_model(model_size: str | None = None):
     """
     Build a KronosPredictor. Prefers the NSE-finetuned checkpoint when present,
     otherwise pulls the pretrained model/tokenizer from HuggingFace.
-    Falls back to MockKronosForecaster if Kronos is unavailable.
+    Falls back to MockKronosForecaster if Kronos is unavailable — but ALWAYS records
+    an explicit status in _kronos_status/get_kronos_status() so callers (combine.py)
+    know when they're looking at a degraded/mock component instead of silently
+    treating it as a real forecast.
     """
+    global _kronos_status
     model_size = model_size or settings.KRONOS_MODEL_SIZE
     model_id, tokenizer_id, max_context = _MODEL_SPECS.get(model_size, _MODEL_SPECS["base"])
 
@@ -82,15 +99,31 @@ def load_kronos_model(model_size: str | None = None):
         if os.path.isdir(KRONOS_WEIGHTS_DIR):
             log.info(f"Loading NSE-finetuned Kronos weights from {KRONOS_WEIGHTS_DIR}")
             kmodel = Kronos.from_pretrained(KRONOS_WEIGHTS_DIR)
+            _kronos_status = {
+                "status": "ok",
+                "detail": f"NSE-finetuned weights loaded from {KRONOS_WEIGHTS_DIR}",
+                "source": "finetuned",
+            }
         else:
             log.info(f"Loading pretrained {model_id}")
             kmodel = Kronos.from_pretrained(model_id)
+            _kronos_status = {
+                "status": "degraded",
+                "detail": f"pretrained weights ({model_id}), not NSE-finetuned — "
+                           "trained predominantly on Chinese A-share/crypto data",
+                "source": "pretrained",
+            }
 
         predictor = KronosPredictor(kmodel, tokenizer, device=device, max_context=max_context)
         log.info(f"Kronos ({model_size}) ready on {device}, max_context={max_context}")
         return predictor
     except Exception as e:
         log.warning(f"Kronos unavailable ({e}) — using mock forecaster for dev mode")
+        _kronos_status = {
+            "status": "unavailable",
+            "detail": f"mock forecaster — Kronos load failed: {e}",
+            "source": "mock",
+        }
         return MockKronosForecaster()
 
 
@@ -164,6 +197,7 @@ def forecast(df: pd.DataFrame, steps: int | None = None) -> dict:
     """
     steps = steps or settings.KRONOS_FORECAST_STEPS
     model = get_kronos()
+    status = get_kronos_status()
     inp = prepare_kronos_input(df)
 
     if len(inp) < settings.KRONOS_MIN_CANDLES:
@@ -171,7 +205,10 @@ def forecast(df: pd.DataFrame, steps: int | None = None) -> dict:
             "error": (
                 f"Insufficient data for Kronos forecast "
                 f"({len(inp)} candles, need {settings.KRONOS_MIN_CANDLES})"
-            )
+            ),
+            "component_status": status["status"],
+            "component_source": status["source"],
+            "component_detail": status["detail"],
         }
 
     try:
@@ -181,7 +218,12 @@ def forecast(df: pd.DataFrame, steps: int | None = None) -> dict:
             forecast_df = _run_predictor(model, inp, steps)
     except Exception as e:
         log.warning(f"Kronos predict failed ({e}) — returning HOLD")
-        return {"error": f"Kronos predict failed: {e}"}
+        return {
+            "error": f"Kronos predict failed: {e}",
+            "component_status": "unavailable",
+            "component_source": status["source"],
+            "component_detail": f"predict() raised: {e}",
+        }
 
     current_price = float(df["close"].iloc[-1])
     predicted_close = float(forecast_df["close"].iloc[-1])
@@ -220,4 +262,9 @@ def forecast(df: pd.DataFrame, steps: int | None = None) -> dict:
         "move_pct": round(move_pct, 3),
         "candle_forecast": forecast_df.to_dict(orient="records"),
         "reasoning": reasoning,
+        # Stage 0 truth-layer status — combine.py checks this to decide whether
+        # to blend Kronos in at all (see models/kronos/combine.py).
+        "component_status": status["status"],
+        "component_source": status["source"],
+        "component_detail": status["detail"],
     }

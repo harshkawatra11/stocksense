@@ -28,7 +28,11 @@ from datetime import datetime, timezone
 import requests
 
 from config import settings
-from models.slm.ollama_client import ollama_available as _ollama_available, ollama_generate
+from models.slm.ollama_client import (
+    ollama_available as _ollama_available,
+    ollama_generate,
+    is_cloud as _ollama_is_cloud,
+)
 
 log = logging.getLogger(__name__)
 
@@ -95,8 +99,16 @@ class MacroContext:
     market_summary: str                   # one-line headline read
     sectors: dict[str, dict]              # sector -> {score: float, drivers: str}
     headline_count: int
-    source: str                           # "slm" | "fallback"
+    source: str                           # "slm" | "fallback"  (legacy field, kept for compat)
     headlines: list[dict] = field(default_factory=list)
+    # Stage 0 truth-layer status. status: "ok"|"degraded"|"unavailable".
+    # component_source: "ollama_local" | "ollama_cloud" | "neutral_fallback" — tells
+    # downstream code/health-endpoint whether sector scores are genuinely-neutral
+    # (a real Ollama read that came back flat) or a fallback because Ollama was
+    # unreachable/empty/unparseable (indistinguishable from "neutral" without this).
+    component_status: str = "ok"
+    component_source: str = "ollama_local"
+    component_detail: str = ""
 
     def sector_score(self, sector: str | None) -> float:
         """Sentiment in [-1, 1] for a sector; 0.0 if unknown/missing."""
@@ -240,10 +252,20 @@ def score_sectors(headlines: list[dict]) -> MacroContext:
         headline_count=len(headlines),
         source="slm",
         headlines=headlines,
+        component_status="ok",
+        component_source="ollama_cloud" if _ollama_is_cloud() else "ollama_local",
+        component_detail=f"scored {len(headlines)} headlines via qwen2.5",
     )
 
 
 def _neutral_context(ts: str, n: int, reason: str) -> MacroContext:
+    """
+    All-zero sector context used whenever the macro layer couldn't produce a real
+    read (Ollama unreachable, empty/unparseable output, no headlines). Stage 0:
+    component_source="neutral_fallback" so downstream code and the health endpoint
+    can tell this apart from a genuine "the market has no sector bias today" read
+    (which would carry component_source="ollama_local"/"ollama_cloud" instead).
+    """
     return MacroContext(
         generated_at=ts,
         market_bias="NEUTRAL",
@@ -251,6 +273,9 @@ def _neutral_context(ts: str, n: int, reason: str) -> MacroContext:
         sectors={s: {"score": 0.0, "drivers": "n/a"} for s in SECTORS},
         headline_count=n,
         source="fallback",
+        component_status="unavailable",
+        component_source="neutral_fallback",
+        component_detail=reason,
     )
 
 

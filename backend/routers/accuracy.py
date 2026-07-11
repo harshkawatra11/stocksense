@@ -1,7 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 import asyncpg
 import os
 from config import settings
+from intelligence.accuracy_tracker import compute_net_expectancy
 
 router = APIRouter()
 DB_DSN = settings.DATABASE_DSN
@@ -34,6 +35,21 @@ async def accuracy_summary():
         "avg_confidence": round(float(r["avg_confidence"] or 0), 4),
         "today_total": r["today_total"],
     }
+
+
+@router.get("/net-expectancy")
+async def net_expectancy(n: int = Query(60, le=1000)):
+    """
+    Net (cost-adjusted) expectancy over the trailing `n` resolved signals —
+    subtracts intelligence.costs.ROUND_TRIP_COST_PCT from every realized
+    outcome before averaging. This is the honest complement to /summary's
+    raw win rate; see intelligence/accuracy_tracker.compute_net_expectancy.
+    """
+    conn = await asyncpg.connect(DB_DSN)
+    try:
+        return await compute_net_expectancy(conn, n=n)
+    finally:
+        await conn.close()
 
 
 @router.get("/by-model")

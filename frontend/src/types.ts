@@ -38,6 +38,7 @@ export interface Signal {
   actual_close?: number
   stock_name?: string
   sector?: string
+  components_json?: ComponentStatuses | null
 }
 
 export interface TerminalLine {
@@ -86,6 +87,7 @@ export interface LiveSignal {
   target_eta_days?: number
   expected_move_pct?: number
   fired_at?: string
+  components_json?: ComponentStatuses | null
 }
 
 export interface Account {
@@ -205,6 +207,29 @@ export interface BrainStatus {
   today: { buys: number; sells: number; passes: number; realized_pnl: number }
   model: { lgbm_latest_mtime: string | null }
   groww_feed: { configured: boolean }
+}
+
+// ---- Stage 0 truth layer ----
+export interface ComponentStatus {
+  status: 'ok' | 'degraded' | 'unavailable'
+  detail: string
+  source?: string   // kronos: finetuned|pretrained|mock|unavailable; llm_synthesis: claude|codex|gemini|skipped; macro: ollama_local|ollama_cloud|neutral_fallback
+  stale?: boolean   // lightgbm only
+}
+
+export interface ComponentStatuses {
+  kronos: ComponentStatus
+  lightgbm: ComponentStatus
+  llm_synthesis: ComponentStatus
+  macro: ComponentStatus
+}
+
+export interface SystemHealth {
+  generated_at: string
+  components: ComponentStatuses
+  data_freshness: DataStatus
+  angel_one: { tripped: boolean | null; last_error: string | null; retry_in_seconds: number | null }
+  lightgbm_model: { exists: boolean; mtime: string | null; age_hours: number | null }
 }
 
 export type Tab = 'watchlist' | 'portfolio' | 'brain' | 'charts' | 'market' | 'intelligence' | 'live' | 'logs'

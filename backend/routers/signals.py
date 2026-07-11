@@ -3,8 +3,21 @@ from data.db.database import AsyncSessionLocal
 from sqlalchemy import select, desc, text
 from data.db.database import Signal, SignalReasoning
 import asyncpg
+import json
 import os
 from config import settings
+
+
+def _parse_components_json(rows: list[dict]) -> list[dict]:
+    """asyncpg returns JSONB as a raw string — decode components_json for the frontend."""
+    for r in rows:
+        cj = r.get("components_json")
+        if isinstance(cj, str):
+            try:
+                r["components_json"] = json.loads(cj)
+            except (TypeError, ValueError):
+                r["components_json"] = None
+    return rows
 
 router = APIRouter()
 DB_DSN = settings.DATABASE_DSN
@@ -20,7 +33,7 @@ async def get_recent_signals(limit: int = Query(50, le=200)):
                s.ml_confidence, s.kronos_confidence, s.slm_confidence,
                s.claude_confidence, s.final_confidence,
                s.status, s.fired_at, s.actual_close,
-               st.name as stock_name, st.sector
+               st.name as stock_name, st.sector, s.components_json
         FROM signals s
         JOIN stocks st ON st.ticker = s.ticker
         ORDER BY s.fired_at DESC
@@ -29,7 +42,7 @@ async def get_recent_signals(limit: int = Query(50, le=200)):
         limit,
     )
     await conn.close()
-    return [dict(r) for r in rows]
+    return _parse_components_json([dict(r) for r in rows])
 
 
 @router.get("/{signal_id}/reasoning")
@@ -61,4 +74,4 @@ async def get_todays_signals():
         """
     )
     await conn.close()
-    return [dict(r) for r in rows]
+    return _parse_components_json([dict(r) for r in rows])

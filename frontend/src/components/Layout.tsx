@@ -4,6 +4,7 @@ import { Briefcase, List, TrendingUp, Globe, Cpu, Zap, ScrollText, BrainCircuit 
 import { useMarketStatus } from '../hooks/useMarketStatus'
 import { useBackendHealth } from '../hooks/useBackendHealth'
 import { useMarketIndices } from '../hooks/useMarketIndices'
+import SystemHealthBar from './SystemHealthBar'
 
 interface Props {
   activeTab: Tab
@@ -173,6 +174,12 @@ export default function Layout({ activeTab, onTabChange, children }: Props) {
 
           {/* Backend health */}
           <BackendIndicator />
+
+          {/* Divider */}
+          <div className="w-px h-5 bg-border" />
+
+          {/* Stage 0 truth layer — per-component pipeline health */}
+          <SystemHealthBar />
 
           {/* Right: market status + clock */}
           <div className="ml-auto">

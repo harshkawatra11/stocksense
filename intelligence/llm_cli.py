@@ -7,9 +7,17 @@ its models come from the provider config (intelligence/provider_config.py), chos
 the first-run modal. All three are driven non-interactively with the prompt on stdin.
 
 Public API:
-    run(prompt, role, system="") -> str   # role: "fast" | "deep"
+    run(prompt, role, system="") -> str   # role: "fast" | "deep"; "" on failure (legacy)
     detect() -> dict                        # which CLIs are installed
     active_backend() / active_label()       # current choice, for tagging output
+    get_component_status() -> dict          # Stage 0 truth-layer status of the last run() call
+
+Stage 0 truth layer: run() still returns "" on failure for backward compatibility
+(existing callers do `if out:` and no-op), but it now also records an explicit
+status object — {status, detail, source} — for the most recent call, retrievable
+via get_component_status(). Callers that care whether synthesis actually happened
+(rather than silently no-op'ing) should check get_component_status() after calling
+run(), or catch LLMUnavailable if they use run_strict().
 
 No API keys here — each CLI carries its own auth (the user logs in once with that CLI).
 """
@@ -29,6 +37,27 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 180
 DEFAULT_RETRIES = 3
+
+
+class LLMUnavailable(Exception):
+    """Raised by run_strict() when the synthesis CLI could not produce a response.
+    Carries the same {status, detail, source} shape as get_component_status()."""
+
+    def __init__(self, detail: str, source: str):
+        self.status = "unavailable"
+        self.detail = detail
+        self.source = source
+        super().__init__(detail)
+
+
+# Status of the most recent run() call, per the Stage 0 truth-layer contract:
+# {status: "ok"|"degraded"|"unavailable", detail: str, source: "claude"|"codex"|"gemini"|"skipped"}
+_last_status: dict = {"status": "unavailable", "detail": "no synthesis call made yet", "source": "skipped"}
+
+
+def get_component_status() -> dict:
+    """Status of the most recent run()/run_strict() call, per the shared status contract."""
+    return dict(_last_status)
 
 # Per-backend metadata: the CLI binary to resolve and a human label.
 BACKENDS = {
@@ -154,26 +183,53 @@ def run(prompt: str, role: str = "fast", system: str = "",
     Run the prompt through the active synthesis CLI. role selects the model tier
     ("fast" for per-signal review, "deep" for EOD/calibration/weekend). Returns the
     response text, or '' if the CLI is missing/failing (caller treats '' as no-op).
+
+    Also records an explicit status in get_component_status() so callers that want
+    to know WHY synthesis was skipped (rather than silently treating '' as success)
+    can check it. Use run_strict() to get a raised LLMUnavailable instead.
     """
+    global _last_status
     backend = active_backend()
     binary = BACKENDS[backend]["bin"]
     if _which(binary) is None:
+        detail = f"{binary} CLI not found on PATH"
         log.warning("Synthesis CLI '%s' not found on PATH — skipping synthesis", binary)
+        _last_status = {"status": "unavailable", "detail": detail, "source": "skipped"}
         return ""
 
     model = _model_for(role)
     runner = _RUNNERS[backend]
 
+    last_detail = "unknown failure"
     for attempt in range(retries):
         try:
             out = runner(prompt, model, system, timeout)
             if out:
+                _last_status = {"status": "ok", "detail": f"{backend} responded", "source": backend}
                 return out
+            last_detail = f"{backend} returned empty response"
         except subprocess.TimeoutExpired:
+            last_detail = f"{backend} CLI timeout after {timeout}s (attempt {attempt + 1}/{retries})"
             log.warning("%s CLI timeout (attempt %d)", backend, attempt + 1)
         except FileNotFoundError:
+            last_detail = f"{backend} CLI vanished from PATH"
             log.warning("%s CLI vanished from PATH", backend)
+            _last_status = {"status": "unavailable", "detail": last_detail, "source": "skipped"}
             return ""
         if attempt < retries - 1:
             time.sleep(2 ** attempt)
+    _last_status = {"status": "unavailable", "detail": f"{last_detail} — retries exhausted", "source": backend}
     return ""
+
+
+def run_strict(prompt: str, role: str = "fast", system: str = "",
+                retries: int = DEFAULT_RETRIES, timeout: int = DEFAULT_TIMEOUT) -> str:
+    """
+    Same as run(), but raises LLMUnavailable instead of returning '' on failure.
+    Prefer this in new call sites that must not silently proceed as if synthesis ran.
+    """
+    out = run(prompt, role=role, system=system, retries=retries, timeout=timeout)
+    if not out:
+        status = get_component_status()
+        raise LLMUnavailable(status["detail"], status["source"])
+    return out

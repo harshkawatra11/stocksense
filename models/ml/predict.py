@@ -21,11 +21,47 @@ _feature_cols = None
 _threshold = 0.5
 _model_mtime: float = 0.0
 
+# Stage 0 truth-layer status for the LightGBM component.
+# status: "ok" | "degraded" | "unavailable"
+# source: "loaded" | "stale" | "hot_reload_check_failed" | "unavailable"
+STALENESS_THRESHOLD_DAYS = 14
+_model_status: dict = {
+    "status": "unavailable", "detail": "model not loaded yet", "source": "unavailable",
+}
+
+
+def get_model_status() -> dict:
+    """Stage 0 status of the LightGBM component, per the shared status contract.
+    Recomputes staleness against the current model's mtime each call (cheap: one
+    os.path.getmtime), so a caller polling the health endpoint always sees a fresh
+    staleness verdict, not just whatever load_model() saw at load time."""
+    if _model_mtime <= 0:
+        return dict(_model_status)
+    import time as _time
+    age_days = (_time.time() - _model_mtime) / 86400.0
+    if age_days > STALENESS_THRESHOLD_DAYS:
+        return {
+            "status": "degraded",
+            "detail": f"model is {age_days:.1f} days old (stale threshold {STALENESS_THRESHOLD_DAYS}d) "
+                      "— no successful retrain has landed recently",
+            "source": "stale",
+        }
+    # Not stale — report whatever load-time status we have, unless it recorded a
+    # hot-reload failure (which stays surfaced until the next successful reload).
+    if _model_status.get("source") == "hot_reload_check_failed":
+        return dict(_model_status)
+    return {"status": "ok", "detail": f"model is {age_days:.1f} days old", "source": "loaded"}
+
 
 def load_model():
-    global _model, _explainer, _feature_cols, _threshold, _model_mtime
+    global _model, _explainer, _feature_cols, _threshold, _model_mtime, _model_status
     path = os.path.join(MODEL_SAVE_DIR, "lgbm_latest.pkl")
     if not os.path.exists(path):
+        _model_status = {
+            "status": "unavailable",
+            "detail": f"no trained model at {path}",
+            "source": "unavailable",
+        }
         raise FileNotFoundError(f"No trained model at {path}. Run models/ml/train.py first.")
     with open(path, "rb") as f:
         _model = pickle.load(f)
@@ -49,10 +85,12 @@ def load_model():
     _explainer = shap.TreeExplainer(_model)
     _feature_cols = get_all_feature_columns()
     _model_mtime = os.path.getmtime(path)
+    _model_status = {"status": "ok", "detail": f"loaded from {path}", "source": "loaded"}
     log.info("LightGBM model loaded.")
 
 
 def get_model():
+    global _model_status
     if _model is None:
         load_model()
     else:
@@ -62,8 +100,18 @@ def get_model():
             if os.path.getmtime(path) > _model_mtime:
                 log.info("lgbm_latest.pkl changed on disk — reloading model.")
                 load_model()
-        except OSError:
-            pass
+        except OSError as e:
+            # Stage 0: don't swallow this silently — we may now be serving a stale
+            # model with no way to tell from the caller's side. Log at warning level
+            # and record it so get_model_status() surfaces it until the next
+            # successful reload.
+            log.warning("Hot-reload staleness check failed (%s) — continuing to serve "
+                        "the in-memory model, which may now be stale.", e)
+            _model_status = {
+                "status": "degraded",
+                "detail": f"hot-reload mtime check failed: {e} — serving previously loaded model",
+                "source": "hot_reload_check_failed",
+            }
     return _model, _explainer, _feature_cols, _threshold
 
 

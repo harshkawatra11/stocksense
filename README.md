@@ -268,7 +268,7 @@ stocksense/
 │   ├── kronos/     (integration.py · combine.py · kronos_repo/)
 │   └── slm/        (infer.py · ollama_client.py — local/cloud client)
 ├── data/
-│   ├── db/         (schema.sql … schema_v4_brain.sql · schema_v5_providers.sql)
+│   ├── db/         (schema.sql … schema_v4_brain.sql · schema_v5_providers.sql · schema_v6_health.sql)
 │   └── pipeline/   (fetch_historical_new.py · fetch_angel_daily.py · fetch_groww.py …)
 ├── scheduler/market_runner.py       # 12 cron jobs (IST)
 ├── frontend/                        # React + Vite (Brain · Live · Intelligence · …)
@@ -290,7 +290,7 @@ stocksense/
 <details>
 <summary><b>Signals & reasoning</b></summary>
 
-- **`signals`** — type, timeframe, price/target/stop, `final_confidence`, ETA, predicted path, status.
+- **`signals`** — type, timeframe, price/target/stop, `final_confidence`, ETA, predicted path, status, `components_json` (per-component pipeline health snapshot — Stage 0 truth layer).
 - **`signal_reasoning`** — per-model reasoning (`lgbm` · `kronos` · `macro` · `claude`/synthesis) for each signal.
 - **`learnings`** — EOD-extracted, structured learnings fed back into synthesis.
 </details>
@@ -343,7 +343,7 @@ The backend serves the built frontend, so the whole app lives at a single URL: *
 ### 3 · Initialize the database
 
 ```bash
-for v in schema schema_v2_live schema_v3_intelligence schema_v4_brain schema_v5_providers; do
+for v in schema schema_v2_live schema_v3_intelligence schema_v4_brain schema_v5_providers schema_v6_health; do
   docker exec -i stocksense-db-1 psql -U postgres -d stocksense < data/db/$v.sql
 done
 ```

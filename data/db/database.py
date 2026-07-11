@@ -71,6 +71,7 @@ class Signal(Base):
     fired_at = Column(TIMESTAMPTZ)
     resolved_at = Column(TIMESTAMPTZ)
     actual_close = Column(Numeric(12, 2))
+    components_json = Column(JSONB)  # Stage 0 truth layer — per-component status snapshot
 
 
 class SignalReasoning(Base):

@@ -50,11 +50,48 @@ async def refresh_weights_from_db():
         log.warning(f"Could not refresh weights from DB: {e}. Using {_lgbm_weight}/{_kronos_weight}")
 
 
+# Kronos sources that must NOT be blended into the weighted combine — a mock
+# (random-walk noise) or unavailable model has zero informational value, and
+# blending it in at its usual 60% weight would silently corrupt the combined
+# signal. "pretrained" is degraded (off-domain weights) but still a real model
+# output, so it stays in the blend — just flagged via component_status.
+_EXCLUDED_KRONOS_SOURCES = {"mock", "unavailable"}
+
+
 def combine_signals(ml_result: dict, kronos_result: dict) -> dict:
     ml_conf = ml_result.get("confidence", 0.5)
     kr_conf = kronos_result.get("confidence", 0.5)
     ml_sig = ml_result.get("signal", "HOLD")
     kr_sig = kronos_result.get("signal", "HOLD")
+
+    kronos_source = kronos_result.get("component_source", "unavailable")
+    kronos_excluded = kronos_source in _EXCLUDED_KRONOS_SOURCES
+
+    if kronos_excluded:
+        # Kronos is noise or absent this cycle — go ML-only rather than blend in
+        # random-walk confidence. Renormalize: ML gets full weight, Kronos zero.
+        lgbm_w, kronos_w = 1.0, 0.0
+        combined_conf = round(ml_conf, 4)
+        reasoning = (
+            f"Combined Analysis ({ml_sig} @ {combined_conf*100:.1f}% confidence, ML-only):\n"
+            f"  • LightGBM: {ml_sig} at {ml_conf*100:.1f}% (weight 100%)\n"
+            f"  • Kronos EXCLUDED — component_source={kronos_source} "
+            f"({kronos_result.get('component_detail', 'no detail')}); "
+            "not blended to avoid mixing in noise."
+        )
+        return {
+            "signal": ml_sig,
+            "confidence": combined_conf,
+            "ml_signal": ml_sig,
+            "kronos_signal": kr_sig,
+            "ml_confidence": round(ml_conf, 4),
+            "kronos_confidence": round(kr_conf, 4),
+            "combined_reasoning": reasoning,
+            "agreement": None,
+            "kronos_excluded": True,
+            "kronos_component_status": kronos_result.get("component_status", "unavailable"),
+            "kronos_component_source": kronos_source,
+        }
 
     lgbm_w = _lgbm_weight
     kronos_w = _kronos_weight
@@ -78,6 +115,9 @@ def combine_signals(ml_result: dict, kronos_result: dict) -> dict:
             "kronos_confidence": round(kr_conf, 4),
             "combined_reasoning": reasoning,
             "agreement": True,
+            "kronos_excluded": False,
+            "kronos_component_status": kronos_result.get("component_status", "ok"),
+            "kronos_component_source": kronos_source,
         }
 
     # Agreement bonus (adaptive — tuned by nightly calibration within bounds)
@@ -100,6 +140,9 @@ def combine_signals(ml_result: dict, kronos_result: dict) -> dict:
             "kronos_confidence": kr_conf,
             "combined_reasoning": reasoning,
             "agreement": False,
+            "kronos_excluded": False,
+            "kronos_component_status": kronos_result.get("component_status", "ok"),
+            "kronos_component_source": kronos_source,
         }
     else:
         agreement_boost = 0.0
@@ -125,4 +168,7 @@ def combine_signals(ml_result: dict, kronos_result: dict) -> dict:
         "kronos_confidence": round(kr_conf, 4),
         "combined_reasoning": reasoning,
         "agreement": ml_sig == kr_sig,
+        "kronos_excluded": False,
+        "kronos_component_status": kronos_result.get("component_status", "ok"),
+        "kronos_component_source": kronos_source,
     }
