@@ -103,13 +103,19 @@ class Settings:
 
     @property
     def CASH_AVAILABLE(self) -> float:
-        """Deployable capital (₹) — used to annotate affordability of buy signals."""
-        return float(os.getenv("CASH_AVAILABLE", "500"))
+        """Deployable capital (₹) — used to annotate affordability of buy signals.
+        Raised from the original ₹500 (mathematically insolvent — most signals
+        resolved to 0 affordable shares, see WHAT_TO_DO_NEXT.txt 2.3) to ₹100,000
+        as part of the "epoch 2" funding reset. See intelligence/trading_account.py
+        get_current_epoch_start() — stats computed before this reset are excluded
+        from the live PAPER->LIVE gate."""
+        return float(os.getenv("CASH_AVAILABLE", "100000"))
 
     @property
     def CASH_RESERVE(self) -> float:
-        """Reserve capital (₹) held back, not deployed."""
-        return float(os.getenv("CASH_RESERVE", "500"))
+        """Reserve capital (₹) held back, not deployed. ~10% of CASH_AVAILABLE by
+        default, leaving ~90% deployable."""
+        return float(os.getenv("CASH_RESERVE", "10000"))
 
     @property
     def CLAUDE_SYNTHESIS_ENABLED(self) -> bool:

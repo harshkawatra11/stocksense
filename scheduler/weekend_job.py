@@ -2,11 +2,17 @@
 Saturday 9:00 AM IST — weekend deep review job.
 Aggregates the week's learnings + accuracy stats, calls Claude Opus for
 regime assessment, generates next-week sector watchlist, stores in DB.
+
+Also runs weekly brain-parameter calibration (moved here from market_runner's
+nightly schedule — see scheduler/market_runner.py's commented-out "calibration"
+job and intelligence/calibration.py's module docstring for why: a week of
+resolved outcomes is a much less noisy basis for parameter changes than one day).
 """
 import asyncpg
 import logging
 from datetime import datetime, timezone, timedelta
 from intelligence.claude_cli import weekend_deep_review
+from intelligence.calibration import run_calibration
 from config import settings
 
 log = logging.getLogger(__name__)
@@ -121,6 +127,17 @@ async def run_weekend_review():
         log.error(f"Weekend review failed: {e}")
     finally:
         await conn.close()
+
+    # Weekly calibration runs after the review, in its own connection/try so a
+    # calibration failure can't mask (or be masked by) the review's outcome.
+    try:
+        log.info("Starting weekly calibration")
+        result = await run_calibration()
+        log.info("Weekly calibration complete: %d applied, %d reverted. %s",
+                  len(result.get("applied", [])), len(result.get("reverted", [])),
+                  result.get("summary", "")[:200])
+    except Exception as e:
+        log.error(f"Weekly calibration failed: {e}")
 
 
 if __name__ == "__main__":

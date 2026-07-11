@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from data.db.database import init_db
 from backend.routers import signals, portfolio, logs, accuracy, market_data, ohlcv, market_overview, live, brain, providers, system_health, ws_prices, confirmations
 from backend.services.quote_cache import start_quote_cache_feed
+from intelligence.intraday_stops import start_intraday_stop_monitor
 from data.pipeline.nse_ticker_loader import FALLBACK_TICKERS as NSE_TICKERS
 from data.pipeline.upstox_client import resolve_instrument_keys
 from intelligence.portfolio_guard import get_portfolio_tickers as get_held_tickers
@@ -70,6 +71,11 @@ async def lifespan(app: FastAPI):
     # wiring (quote_cache.update tolerates new symbols showing up anytime).
     instrument_keys, symbol_map = await _build_live_watchlist()
     asyncio.create_task(start_quote_cache_feed(instrument_keys, symbol_map=symbol_map))
+
+    # Fast intraday stop/target monitor: polls quote_cache every few seconds
+    # and exits breached positions immediately, independent of the 30-min
+    # position_review scheduler cycle. See intelligence/intraday_stops.py.
+    asyncio.create_task(start_intraday_stop_monitor())
 
     log.info("StockSense backend started")
     yield

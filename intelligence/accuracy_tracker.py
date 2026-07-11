@@ -12,12 +12,19 @@ Outcome classification (explicit, consistent everywhere in this module):
 Every realized/marked outcome has intelligence.costs.net_return applied before
 win rate or expectancy is computed, so both numbers are cost-aware, not just
 directionally-correct-on-paper.
+
+Epoch filter: both compute_rolling_accuracy() and compute_net_expectancy() only
+consider signals fired at/after the current funding epoch's start (see
+intelligence.trading_account.get_current_epoch_start) — signals fired against
+the old, insolvent ₹500 account are excluded so they never count toward the
+live PAPER->LIVE gate (see trading_mode.py).
 """
 import asyncpg
 import logging
 from datetime import datetime, timezone, timedelta
 from config import settings
 from intelligence.costs import net_return
+from intelligence.trading_account import get_current_epoch_start
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +86,8 @@ async def compute_rolling_accuracy(conn, days: int = 7) -> dict:
     compute_net_expectancy() for the cost-adjusted metric.
     """
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    epoch_start = await get_current_epoch_start(conn)
+    since = max(since, epoch_start)
 
     rows = await conn.fetch(
         """
@@ -135,15 +144,17 @@ async def compute_net_expectancy(conn, n: int = 60) -> dict:
           "gross_expectancy_bps": <float | None>,    # mean gross return per trade, for comparison
         }
     """
+    epoch_start = await get_current_epoch_start(conn)
     rows = await conn.fetch(
         """
         SELECT signal_type, status, price_at_signal, target_price, stop_loss, actual_close
         FROM signals
         WHERE status = ANY($1::text[])
+          AND fired_at >= $3
         ORDER BY resolved_at DESC NULLS LAST, fired_at DESC
         LIMIT $2
         """,
-        list(RESOLVED_STATUSES), n,
+        list(RESOLVED_STATUSES), n, epoch_start,
     )
 
     gross_returns: list[float] = []

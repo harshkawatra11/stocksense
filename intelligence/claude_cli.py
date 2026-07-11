@@ -262,11 +262,14 @@ Be specific about what pattern failed, not generic platitudes."""
 
 def calibration_call(day_stats: dict, current_params: list[dict], learnings: list[dict]) -> dict:
     """
-    Nightly self-calibration — Claude Opus proposes bounded adjustments to the
-    brain's adaptive parameters based on the day's realized outcomes.
+    Weekly self-calibration (moved from nightly — see intelligence/calibration.py) —
+    Claude Opus proposes bounded adjustments to the brain's adaptive parameters
+    based on the trailing week's realized outcomes.
     current_params: [{param_name, value, min_value, max_value}]
     Returns {"changes": [{"param": str, "new_value": float, "reason": str}], "summary": str}.
     An empty/unparseable response means NO changes — fail-safe by design.
+    Note: whatever the caller proposes here still gets EWMA-smoothed against the
+    current value before being applied — see CALIBRATION_ALPHA in calibration.py.
     """
     params_block = "\n".join(
         f"- {p['param_name']}: {p['value']} (allowed range {p['min_value']}–{p['max_value']})"
@@ -275,24 +278,24 @@ def calibration_call(day_stats: dict, current_params: list[dict], learnings: lis
     learnings_text = "\n".join(
         f"- {l.get('title')}: {(l.get('body') or '')[:200]}"
         for l in (learnings or [])[:20]
-    ) or "(none today)"
+    ) or "(none)"
 
-    prompt = f"""Nightly calibration for the StockSense autonomous paper-trading brain.
+    prompt = f"""Weekly calibration for the StockSense autonomous paper-trading brain.
 
-TODAY'S OUTCOMES:
+THIS WEEK'S OUTCOMES (trailing 7 days):
 {json.dumps(day_stats, indent=2, default=str)}
 
 CURRENT ADAPTIVE PARAMETERS (each clamped to its allowed range — you may only adjust these, nothing else):
 {params_block}
 
-TODAY'S LEARNINGS:
+ACTIVE LEARNINGS:
 {learnings_text}
 
 Decide whether any parameter should move, and by how much. Principles:
-- Small steps: never move a parameter more than ~10% of its allowed range in one night.
+- Small steps: never move a parameter more than ~10% of its allowed range in one week.
 - If win rate is poor or many auto-buys stopped out, consider raising confidence_threshold or lowering max_position_pct.
 - If the brain passed on signals that would have won, consider the opposite — but only with evidence from the outcomes above.
-- If there is not enough data to justify a change (e.g. <5 resolved trades), change NOTHING.
+- If there is not enough data to justify a change, change NOTHING.
 
 Respond as JSON only:
 {{

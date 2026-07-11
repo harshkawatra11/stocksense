@@ -35,6 +35,10 @@ data/nse_raw/
 # SLM training data (generated, not source-controlled)
 data/slm_training/*.jsonl
 
+# Backtest checkpoints (large intermediate CSVs, regenerable) — reports/ IS
+# committed (small markdown summaries worth keeping as a track record).
+backtest/checkpoints/
+
 # Logs
 *.log
 *.err

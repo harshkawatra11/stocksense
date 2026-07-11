@@ -21,7 +21,12 @@ import asyncpg
 from config import settings
 from intelligence.activity import log_activity
 from intelligence.brain_params import get_params
-from intelligence.portfolio_guard import get_portfolio_tickers
+from intelligence.portfolio_guard import (
+    get_portfolio_tickers,
+    check_position_limit,
+    check_sector_concentration,
+    check_daily_loss_circuit_breaker,
+)
 from intelligence.trading_account import get_account, get_actionable_signals, record_decision
 
 log = logging.getLogger(__name__)
@@ -60,6 +65,18 @@ async def auto_trade(conn=None) -> dict:
         held = await get_portfolio_tickers(conn)
         open_count = await _open_position_count(conn)
 
+        # Portfolio-level risk guards (additional to the budget-based sizing
+        # below) — checked once per run, not per candidate, since they're
+        # account-wide state that doesn't change mid-batch except by our own
+        # buys (handled by re-checking check_position_limit per candidate).
+        breaker_ok, breaker_reason = await check_daily_loss_circuit_breaker(conn)
+        if not breaker_ok:
+            log.warning("auto_trade: %s", breaker_reason)
+            await log_activity(
+                conn, event_type="NOTE", note=f"[risk] {breaker_reason}",
+                payload={"guard": "daily_loss_circuit_breaker"},
+            )
+
         candidates = await get_actionable_signals(conn, limit=20)
         # This run's batch only.
         from datetime import datetime, timedelta, timezone
@@ -93,7 +110,14 @@ async def auto_trade(conn=None) -> dict:
                 reason = "already holding position"
             elif open_count >= max_open:
                 reason = f"max open positions reached ({open_count}/{max_open})"
+            elif not breaker_ok:
+                reason = f"[risk] {breaker_reason}"
             else:
+                pos_ok, pos_reason = await check_position_limit(conn)
+                if not pos_ok:
+                    reason = f"[risk] {pos_reason}"
+
+            if reason is None:
                 acct = await get_account(conn)  # re-read: cash moves as we buy
                 budget = acct["cash_available"] * max_pos_pct
                 qty = int(budget // price) if price > 0 else 0
@@ -102,6 +126,11 @@ async def auto_trade(conn=None) -> dict:
                         f"budget ₹{budget:.0f} ({max_pos_pct*100:.0f}% of "
                         f"₹{acct['cash_available']:.0f}) can't buy 1 share @ ₹{price:.2f}"
                     )
+                else:
+                    order_value = qty * price
+                    sector_ok, sector_reason = await check_sector_concentration(conn, ticker, order_value)
+                    if not sector_ok:
+                        reason = f"[risk] {sector_reason}"
 
             if reason:
                 try:

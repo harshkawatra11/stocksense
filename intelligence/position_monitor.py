@@ -65,17 +65,61 @@ def _classify(progress_pct: float, days_elapsed: float, eta_days: float | None) 
     return ("on_track", "HOLD") if progress_pct >= 0 else ("behind", "HOLD")
 
 
+async def _resolve_stop_target(conn, ticker: str, entry: float) -> dict:
+    """Stop/target/eta for a ticker's originating signal, with sane defaults
+    when no signal is on record. Shared by the slow re-analysis cycle and the
+    fast intraday breach check so both agree on the same numbers."""
+    sig = await _originating_signal(conn, ticker)
+    target = float(sig["target_price"]) if sig and sig["target_price"] else round(entry * 1.03, 2)
+    stop = float(sig["stop_loss"]) if sig and sig["stop_loss"] else round(entry * 0.97, 2)
+    eta_days = float(sig["target_eta_days"]) if sig and sig.get("target_eta_days") else None
+    signal_id = sig["id"] if sig else None
+    return {"target": target, "stop": stop, "eta_days": eta_days, "signal_id": signal_id}
+
+
+async def check_stop_target_breach(conn, pos: dict, current_price: float) -> dict | None:
+    """
+    Fast breach primitive: literal stop-loss/target check against a live price,
+    with none of review_position's richer re-forecast work. Returns None if
+    neither has been breached, otherwise a dict shaped like a review_position
+    result (ticker/signal_id/status/verdict/progress_pct/current_price/reasoning)
+    so it can be fed straight into auto_trader.auto_exit — the same exit path
+    the slow 30-min cycle uses. This is the primitive the fast intraday loop
+    (intelligence/intraday_stops.py) polls every few seconds; the slow loop
+    still owns the full progress/ETA re-analysis via review_position/_classify.
+    """
+    ticker = pos["ticker"]
+    entry = float(pos["avg_price"])
+    st = await _resolve_stop_target(conn, ticker, entry)
+    target, stop, signal_id = st["target"], st["stop"], st["signal_id"]
+
+    if current_price <= stop:
+        status, verdict = "stopped", "EXIT"
+    elif current_price >= target:
+        status, verdict = "target_hit", "EXIT"
+    else:
+        return None
+
+    denom = (target - entry) if (target - entry) != 0 else 1e-9
+    progress_pct = round((current_price - entry) / denom * 100, 2)
+    reasoning = (
+        f"{ticker}: fast intraday breach — entry ₹{entry:.1f}, live ₹{current_price:.1f} "
+        f"vs stop ₹{stop:.1f} / target ₹{target:.1f}. Status: {status} → {verdict}."
+    )
+    return {
+        "ticker": ticker, "signal_id": signal_id, "status": status, "verdict": verdict,
+        "progress_pct": progress_pct, "current_price": current_price, "reasoning": reasoning,
+    }
+
+
 async def review_position(conn, pos: dict) -> dict | None:
     """Re-analyze one active position. Persists a position_reviews row + activity event."""
     ticker = pos["ticker"]
     entry = float(pos["avg_price"])
     buy_date = pos["buy_date"]
 
-    sig = await _originating_signal(conn, ticker)
-    target = float(sig["target_price"]) if sig and sig["target_price"] else round(entry * 1.03, 2)
-    stop = float(sig["stop_loss"]) if sig and sig["stop_loss"] else round(entry * 0.97, 2)
-    eta_days = float(sig["target_eta_days"]) if sig and sig.get("target_eta_days") else None
-    signal_id = sig["id"] if sig else None
+    st = await _resolve_stop_target(conn, ticker, entry)
+    target, stop, eta_days, signal_id = st["target"], st["stop"], st["eta_days"], st["signal_id"]
 
     # Current price
     df = await fetch_ohlcv(conn, ticker)

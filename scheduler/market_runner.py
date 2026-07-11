@@ -460,12 +460,19 @@ def build_scheduler() -> AsyncIOScheduler:
         id="eod_review", name="EOD Claude review", **common,
     )
 
-    # Nightly calibration: 4:15 PM IST, after EOD review has resolved the day.
-    scheduler.add_job(
-        task_calibration,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=15),
-        id="calibration", name="Brain parameter calibration", **common,
-    )
+    # Nightly calibration: RETIRED (see WHAT_TO_DO_NEXT.txt Section 2.7 / 4 Phase 2).
+    # A single day's resolved outcomes was too noisy a basis for parameter changes.
+    # Calibration now runs weekly, from scheduler/weekend_job.py's Saturday flow
+    # (task_weekend_review below), requiring >= MIN_RESOLVED_OUTCOMES resolved
+    # signals over the trailing week and EWMA-smoothing + rollback (see
+    # intelligence/calibration.py). task_calibration is left intact and unregistered
+    # in case of manual/ad-hoc use (archive, don't delete — same convention as the
+    # Groww intraday snapshot retirement above).
+    # scheduler.add_job(
+    #     task_calibration,
+    #     CronTrigger(day_of_week="mon-fri", hour=16, minute=15),
+    #     id="calibration", name="Brain parameter calibration", **common,
+    # )
 
     # Refresh combine weights every hour during market hours
     scheduler.add_job(

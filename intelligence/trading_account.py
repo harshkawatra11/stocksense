@@ -7,15 +7,60 @@ was acted on but what was skipped. Built for the initial low-capital phase
 (₹500 deployable) where most signals are informational until capital grows.
 
 Tables: account, decisions (see data/db/schema_v2_live.sql).
+
+Epoch marker: the account was refunded from an insolvent ₹500 seed to a real
+₹100,000 (see config.py CASH_AVAILABLE) — "epoch 2". Pre-reset decisions/signals
+are kept (never deleted) but must not count toward the live PAPER->LIVE gate,
+since they were computed against a budget that could almost never buy 1 share.
+get_current_epoch_start() persists the reset timestamp in the existing generic
+app_config table (data/db/schema_v5_providers.sql) under key 'account_epoch' —
+reused rather than adding a new migration, since it's a single row, not a new
+table shape. Seeded lazily on first read.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
 from intelligence.portfolio_guard import add_to_portfolio, remove_from_portfolio
 
 log = logging.getLogger(__name__)
+
+CURRENT_EPOCH = 2  # bump this (and reseed) if the account is ever refunded again
+
+
+async def get_current_epoch_start(conn) -> datetime:
+    """
+    Returns the UTC timestamp marking the start of the current funding epoch
+    (epoch 2 = the ₹100,000 refund). Signals/decisions before this timestamp
+    belong to the insolvent ₹500-era ledger and must be excluded from any
+    live accuracy/expectancy computation.
+
+    Additive/idempotent: if no epoch row exists yet, seeds one dated NOW() the
+    first time this is called (one-time, first-run-after-deploy behavior).
+    Never deletes or modifies historical ledger rows.
+    """
+    row = await conn.fetchrow(
+        "SELECT value FROM app_config WHERE key = 'account_epoch'"
+    )
+    if row:
+        value = row["value"]
+        if isinstance(value, str):
+            value = json.loads(value)
+        if value.get("epoch") == CURRENT_EPOCH and value.get("epoch_start"):
+            return datetime.fromisoformat(value["epoch_start"])
+
+    # No epoch row yet (or a stale/older epoch) — seed epoch 2 dated now.
+    epoch_start = datetime.now(timezone.utc)
+    await conn.execute(
+        """INSERT INTO app_config (key, value, updated_at)
+           VALUES ('account_epoch', $1::jsonb, NOW())
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+        json.dumps({"epoch": CURRENT_EPOCH, "epoch_start": epoch_start.isoformat()}),
+    )
+    log.info("Seeded account epoch %s starting %s", CURRENT_EPOCH, epoch_start.isoformat())
+    return epoch_start
 
 
 async def get_account(conn) -> dict:

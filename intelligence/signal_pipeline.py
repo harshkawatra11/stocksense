@@ -222,13 +222,10 @@ async def fetch_sector_map(conn) -> dict[str, str]:
 
 
 async def fetch_recent_learnings(conn, limit: int = 20) -> str:
-    rows = await conn.fetch(
-        """
-        SELECT title, body FROM learnings
-        ORDER BY created_at DESC LIMIT $1
-        """,
-        limit,
-    )
+    """Active (non-expired, capped) learnings for a Claude prompt. See
+    intelligence.eod_review.get_active_learnings for the lifecycle rules."""
+    from intelligence.eod_review import get_active_learnings
+    rows = await get_active_learnings(conn, limit=limit)
     if not rows:
         return ""
     return "\n".join(f"- {r['title']}: {r['body'][:200]}" for r in rows)

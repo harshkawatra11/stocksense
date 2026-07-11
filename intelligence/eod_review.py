@@ -71,8 +71,17 @@ def _learning_hash(title: str, body: str) -> str:
     return hashlib.sha256(f"{title.strip()}|{body.strip()}".encode("utf-8")).hexdigest()
 
 
+LEARNING_TTL_DAYS = 60          # a learning that hasn't been refreshed expires after this
+MIN_APPLICATIONS_FOR_JUDGEMENT = 10   # don't judge hit-rate on a small sample
+MIN_HIT_RATE = 0.5              # below this hit-rate (after enough applications), kill it
+
+
 async def save_learnings(conn, review_result: dict, today: date):
-    """Insert learnings, skipping duplicates by title+body hash against recent history."""
+    """Insert learnings, skipping duplicates by title+body hash against recent history.
+
+    Every new learning gets expires_at = created_at + LEARNING_TTL_DAYS — nothing
+    accumulates forever unless it keeps getting regenerated.
+    """
     # Pull recent learning hashes (last 90 days) to dedup against
     recent = await conn.fetch(
         "SELECT title, body FROM learnings WHERE learning_date >= $1::date - 90",
@@ -90,8 +99,9 @@ async def save_learnings(conn, review_result: dict, today: date):
         seen.add(h)
         await conn.execute(
             """
-            INSERT INTO learnings (learning_date, learning_type, ticker, title, body, tags, raw_claude_output)
-            VALUES ($1, 'eod_review', $2, $3, $4, $5, $6)
+            INSERT INTO learnings
+                (learning_date, learning_type, ticker, title, body, tags, raw_claude_output, expires_at)
+            VALUES ($1, 'eod_review', $2, $3, $4, $5, $6, NOW() + ($7 || ' days')::interval)
             """,
             today,
             learning.get("ticker"),
@@ -99,9 +109,83 @@ async def save_learnings(conn, review_result: dict, today: date):
             body,
             learning.get("tags", []),
             review_result.get("raw", ""),
+            str(LEARNING_TTL_DAYS),
         )
         saved += 1
     log.info(f"Saved {saved} new learnings for {today} (skipped {len(review_result.get('learnings', [])) - saved} duplicates)")
+
+
+async def get_active_learnings(conn, limit: int = 20) -> list[dict]:
+    """
+    Non-expired learnings for use in a Claude prompt (synthesis, calibration,
+    weekend review), most recent first, capped at `limit`.
+
+    Every row returned counts as "applied" — applies_count is bumped for each
+    (see schema_v8_learnings_lifecycle.sql for what applies_count/hit_count
+    actually measure and why).
+    """
+    rows = await conn.fetch(
+        """
+        SELECT id, ticker, title, body, tags, applies_count, hit_count, created_at
+        FROM learnings
+        WHERE expires_at IS NULL OR expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+    rows = [dict(r) for r in rows]
+    if rows:
+        ids = [r["id"] for r in rows]
+        await conn.execute(
+            "UPDATE learnings SET applies_count = applies_count + 1 WHERE id = ANY($1::int[])",
+            ids,
+        )
+    return rows
+
+
+async def record_learning_hits(conn, today: date, day_win_rate: float | None):
+    """
+    Rough daily proxy for learning usefulness (NOT precise causal attribution
+    — see schema_v8_learnings_lifecycle.sql docstring). Once per EOD review,
+    every currently-active learning that has been applied at least once gets
+    hit_count += 1 if today's SELL win-rate was >= MIN_HIT_RATE.
+    """
+    if day_win_rate is None:
+        return
+    if day_win_rate < MIN_HIT_RATE:
+        return
+    await conn.execute(
+        """
+        UPDATE learnings
+        SET hit_count = hit_count + 1
+        WHERE applies_count > 0 AND (expires_at IS NULL OR expires_at > NOW())
+        """
+    )
+
+
+async def expire_stale_learnings(conn) -> dict:
+    """
+    Delete learnings that are hard-expired (expires_at passed) OR that have
+    been applied enough times (>= MIN_APPLICATIONS_FOR_JUDGEMENT) with a
+    hit-rate below MIN_HIT_RATE. Returns counts for logging.
+    """
+    hard_expired = await conn.fetch(
+        "DELETE FROM learnings WHERE expires_at IS NOT NULL AND expires_at <= NOW() RETURNING id"
+    )
+    low_hit_rate = await conn.fetch(
+        """
+        DELETE FROM learnings
+        WHERE applies_count >= $1
+          AND (hit_count::float / NULLIF(applies_count, 0)) < $2
+        RETURNING id
+        """,
+        MIN_APPLICATIONS_FOR_JUDGEMENT, MIN_HIT_RATE,
+    )
+    result = {"hard_expired": len(hard_expired), "low_hit_rate": len(low_hit_rate)}
+    if result["hard_expired"] or result["low_hit_rate"]:
+        log.info("expire_stale_learnings: %s", result)
+    return result
 
 
 async def update_model_accuracy(conn, predictions: list[dict], today: date):
@@ -199,6 +283,19 @@ async def run_eod_review():
 
     await save_learnings(conn, review_result, today)
     await update_model_accuracy(conn, predictions, today)
+
+    # Daily hit-rate proxy + lifecycle cleanup — see record_learning_hits/
+    # expire_stale_learnings docstrings for what's actually being measured.
+    day_sell = await conn.fetchrow(
+        """
+        SELECT COUNT(*) FILTER (WHERE outcome = 'win') AS wins, COUNT(*) AS total
+        FROM decisions WHERE action = 'SELL' AND decided_at::date = $1
+        """,
+        today,
+    )
+    day_win_rate = (day_sell["wins"] / day_sell["total"]) if day_sell and day_sell["total"] else None
+    await record_learning_hits(conn, today, day_win_rate)
+    await expire_stale_learnings(conn)
 
     accuracy = review_result.get("accuracy_today", {})
     log.info(

@@ -22,6 +22,12 @@ but never bought shouldn't count toward "can we trust this with real money".
 
 No manual trading override — the safety gate is the whole point.
 
+Epoch filter: every query in this module (span/resolved count, and the executed-
+trade expectancy) only considers signals/decisions at/after the current funding
+epoch's start (intelligence.trading_account.get_current_epoch_start) — the old
+₹500-era ledger, where nearly every BUY resolved to 0 affordable shares, never
+counts toward the LIVE gate.
+
 Used by:
   - GET /api/live/mode
   - record_decision()  (tags a BUY as [PAPER] while in paper mode)
@@ -34,6 +40,7 @@ from intelligence.accuracy_tracker import (
     RESOLVED_STATUSES,
 )
 from intelligence.costs import net_return
+from intelligence.trading_account import get_current_epoch_start
 
 PAPER_MIN_DAYS = 28                    # 4+ weeks of live track record
 PAPER_MIN_RESOLVED = 50                # enough resolved signals to be meaningful
@@ -59,6 +66,7 @@ async def compute_executed_net_expectancy(conn, n: int = PAPER_EXPECTANCY_WINDOW
           "net_expectancy_bps": <float | None>,
         }
     """
+    epoch_start = await get_current_epoch_start(conn)
     rows = await conn.fetch(
         """
         SELECT s.signal_type, s.status, s.price_at_signal, s.target_price,
@@ -68,10 +76,11 @@ async def compute_executed_net_expectancy(conn, n: int = PAPER_EXPECTANCY_WINDOW
         WHERE d.action = 'BUY'
           AND d.quantity > 0
           AND s.status = ANY($1::text[])
+          AND d.decided_at >= $3
         ORDER BY d.decided_at DESC
         LIMIT $2
         """,
-        list(RESOLVED_STATUSES), n,
+        list(RESOLVED_STATUSES), n, epoch_start,
     )
 
     net_returns: list[float] = []
@@ -121,7 +130,10 @@ async def get_trading_mode(conn) -> dict:
           },
         }
     """
+    epoch_start = await get_current_epoch_start(conn)
+
     # How long has the resolved-signal history spanned, and how many are resolved?
+    # Epoch-filtered: pre-reset (₹500-era) signals never count toward the gate.
     span_row = await conn.fetchrow(
         """
         SELECT
@@ -130,7 +142,9 @@ async def get_trading_mode(conn) -> dict:
             MAX(fired_at) AS last_fired
         FROM signals
         WHERE status != 'active'
-        """
+          AND fired_at >= $1
+        """,
+        epoch_start,
     )
     resolved_count = int(span_row["resolved_count"]) if span_row else 0
     span_days = 0
