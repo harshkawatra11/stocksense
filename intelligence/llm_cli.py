@@ -105,6 +105,9 @@ def _run_claude(prompt: str, model: str, system: str, timeout: int) -> str:
     cmd = [_which("claude") or "claude", "-p"]
     if model:
         cmd += ["--model", model]
+    effort = settings.CLAUDE_CLI_EFFORT
+    if effort:
+        cmd += ["--effort", effort]
     if system:
         cmd += ["--append-system-prompt", system]  # claude -p uses this, NOT --system
     result = subprocess.run(cmd, input=prompt, capture_output=True, text=True,

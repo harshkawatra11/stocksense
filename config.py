@@ -131,6 +131,14 @@ class Settings:
     def CLAUDE_OPUS_MODEL(self) -> str:
         return os.getenv("CLAUDE_OPUS_MODEL", "claude-opus-4-8")
 
+    @property
+    def CLAUDE_CLI_EFFORT(self) -> str:
+        """--effort passed to every `claude -p` call (low|medium|high|xhigh|max).
+        Default low: this runs dozens of times/day (every 30-min pipeline cycle,
+        EOD review, nightly calibration) — token cost compounds fast, and none
+        of these calls need max reasoning depth to do a bounded JSON task."""
+        return os.getenv("CLAUDE_CLI_EFFORT", "low")
+
     # ------------------------------------------------------------------ #
     # Synthesis layer — pluggable CLI backend (claude | codex | gemini)   #
     # Defaults below are fallbacks; the live choice is stored in the       #

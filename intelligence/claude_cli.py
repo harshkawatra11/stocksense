@@ -3,8 +3,14 @@ Synthesis call builders — prompts and parsing for the final-validation layer.
 
 The prompts and JSON parsing live here; the actual model execution is delegated to
 intelligence/llm_cli.run(), which routes to whichever CLI the user connected
-(Claude Code, Codex, or Gemini). The two constants below act as role selectors:
-CLAUDE_SONNET -> "fast" tier, CLAUDE_OPUS -> "deep" tier. No API keys, ever.
+(Claude Code, Codex, or Gemini). All four call sites here (intraday check, EOD
+review, calibration, weekend deep review) run on CLAUDE_SONNET at
+config.CLAUDE_CLI_EFFORT ("low" by default) — this runs dozens of times a day
+(every 30-min pipeline cycle) plus daily/weekly reviews, so token cost
+compounds fast; none of these are open-ended reasoning tasks, they're bounded
+JSON-in/JSON-out calls that don't need Opus-tier depth. CLAUDE_OPUS is kept
+defined (unused today) in case a future call site genuinely needs deeper
+reasoning. No API keys, ever — auth is via the logged-in CLI.
 """
 import json
 import logging
@@ -230,12 +236,12 @@ You extract precise, actionable learnings from prediction errors.
 Your job is to make this system smarter for tomorrow.
 Be specific about what pattern failed, not generic platitudes."""
 
-    raw = _run_claude(prompt, CLAUDE_OPUS, system=system)
+    raw = _run_claude(prompt, CLAUDE_SONNET, system=system)
 
     if not raw:
         status = llm_cli.get_component_status()
         return {
-            "learnings": [], "summary": "Claude Opus review failed — no response.",
+            "learnings": [], "summary": "Claude review failed — no response.",
             "synthesis_status": status,
         }
 
@@ -295,7 +301,7 @@ You are conservative: parameters move only on clear evidence, in small steps.
 You may ONLY propose changes to the listed parameters within their stated ranges.
 Respond with JSON only."""
 
-    raw = _run_claude(prompt, CLAUDE_OPUS, system=system)
+    raw = _run_claude(prompt, CLAUDE_SONNET, system=system)
     if not raw:
         status = llm_cli.get_component_status()
         return {
@@ -348,7 +354,7 @@ JSON response:
   "weekly_grade": "A|B|C|D"
 }}"""
 
-    raw = _run_claude(prompt, CLAUDE_OPUS)
+    raw = _run_claude(prompt, CLAUDE_SONNET)
     if not raw:
         return {"insights": [], "recommendations": []}
 
