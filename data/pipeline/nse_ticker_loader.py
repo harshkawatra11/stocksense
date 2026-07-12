@@ -197,16 +197,23 @@ def load_from_nse_csv() -> list[dict[str, Any]]:
         df = pd.read_csv(io.StringIO(resp.text))
         # NSE CSV columns: SYMBOL,NAME OF COMPANY,SERIES,DATE OF LISTING,PAID UP VALUE,MARKET LOT,ISIN NUMBER,FACE VALUE
         df.columns = [c.strip() for c in df.columns]
-        # Filter EQ series only
-        df = df[df["SERIES"].str.strip() == "EQ"].copy()
+        # Filter EQ + BE series — both are ordinary tradeable cash-equity series
+        # (BE = trade-for-trade/no-delivery-margin, not a different asset class).
+        # An EQ-only filter here silently dropped 261 real, buyable NSE stocks
+        # (with valid ISINs in this same CSV) from the tradeable universe and
+        # from Upstox instrument-key resolution — see WHAT_TO_DO_NEXT.txt data
+        # audit findings.
+        df["SERIES"] = df["SERIES"].str.strip()
+        df = df[df["SERIES"].isin(["EQ", "BE"])].copy()
         result = []
         for _, row in df.iterrows():
             ticker = str(row.get("SYMBOL", "")).strip()
             name = str(row.get("NAME OF COMPANY", "")).strip()
             isin = str(row.get("ISIN NUMBER", "")).strip()
+            series = str(row.get("SERIES", "EQ")).strip()
             if ticker:
-                result.append({"ticker": ticker, "name": name, "series": "EQ", "isin": isin})
-        log.info(f"Loaded {len(result)} EQ tickers from NSE CSV")
+                result.append({"ticker": ticker, "name": name, "series": series, "isin": isin})
+        log.info(f"Loaded {len(result)} EQ/BE tickers from NSE CSV")
         return result
     except Exception as e:
         log.warning(f"Failed to load NSE equity CSV: {e}. Using fallback list.")
