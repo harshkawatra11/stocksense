@@ -26,6 +26,7 @@ dist/
 # Model artefacts (large binaries — train locally)
 *.pkl
 models/ml/saved/*.pkl
+models/ml/saved_backup_*/
 models/kronos/weights/
 models/slm/adapters/
 
