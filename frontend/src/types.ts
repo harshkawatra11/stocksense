@@ -244,3 +244,21 @@ export interface SystemHealth {
 }
 
 export type Tab = 'watchlist' | 'portfolio' | 'brain' | 'charts' | 'market' | 'intelligence' | 'live' | 'logs'
+
+// ---- Human-confirmed trade queue (sandbox order rehearsal) ----
+export interface PendingConfirmation {
+  id: number
+  signal_id: number | null
+  ticker: string
+  action: 'BUY' | 'SELL'
+  quantity: number
+  price: number
+  reasoning: string | null
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED'
+  created_at: string
+  resolved_at: string | null
+  order_id: string | null
+  execution_status: 'PLACED' | 'FAILED' | null
+  execution_detail: string | null
+  is_sandbox: boolean
+}

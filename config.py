@@ -238,6 +238,25 @@ class Settings:
         data/pipeline/upstox_client.get_data_token()."""
         return os.getenv("UPSTOX_ANALYTICS_TOKEN", "")
 
+    @property
+    def UPSTOX_SANDBOX_TOKEN(self) -> str:
+        """Separate access token for sandbox.upstox.com/v2 — risk-free order
+        rehearsal, no real money, no market impact. Generated from a
+        dedicated 'Sandbox' section of the developer portal, distinct from
+        both the live OAuth token and UPSTOX_ANALYTICS_TOKEN above. Required
+        for backend/routers/confirmations.py's approve() to actually place
+        an order; without it, approve() records the decision but the order
+        placement step reports unavailable rather than silently no-op'ing."""
+        return os.getenv("UPSTOX_SANDBOX_TOKEN", "")
+
+    @property
+    def LIVE_CONFIRMATION_ENABLED(self) -> bool:
+        """Opt-in flag: when true, intelligence/live_confirmation.py queues
+        qualifying fresh signals into pending_trade_confirmations for human
+        approve/reject. Default OFF — nothing queues for your review until
+        you explicitly turn this on, same pattern as KRONOS_ENABLED."""
+        return os.getenv("LIVE_CONFIRMATION_ENABLED", "false").lower() in ("1", "true", "yes")
+
     # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
     # ------------------------------------------------------------------ #

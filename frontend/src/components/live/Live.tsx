@@ -5,6 +5,7 @@ import { useRealtimePrices } from '../../hooks/useRealtimePrices'
 import { useMarketStatus } from '../../hooks/useMarketStatus'
 import { useFlash, flashBgClass } from '../FlashPrice'
 import PriceAgeDot from '../PriceAgeDot'
+import PendingConfirmations from './PendingConfirmations'
 
 const COMPONENT_DOT: Record<ComponentStatus['status'], string> = {
   ok: 'bg-green', degraded: 'bg-yellow', unavailable: 'bg-red',
@@ -242,6 +243,12 @@ export default function Live() {
       )}
 
       {error && <div className="px-4 py-1.5 text-xs text-red bg-red/10 border-b border-border flex-shrink-0">{error}</div>}
+
+      {/* Human-confirmed trade queue — sandbox order rehearsal, real orders
+          only after an explicit approve click, never live money. */}
+      <div className="px-3 pt-3 flex-shrink-0">
+        <PendingConfirmations />
+      </div>
 
       <div className="flex-1 flex overflow-hidden">
         {/* Signals */}
