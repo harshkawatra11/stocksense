@@ -2,6 +2,7 @@
 LightGBM training on NSE historical data. Walk-forward validation with TimeSeriesSplit.
 Run: python -m models.ml.train
 """
+import gc
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -94,35 +95,83 @@ async def load_training_data(conn, tickers: list = None) -> pd.DataFrame:
     return df
 
 
-def build_feature_matrix(df: pd.DataFrame) -> tuple:
-    all_features = []
+def _features_for_group(ticker: str, group: pd.DataFrame, feature_cols: list) -> pd.DataFrame | None:
+    if len(group) < 300:
+        return None
+    feat = compute_features(group, ticker=ticker)
+    # Quantile regression target: forward QUANTILE_HORIZON_DAYS return.
+    # Computed here (not in feature_engineering.py, which is out of this
+    # module's scope) from the raw close series, index-aligned to feat.
+    feat["target_nd_return"] = (
+        group["close"].pct_change(QUANTILE_HORIZON_DAYS).shift(-QUANTILE_HORIZON_DAYS)
+    )
+    # Memory: keep only what training needs, as float32 (halves footprint on
+    # the full 8.6M-row universe), plus the ticker as a category column.
+    keep = feat[feature_cols + ["target_buy", "target_nd_return"]].astype("float32")
+    keep["ticker"] = ticker
+    return keep
+
+
+def finalize_feature_matrix(all_features: list) -> tuple:
     feature_cols = get_all_feature_columns()
-
-    for ticker, group in df.groupby("ticker"):
-        if len(group) < 300:
-            continue
-        try:
-            feat = compute_features(group, ticker=ticker)
-            feat["ticker"] = ticker
-            # Quantile regression target: forward QUANTILE_HORIZON_DAYS return.
-            # Computed here (not in feature_engineering.py, which is out of this
-            # module's scope) from the raw close series, index-aligned to feat.
-            feat["target_nd_return"] = (
-                group["close"].pct_change(QUANTILE_HORIZON_DAYS).shift(-QUANTILE_HORIZON_DAYS)
-            )
-            all_features.append(feat)
-        except Exception as e:
-            log.warning(f"Feature error for {ticker}: {e}")
-
     if not all_features:
         raise ValueError("No valid ticker data for training")
 
     combined = pd.concat(all_features)
+    all_features.clear()
     combined = combined.dropna(subset=feature_cols + ["target_buy"])
+    # CRITICAL for honest walk-forward CV: concat order is ticker-blocked, so
+    # without this sort TimeSeriesSplit would split across tickers, not time.
+    combined = combined.sort_index(kind="stable")
+    combined["ticker"] = combined["ticker"].astype("category")
 
     X = combined[feature_cols]
-    y = combined["target_buy"]
+    y = combined["target_buy"].astype("int8")
     return X, y, combined
+
+
+async def load_and_build_features(conn, tickers: list = None, batch_size: int = 200) -> tuple:
+    """Batched load + feature build: fetches OHLCV per ticker-batch and frees the
+    raw rows immediately, instead of holding all ~8.6M rows plus features at once."""
+    feature_cols = get_all_feature_columns()
+    if tickers is None:
+        rows = await conn.fetch("SELECT DISTINCT ticker FROM ohlcv_daily WHERE close IS NOT NULL")
+        tickers = sorted(r["ticker"] for r in rows)
+    log.info(f"Building features over {len(tickers)} tickers in batches of {batch_size}...")
+
+    all_features = []
+    total_rows = 0
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i + batch_size]
+        df = await load_training_data(conn, batch)
+        total_rows += len(df)
+        for ticker, group in df.groupby("ticker"):
+            try:
+                keep = _features_for_group(ticker, group, feature_cols)
+                if keep is not None:
+                    all_features.append(keep)
+            except Exception as e:
+                log.warning(f"Feature error for {ticker}: {e}")
+        del df
+        log.info(f"  batch {i//batch_size + 1}/{(len(tickers)+batch_size-1)//batch_size} done "
+                 f"({total_rows:,} raw rows so far)")
+
+    log.info(f"Loaded {total_rows:,} raw rows total.")
+    return finalize_feature_matrix(all_features)
+
+
+def build_feature_matrix(df: pd.DataFrame) -> tuple:
+    """Legacy in-memory path (kept for callers that already hold a raw df)."""
+    feature_cols = get_all_feature_columns()
+    all_features = []
+    for ticker, group in df.groupby("ticker"):
+        try:
+            keep = _features_for_group(ticker, group, feature_cols)
+            if keep is not None:
+                all_features.append(keep)
+        except Exception as e:
+            log.warning(f"Feature error for {ticker}: {e}")
+    return finalize_feature_matrix(all_features)
 
 
 def compute_optimal_threshold(model, X_val: pd.DataFrame, y_val: pd.Series) -> float:
@@ -146,15 +195,22 @@ def compute_optimal_threshold(model, X_val: pd.DataFrame, y_val: pd.Series) -> f
 
 
 def train_ensemble_seeds(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFrame, y_val: pd.Series,
-                          scale_pos_weight: float) -> list:
+                          scale_pos_weight: float, save_dir: str | None = None, version: str = "") -> list:
     """
     Train ENSEMBLE_SEEDS independent LGBM classifiers on identical data/features,
     differing only by random_state. Used at inference for confidence-by-agreement
     (mean probability + std across seeds) instead of a single point estimate —
     replaces Kronos's fabricated sigmoid-of-move-magnitude confidence (see
     WHAT_TO_DO_NEXT.txt 2.2).
+
+    Saves each seed's model to disk immediately after fitting and frees it from
+    memory before starting the next seed (save_dir given) — holding all 3 fitted
+    models simultaneously (each ~5M+ rows) alongside the caller's still-live
+    feature matrix was OOM-killing the process silently (no Python traceback,
+    just a dead process — see logs/retrain_20260712.log). Returns paths, not
+    model objects, when save_dir is given.
     """
-    models = []
+    results = []
     for seed in ENSEMBLE_SEEDS:
         params = {**LGBM_PARAMS, "scale_pos_weight": scale_pos_weight, "random_state": seed,
                    "bagging_seed": seed, "feature_fraction_seed": seed}
@@ -164,12 +220,22 @@ def train_ensemble_seeds(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFram
             eval_set=[(X_val, y_val)],
             callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
         )
-        models.append(m)
         log.info(f"Ensemble seed {seed} trained.")
-    return models
+        if save_dir:
+            p = os.path.join(save_dir, f"lgbm_seed{seed}.pkl")
+            with open(p, "wb") as f:
+                pickle.dump(m, f)
+            log.info(f"Ensemble seed {seed} saved: {p}")
+            results.append(p)
+            del m
+            gc.collect()
+        else:
+            results.append(m)
+    return results
 
 
-def train_quantile_models(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFrame, y_val: pd.Series) -> dict:
+def train_quantile_models(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFrame, y_val: pd.Series,
+                           save_path: str | None = None) -> dict:
     """
     Train LightGBM quantile regressors (q10/q50/q90) of the forward
     QUANTILE_HORIZON_DAYS return. These replace Kronos's forecast-path role:
@@ -177,6 +243,10 @@ def train_quantile_models(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFra
     stop-loss/target instead of the flat ATR-multiple heuristic
     (see models/kronos/combine.py and intelligence/signal_pipeline.py's
     former target_and_eta()).
+
+    Saves the full {q10,q50,q90} bundle once all three are trained (small
+    regressors, unlike the classifier ensemble — memory pressure here is
+    minor, but freeing intermediate fits still helps).
     """
     models = {}
     for name, alpha in QUANTILE_ALPHAS.items():
@@ -189,16 +259,18 @@ def train_quantile_models(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFra
         )
         models[name] = m
         log.info(f"Quantile model {name} (alpha={alpha}) trained.")
+        gc.collect()
+    if save_path:
+        with open(save_path, "wb") as f:
+            pickle.dump(models, f)
+        log.info(f"Quantile models saved: {save_path}")
     return models
 
 
 async def train(tickers=None):
     conn = await asyncpg.connect(settings.DATABASE_DSN)
-    log.info("Loading training data from DB...")
-    df = await load_training_data(conn, tickers)
-
-    log.info(f"Building feature matrix from {len(df):,} rows across {df['ticker'].nunique()} stocks...")
-    X, y, combined = build_feature_matrix(df)
+    log.info("Loading training data from DB (batched)...")
+    X, y, combined = await load_and_build_features(conn, tickers)
     log.info(f"Feature matrix: {X.shape}, class balance: {y.mean():.3f}")
 
     # Compute scale_pos_weight for class imbalance
@@ -316,30 +388,33 @@ async def train(tickers=None):
     # ------------------------------------------------------------------ #
     # 3-seed ensemble + quantile regressors (Stage 3 — replaces Kronos)   #
     # ------------------------------------------------------------------ #
+    # Free what the classic-model path no longer needs before the memory-
+    # heavier ensemble step — holding X/X_test/y_test/best_* alongside 3
+    # more full-size LGBM fits is what silently OOM-killed the previous run.
+    del X, X_test, y_test, best_model, best_X_val, best_y_val, final_model, test_preds
+    gc.collect()
+
     try:
-        ensemble_models = train_ensemble_seeds(X_ftr, y_ftr, X_fval, y_fval, scale_pos_weight)
-        ensemble_paths = []
-        for seed, m in zip(ENSEMBLE_SEEDS, ensemble_models):
-            p = os.path.join(MODEL_SAVE_DIR, f"lgbm_seed{seed}.pkl")
-            with open(p, "wb") as f:
-                pickle.dump(m, f)
-            ensemble_paths.append(p)
+        ensemble_paths = train_ensemble_seeds(
+            X_ftr, y_ftr, X_fval, y_fval, scale_pos_weight,
+            save_dir=MODEL_SAVE_DIR, version=version,
+        )
         log.info(f"Ensemble saved: {ensemble_paths}")
 
         # Quantile targets: reuse the same train/val split, but drop rows with
         # no forward-return label (the trailing QUANTILE_HORIZON_DAYS rows).
+        # Positional slicing: the time index has duplicate labels across tickers,
+        # so .loc[X_ftr.index] would cartesian-explode. X shares combined's row order.
         q_col = "target_nd_return"
-        q_train_df = combined.loc[X_ftr.index].dropna(subset=[q_col])
-        q_val_df = combined.loc[X_fval.index].dropna(subset=[q_col])
+        q_train_df = combined.iloc[:val_split].dropna(subset=[q_col])
+        q_val_df = combined.iloc[val_split:split_idx].dropna(subset=[q_col])
         if len(q_train_df) > 100 and len(q_val_df) > 20:
-            quantile_models = train_quantile_models(
+            quantile_bundle_path = os.path.join(MODEL_SAVE_DIR, "lgbm_quantiles.pkl")
+            train_quantile_models(
                 q_train_df[feature_cols], q_train_df[q_col],
                 q_val_df[feature_cols], q_val_df[q_col],
+                save_path=quantile_bundle_path,
             )
-            quantile_bundle_path = os.path.join(MODEL_SAVE_DIR, "lgbm_quantiles.pkl")
-            with open(quantile_bundle_path, "wb") as f:
-                pickle.dump(quantile_models, f)
-            log.info(f"Quantile models saved: {quantile_bundle_path}")
         else:
             log.warning("Not enough labeled rows for quantile training — skipping.")
 
@@ -394,7 +469,11 @@ async def train(tickers=None):
         log.warning(f"Could not log RETRAIN completion: {e}")
 
     await conn.close()
-    return final_model, meta
+    # final_model is freed above (memory pressure) before the ensemble step;
+    # nothing in-process consumes this return value today (only the CLI
+    # entry point `python -m models.ml.train` calls train(), and discards
+    # the result) — return the on-disk path instead of holding it live.
+    return latest_path, meta
 
 
 if __name__ == "__main__":
