@@ -365,6 +365,89 @@ async def task_weekend_review() -> str:
     return "ok"
 
 
+@instrumented("expire_confirmations")
+async def task_expire_confirmations() -> str:
+    """
+    Flip stale PENDING rows in pending_trade_confirmations to EXPIRED. A row
+    left PENDING for a long time quotes a price/target that's drifted from
+    reality — approving it later would place an order at a stale limit
+    price the human never actually reviewed. Self-gated on
+    LIVE_CONFIRMATION_ENABLED (same pattern as queue_fresh_signals() in
+    intelligence/live_confirmation.py) so this job is a harmless no-op
+    unless the human-confirmation feature is actually turned on; registered
+    unconditionally below like every other job, per this scheduler's
+    "no buttons anywhere, gating lives in config" convention.
+    """
+    if not settings.LIVE_CONFIRMATION_ENABLED:
+        return "LIVE_CONFIRMATION_ENABLED is false — nothing to expire"
+
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        rows = await conn.fetch(
+            """
+            UPDATE pending_trade_confirmations
+            SET status = 'EXPIRED', resolved_at = NOW()
+            WHERE status = 'PENDING'
+              AND created_at < NOW() - ($1 * INTERVAL '1 minute')
+            RETURNING id, ticker
+            """,
+            settings.CONFIRMATION_EXPIRY_MINUTES,
+        )
+        if rows:
+            log.info("Expired %d stale confirmation(s): %s",
+                      len(rows), ", ".join(r["ticker"] for r in rows))
+        return f"{len(rows)} confirmation(s) expired"
+    finally:
+        await conn.close()
+
+
+@instrumented("reconcile_sandbox_orders")
+async def task_reconcile_sandbox_orders() -> str:
+    """
+    Poll Upstox for the real exchange-side status of every confirmation row
+    that has an order_id but is still reporting execution_status='PLACED'.
+    place_sandbox_order() only confirms Upstox *accepted* the order for
+    processing — not that it filled. Without this job, a rejected-after-
+    acceptance order would sit forever showing the misleadingly final-
+    sounding "PLACED" in the UI. Self-gated on LIVE_CONFIRMATION_ENABLED,
+    same pattern as task_expire_confirmations above — this whole feature
+    stays inert until the human opts in.
+    """
+    if not settings.LIVE_CONFIRMATION_ENABLED:
+        return "LIVE_CONFIRMATION_ENABLED is false — nothing to reconcile"
+
+    from data.pipeline.upstox_orders import get_order_status
+
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        open_rows = await conn.fetch(
+            """
+            SELECT id, order_id, ticker FROM pending_trade_confirmations
+            WHERE order_id IS NOT NULL AND execution_status = 'PLACED'
+            """
+        )
+        updated = 0
+        for r in open_rows:
+            result = await get_order_status(r["order_id"])
+            if result["status"] == "UNKNOWN":
+                # Transient fetch failure — leave as PLACED, retry next run.
+                continue
+            await conn.execute(
+                """
+                UPDATE pending_trade_confirmations
+                SET execution_status = $2, execution_detail = $3
+                WHERE id = $1
+                """,
+                r["id"], result["status"], result.get("detail"),
+            )
+            updated += 1
+            log.info("Reconciled order for %s (order_id=%s): %s",
+                      r["ticker"], r["order_id"], result["status"])
+        return f"{updated}/{len(open_rows)} order(s) reconciled"
+    finally:
+        await conn.close()
+
+
 @instrumented("ticker_sync")
 async def task_ticker_sync() -> str:
     """Sync NSE equity ticker list to DB."""
@@ -493,6 +576,23 @@ def build_scheduler() -> AsyncIOScheduler:
         task_weekend_review,
         CronTrigger(day_of_week="sat", hour=9, minute=0),
         id="weekend_review", name="Weekend Claude Opus deep review", **common,
+    )
+
+    # Human-confirmed sandbox order hardening — both self-gate on
+    # LIVE_CONFIRMATION_ENABLED (see task docstrings) and are cheap no-ops
+    # otherwise, so they're registered unconditionally like every other job.
+    # Expire stale PENDING confirmations every 10 min, all day.
+    scheduler.add_job(
+        task_expire_confirmations,
+        CronTrigger(day_of_week="mon-fri", hour="9-18", minute="*/10"),
+        id="expire_confirmations", name="Expire stale trade confirmations", **common,
+    )
+    # Reconcile PLACED sandbox orders against Upstox's real order status
+    # every 5 min during market hours (irrelevant, but cheap, outside them).
+    scheduler.add_job(
+        task_reconcile_sandbox_orders,
+        CronTrigger(day_of_week="mon-fri", hour="9-18", minute="*/5"),
+        id="reconcile_sandbox_orders", name="Reconcile sandbox order status", **common,
     )
 
     return scheduler

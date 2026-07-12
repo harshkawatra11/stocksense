@@ -105,6 +105,11 @@ export default function PendingConfirmations() {
               </span>
             </div>
             {c.reasoning && <div className="mt-0.5 truncate text-xs text-neutral-500">{c.reasoning}</div>}
+            {c.is_stale && (
+              <div className="mt-1 text-[10px] font-medium text-amber-500">
+                Quoted price may be stale — approving may be rejected as expired
+              </div>
+            )}
           </div>
           <div className="flex shrink-0 gap-2">
             <button

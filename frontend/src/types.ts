@@ -258,7 +258,8 @@ export interface PendingConfirmation {
   created_at: string
   resolved_at: string | null
   order_id: string | null
-  execution_status: 'PLACED' | 'FAILED' | null
+  execution_status: string | null
   execution_detail: string | null
   is_sandbox: boolean
+  is_stale?: boolean
 }

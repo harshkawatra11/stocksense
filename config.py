@@ -257,6 +257,30 @@ class Settings:
         you explicitly turn this on, same pattern as KRONOS_ENABLED."""
         return os.getenv("LIVE_CONFIRMATION_ENABLED", "false").lower() in ("1", "true", "yes")
 
+    @property
+    def MAX_SANDBOX_ORDER_VALUE(self) -> float:
+        """Sanity ceiling (₹, quantity * price) enforced in place_sandbox_order()
+        before any order is sent to Upstox sandbox. This is fake money and a
+        rejected sandbox order costs nothing real — but a runaway loop or a bad
+        `shares_affordable` calculation placing a 10,000-share order is still a
+        real bug worth catching loudly instead of silently rehearsing it.
+        Default ₹50,000 is well above any single-position size CASH_AVAILABLE
+        (₹100,000 total capital) should ever produce under normal position
+        sizing; deliberately not "unlimited" even in sandbox."""
+        return float(os.getenv("MAX_SANDBOX_ORDER_VALUE", "50000"))
+
+    @property
+    def CONFIRMATION_EXPIRY_MINUTES(self) -> int:
+        """How long a PENDING row in pending_trade_confirmations stays valid
+        before its quoted price is considered stale. Default 120 minutes (2h)
+        — long enough to review a trade without being glued to the screen,
+        short enough that the quoted price/target/ETA reasoning hasn't drifted
+        far from reality. Enforced twice: a scheduler job flips old PENDING
+        rows to EXPIRED (see scheduler/market_runner.py task_expire_confirmations),
+        and approve() independently re-checks row age at click time in case the
+        human's browser tab was open with a stale list."""
+        return int(os.getenv("CONFIRMATION_EXPIRY_MINUTES", "120"))
+
     # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
     # ------------------------------------------------------------------ #
