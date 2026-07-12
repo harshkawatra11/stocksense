@@ -125,6 +125,15 @@ def finalize_feature_matrix(all_features: list) -> tuple:
     combined = combined.sort_index(kind="stable")
     combined["ticker"] = combined["ticker"].astype("category")
 
+    # float64 -> float32 roughly halves the feature matrix's memory footprint
+    # (7.5M rows x 41 cols: ~2.5GB -> ~1.2GB) — this machine can be tight on
+    # free RAM (Chrome/WSL/editor already resident), and that's what killed
+    # earlier training attempts during data loading, well before any model
+    # fitting even started. LightGBM trains fine on float32 inputs; precision
+    # loss is irrelevant at this feature scale (prices, ratios, indicators).
+    float_cols = combined[feature_cols].select_dtypes(include=["float64"]).columns
+    combined[float_cols] = combined[float_cols].astype("float32")
+
     X = combined[feature_cols]
     y = combined["target_buy"].astype("int8")
     return X, y, combined
