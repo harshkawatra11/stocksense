@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { ThumbsUp, ThumbsDown, RefreshCw, Wallet, Clock, Target, AlertTriangle, FlaskConical, Bot, ExternalLink } from 'lucide-react'
 import type { LiveSignal, Account, ActivityEvent, PositionReview, DataStatus, TradingMode, ComponentStatus } from '../../types'
 import { useRealtimePrices } from '../../hooks/useRealtimePrices'
+import { useMarketStatus } from '../../hooks/useMarketStatus'
+import { useFlash, flashBgClass } from '../FlashPrice'
 import PriceAgeDot from '../PriceAgeDot'
 
 const COMPONENT_DOT: Record<ComponentStatus['status'], string> = {
@@ -86,19 +88,9 @@ const statusStyle: Record<string, string> = {
 
 /** Live LTP next to the frozen price_at_signal, with % move and a freshness dot. */
 function LivePriceBadge({
-  ticker, priceAtSignal, ltp, ts, connected,
-}: { ticker: string; priceAtSignal: number; ltp: number | null | undefined; ts: number | null | undefined; connected: boolean }) {
-  const [flash, setFlash] = useState(false)
-  const [prevLtp, setPrevLtp] = useState<number | null | undefined>(ltp)
-
-  useEffect(() => {
-    if (ltp != null && ltp !== prevLtp) {
-      setFlash(true)
-      const t = setTimeout(() => setFlash(false), 500)
-      setPrevLtp(ltp)
-      return () => clearTimeout(t)
-    }
-  }, [ltp, prevLtp])
+  ticker, priceAtSignal, ltp, ts, connected, marketOpen,
+}: { ticker: string; priceAtSignal: number; ltp: number | null | undefined; ts: number | null | undefined; connected: boolean; marketOpen: boolean }) {
+  const flash = useFlash(ltp)
 
   if (ltp == null) return null
 
@@ -108,15 +100,14 @@ function LivePriceBadge({
   return (
     <span
       key={ticker}
-      className={`flex items-center gap-1 text-xs transition-colors duration-500 rounded px-1 ${
-        flash ? (up ? 'bg-green/20' : 'bg-red/20') : ''
-      }`}
+      className={`flex items-center gap-1 text-xs transition-colors duration-500 rounded px-1 ${flashBgClass(flash)}`}
     >
-      <PriceAgeDot ts={ts} connected={connected} />
+      <PriceAgeDot ts={ts} connected={connected} marketOpen={marketOpen} />
       <span className="text-text-primary">₹{ltp.toFixed(1)}</span>
       <span className={up ? 'text-green' : 'text-red'}>
         {up ? '▲' : '▼'}{Math.abs(movePct).toFixed(2)}%
       </span>
+      {!marketOpen && <span className="text-[10px] text-text-secondary opacity-70">as of 15:30 close</span>}
     </span>
   )
 }
@@ -132,6 +123,9 @@ export default function Live() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { prices: livePrices, connected: wsConnected } = useRealtimePrices()
+  const marketStatus = useMarketStatus()
+  const marketOpen = marketStatus.state === 'open'
+  const [activityStreaming, setActivityStreaming] = useState(false)
 
   const isPaper = mode?.mode !== 'LIVE'  // default to paper until proven otherwise
 
@@ -152,11 +146,38 @@ export default function Live() {
     setMode(md && md.mode ? md : null)
   }, [onlyAffordable])
 
+  // Poll fallback: 60s normally, relaxed to 120s once the SSE activity stream
+  // is live (incremental events arrive in real time; poll just reconciles).
   useEffect(() => {
     refresh()
-    const t = setInterval(refresh, 60_000) // the brain acts on its own — keep the view current
+    const t = setInterval(refresh, activityStreaming ? 120_000 : 60_000)
     return () => clearInterval(t)
-  }, [refresh])
+  }, [refresh, activityStreaming])
+
+  // Streaming activity feed — new activity_log events pushed via SSE, prepended
+  // incrementally without a full-page refetch. Poll above remains the fallback.
+  useEffect(() => {
+    const es = new EventSource('/api/stream/activity')
+    es.onopen = () => setActivityStreaming(true)
+    es.onerror = () => setActivityStreaming(false) // EventSource auto-reconnects
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'connected') { setActivityStreaming(true); return }
+        if (msg.type !== 'activity') return
+        setActivity(prev => {
+          if (prev.some(a => a.id === msg.id)) return prev
+          const ev: ActivityEvent = {
+            id: msg.id, event_type: msg.event_type, ticker: msg.ticker,
+            rating: msg.rating, note: msg.note, payload: msg.payload,
+            created_at: msg.created_at,
+          }
+          return [ev, ...prev].slice(0, 60)
+        })
+      } catch { /* ignore malformed frames */ }
+    }
+    return () => es.close()
+  }, [])
 
   const act = async (fn: () => Promise<unknown>, key: string) => {
     setBusy(key); setError(null)
@@ -253,6 +274,7 @@ export default function Live() {
                   ltp={livePrices[s.ticker]?.ltp}
                   ts={livePrices[s.ticker]?.ts}
                   connected={wsConnected}
+                  marketOpen={marketOpen}
                 />
                 {s.target_price && (
                   <>
@@ -335,7 +357,14 @@ export default function Live() {
 
           {/* Activity feed */}
           <div className="flex-1 overflow-hidden flex flex-col">
-            <div className="px-3 py-2 text-xs font-semibold text-white">Activity Log</div>
+            <div className="px-3 py-2 text-xs font-semibold text-white flex items-center gap-2">
+              Activity Log
+              {activityStreaming && (
+                <span className="flex items-center gap-1 text-[10px] font-normal text-green">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" /> streaming
+                </span>
+              )}
+            </div>
             <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
               {activity.length === 0 && <div className="text-[11px] text-text-secondary">No activity yet.</div>}
               {activity.map(e => {

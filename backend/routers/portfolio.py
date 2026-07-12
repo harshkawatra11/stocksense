@@ -72,13 +72,27 @@ async def get_pnl_summary():
         """
     )
     await conn.close()
+
+    # Prefer live LTPs from the in-process quote cache; fall back to EOD close
+    # per position, with an explicit source flag so the UI can be honest.
+    from backend.services import quote_cache
+    live_quotes = quote_cache.get_all()
+
     total_invested = 0
     total_current = 0
+    any_live = False
     positions = []
     for r in rows:
-        curr = float(r["current_price"] or r["avg_price"])
         avg = float(r["avg_price"])
         qty = r["quantity"]
+        tick = live_quotes.get(r["ticker"])
+        if tick and tick.get("ltp") is not None:
+            curr = float(tick["ltp"])
+            source, ts = "live", tick.get("ts")
+            any_live = True
+        else:
+            curr = float(r["current_price"] or r["avg_price"])
+            source, ts = "eod", None
         invested = avg * qty
         current_val = curr * qty
         total_invested += invested
@@ -87,8 +101,11 @@ async def get_pnl_summary():
             "ticker": r["ticker"],
             "pnl_pct": round((curr - avg) / avg * 100, 2),
             "pnl_abs": round(current_val - invested, 2),
+            "price_source": source,
+            "ts": ts,
         })
     return {
+        "price_source": "live" if any_live else "eod",
         "total_invested": round(total_invested, 2),
         "total_current": round(total_current, 2),
         "total_pnl": round(total_current - total_invested, 2),

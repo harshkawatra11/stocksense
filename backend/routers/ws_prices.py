@@ -32,7 +32,13 @@ async def ws_prices(websocket: WebSocket) -> None:
 
     snapshot = quote_cache.get_all()
     try:
-        await websocket.send_json({"type": "snapshot", "quotes": snapshot})
+        # `history` = recent LTPs per symbol (oldest first) to seed client-side
+        # sparklines; after this the client appends deltas itself.
+        await websocket.send_json({
+            "type": "snapshot",
+            "quotes": snapshot,
+            "history": quote_cache.get_all_history(),
+        })
     except Exception:
         log.debug("ws_prices: client disconnected before snapshot could be sent")
         return

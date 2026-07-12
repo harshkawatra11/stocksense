@@ -206,6 +206,37 @@ async def stream_signals():
     )
 
 
+@app.get("/api/stream/activity")
+async def stream_activity():
+    """
+    SSE feed of new activity_log events (fills, stops, learnings, param changes)
+    as they happen — pushed via backend/services/activity_bus by log_activity.
+    Frontend keeps a slow poll of /api/live/activity as fallback for events
+    logged from other processes.
+    """
+    from backend.services import activity_bus
+
+    async def generate() -> AsyncGenerator[str, None]:
+        q = activity_bus.subscribe()
+        try:
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"data: {json.dumps({'type': 'activity', **event}, default=str)}\n\n"
+                except asyncio.TimeoutError:
+                    # Heartbeat comment keeps proxies/browsers from timing out.
+                    yield ": keepalive\n\n"
+        finally:
+            activity_bus.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ----- serve the built frontend (single-process local deployment) ----- #
 # Must stay at the very end: the catch-all would shadow any route defined after it.
 import os

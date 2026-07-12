@@ -41,15 +41,37 @@ async def log_activity(
     """Insert an activity event. Returns its id."""
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Unknown event_type {event_type}; expected one of {EVENT_TYPES}")
-    return await conn.fetchval(
+    created_at = datetime.now(timezone.utc)
+    event_id = await conn.fetchval(
         """
         INSERT INTO activity_log (event_type, ticker, signal_id, rating, note, payload, created_at)
         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
         """,
         event_type, ticker, signal_id, rating, note,
         json.dumps(payload) if payload else None,
-        datetime.now(timezone.utc),
+        created_at,
     )
+
+    # Best-effort push to the in-process SSE bus (backend/services/activity_bus)
+    # so connected frontends see the event immediately. Never allowed to fail
+    # the DB write — this module is also used from offline scripts where the
+    # backend package may not be importable.
+    try:
+        from backend.services import activity_bus
+        activity_bus.publish({
+            "id": event_id,
+            "event_type": event_type,
+            "ticker": ticker,
+            "signal_id": signal_id,
+            "rating": rating,
+            "note": note,
+            "payload": payload,
+            "created_at": created_at.isoformat(),
+        })
+    except Exception:
+        log.debug("activity_bus publish skipped/failed", exc_info=True)
+
+    return event_id
 
 
 async def rate_signal(conn, signal_id: int, ticker: str, like: bool, reason: str = "") -> int:

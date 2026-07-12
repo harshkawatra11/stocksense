@@ -3,6 +3,11 @@ interface Props {
   ts: number | null | undefined
   /** Whether the websocket itself is connected. */
   connected?: boolean
+  /**
+   * Whether the market is currently open. When closed, staleness is expected —
+   * show a calm neutral gray ("as of close") instead of an alarming red.
+   */
+  marketOpen?: boolean
   className?: string
 }
 
@@ -11,12 +16,17 @@ interface Props {
  * green  = updated within last 2s
  * amber  = updated within last 30s
  * red/gray = stale beyond 30s or disconnected
+ * neutral gray = market closed (stale is normal, not an error)
  */
-export default function PriceAgeDot({ ts, connected = true, className = '' }: Props) {
+export default function PriceAgeDot({ ts, connected = true, marketOpen = true, className = '' }: Props) {
   let color = 'bg-text-secondary/40' // gray — unknown / disconnected
   let title = 'No live price'
 
-  if (connected && ts != null) {
+  if (!marketOpen) {
+    // Market closed: a stale price is the honest, expected state.
+    color = 'bg-text-secondary/50'
+    title = 'Market closed — as of 15:30 close'
+  } else if (connected && ts != null) {
     const ageSec = Date.now() / 1000 - ts
     if (ageSec < 2) {
       color = 'bg-green animate-pulse'

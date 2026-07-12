@@ -6,6 +6,8 @@ import { useBackendHealth } from '../hooks/useBackendHealth'
 import { useMarketIndices } from '../hooks/useMarketIndices'
 import { useRealtimePrices } from '../hooks/useRealtimePrices'
 import PriceAgeDot from './PriceAgeDot'
+import FlashPrice from './FlashPrice'
+import Sparkline from './Sparkline'
 import SystemHealthBar from './SystemHealthBar'
 
 interface Props {
@@ -26,7 +28,7 @@ const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
 ]
 
 function IndexTicker({ isMarketOpen }: { isMarketOpen: boolean }) {
-  const { prices: livePrices, connected: wsConnected } = useRealtimePrices()
+  const { prices: livePrices, history, connected: wsConnected } = useRealtimePrices()
   const indices = useMarketIndices(isMarketOpen, livePrices)
 
   return (
@@ -41,16 +43,21 @@ function IndexTicker({ isMarketOpen }: { isMarketOpen: boolean }) {
         const changeColor = !q.available
           ? 'text-text-secondary'
           : up ? 'text-green' : 'text-red'
+        const spark = history[q.symbol]
 
         return (
           <span key={q.symbol} className="text-text-secondary flex items-center gap-1">
-            {q.live && <PriceAgeDot ts={q.ts} connected={wsConnected} />}
+            {q.live && <PriceAgeDot ts={q.ts} connected={wsConnected} marketOpen={isMarketOpen} />}
             {q.symbol}{' '}
-            <span className={`font-medium ${changeColor}`}>
+            <FlashPrice value={q.ltp} className={`font-medium ${changeColor}`}>
               {ltpStr}
               {changeStr && <span className="ml-1">{changeStr}</span>}
               {!q.available && <span className="ml-1 text-[10px] opacity-50">(offline)</span>}
-            </span>
+            </FlashPrice>
+            {isMarketOpen && spark && <Sparkline points={spark} />}
+            {!isMarketOpen && q.ltp !== null && (
+              <span className="text-[10px] opacity-60 ml-0.5">as of 15:30 close</span>
+            )}
           </span>
         )
       })}

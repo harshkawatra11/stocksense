@@ -58,6 +58,13 @@ export interface PortfolioItem {
   pnl_pct: number
   pnl_abs: number
   buy_date: string
+  /** "live" when live_* fields come from the realtime quote cache; "eod" = last daily close. */
+  price_source?: 'live' | 'eod'
+  live_ltp?: number | null
+  live_pnl?: number | null
+  live_pnl_pct?: number | null
+  /** Unix seconds timestamp of the live_ltp tick. */
+  live_ts?: number | null
 }
 
 export interface Learning {

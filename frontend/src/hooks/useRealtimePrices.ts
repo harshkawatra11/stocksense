@@ -8,8 +8,18 @@ export interface PriceTick {
 
 export type PriceMap = Record<string, PriceTick>
 
+/** Recent LTPs per symbol (oldest first) — ring buffer for sparklines. */
+export type HistoryMap = Record<string, number[]>
+
+interface WsMessage {
+  type?: 'snapshot' | 'delta'
+  quotes?: PriceMap
+  history?: HistoryMap
+}
+
 const MAX_BACKOFF_MS = 30_000
 const BASE_BACKOFF_MS = 1_000
+const HISTORY_LEN = 30
 
 /**
  * WebSocket client for GET /api/ws/prices.
@@ -20,6 +30,7 @@ const BASE_BACKOFF_MS = 1_000
  */
 export function useRealtimePrices() {
   const [prices, setPrices] = useState<PriceMap>({})
+  const [history, setHistory] = useState<HistoryMap>({})
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -53,8 +64,34 @@ export function useRealtimePrices() {
 
       ws.onmessage = (e) => {
         try {
-          const msg = JSON.parse(e.data) as PriceMap
-          setPrices((prev) => ({ ...prev, ...msg }))
+          const msg = JSON.parse(e.data) as WsMessage | PriceMap
+          // Server envelope: {type: "snapshot"|"delta", quotes: {...}, history?: {...}}.
+          // Also tolerate a bare {symbol: tick} map (older server shape).
+          const envelope = msg as WsMessage
+          const quotes: PriceMap =
+            envelope.quotes ?? ((msg as PriceMap) || {})
+          if (envelope.quotes === undefined && envelope.type !== undefined) return
+
+          setPrices((prev) => ({ ...prev, ...quotes }))
+
+          setHistory((prev) => {
+            const next = { ...prev }
+            // Snapshot seeds full server-side history; deltas append client-side.
+            if (envelope.history) {
+              for (const [sym, pts] of Object.entries(envelope.history)) {
+                next[sym] = pts.slice(-HISTORY_LEN)
+              }
+            }
+            for (const [sym, tick] of Object.entries(quotes)) {
+              if (tick.ltp == null) continue
+              const buf = next[sym] ? [...next[sym]] : []
+              if (buf[buf.length - 1] !== tick.ltp) {
+                buf.push(tick.ltp)
+                next[sym] = buf.slice(-HISTORY_LEN)
+              }
+            }
+            return next
+          })
         } catch {
           // ignore malformed frames
         }
@@ -98,5 +135,5 @@ export function useRealtimePrices() {
     [prices]
   )
 
-  return { prices, isStale, connected }
+  return { prices, history, isStale, connected }
 }

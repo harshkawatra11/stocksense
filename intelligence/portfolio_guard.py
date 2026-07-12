@@ -36,12 +36,21 @@ async def get_portfolio(conn) -> list[dict]:
         ORDER BY p.buy_date DESC
         """
     )
+    # Live-quote overlay: if the in-process quote cache has a fresher LTP than
+    # the EOD close, report live P&L alongside the EOD numbers. Defensive
+    # import so this module still works in offline/batch contexts.
+    try:
+        from backend.services import quote_cache
+        live_quotes = quote_cache.get_all()
+    except Exception:
+        live_quotes = {}
+
     result = []
     for r in rows:
         current = float(r["current_price"]) if r["current_price"] else float(r["avg_price"])
         avg = float(r["avg_price"])
         pnl = (current - avg) / avg * 100
-        result.append({
+        item = {
             "ticker": r["ticker"],
             "name": r["name"],
             "sector": r["sector"],
@@ -51,7 +60,24 @@ async def get_portfolio(conn) -> list[dict]:
             "pnl_pct": round(pnl, 2),
             "pnl_abs": round((current - avg) * r["quantity"], 2),
             "buy_date": r["buy_date"].isoformat() if r["buy_date"] else None,
-        })
+            # Live overlay — explicit source flag so the UI never fakes freshness.
+            "price_source": "eod",
+            "live_ltp": None,
+            "live_pnl": None,
+            "live_pnl_pct": None,
+            "live_ts": None,
+        }
+        tick = live_quotes.get(r["ticker"])
+        if tick and tick.get("ltp") is not None:
+            ltp = float(tick["ltp"])
+            item.update({
+                "price_source": "live",
+                "live_ltp": ltp,
+                "live_pnl": round((ltp - avg) * r["quantity"], 2),
+                "live_pnl_pct": round((ltp - avg) / avg * 100, 2),
+                "live_ts": tick.get("ts"),
+            })
+        result.append(item)
     return result
 
 
