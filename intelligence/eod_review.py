@@ -40,19 +40,28 @@ async def fetch_todays_signals(conn) -> list[dict]:
 async def fetch_actual_closes(conn, tickers: list[str]) -> dict[str, float]:
     """
     Actual closes from the NSE-fed ohlcv_daily table (NSE path only — no yfinance).
-    Uses the most recent close on/before today per ticker. Tickers whose Bhavcopy
-    for the day hasn't landed yet are simply omitted and skipped downstream.
+
+    STRICT same-day match only: a ticker is included only if ohlcv_daily has a
+    row dated *today*. This used to be "most recent close on/before today",
+    which silently fell back to yesterday's (or older) close whenever today's
+    bhavcopy hadn't landed in ohlcv_daily yet — and because that stale close is
+    the exact same row used to set price_at_signal earlier in the day, every
+    signal resolved under the old query showed a fabricated 0.0% return. Since
+    eod_review now runs after incremental_ohlcv (see market_runner.py's
+    eod_review job comment), today's row should normally exist; if it doesn't
+    (bhavcopy delayed/missing), the ticker is correctly omitted and skipped
+    downstream rather than resolved on fake data.
     """
     if not tickers:
         return {}
+    today = date.today()
     rows = await conn.fetch(
         """
-        SELECT DISTINCT ON (ticker) ticker, close
+        SELECT ticker, close
         FROM ohlcv_daily
-        WHERE ticker = ANY($1::text[]) AND close IS NOT NULL
-        ORDER BY ticker, time DESC
+        WHERE ticker = ANY($1::text[]) AND close IS NOT NULL AND time::date = $2
         """,
-        list(set(tickers)),
+        list(set(tickers)), today,
     )
     return {r["ticker"]: float(r["close"]) for r in rows}
 

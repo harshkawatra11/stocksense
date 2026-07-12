@@ -536,10 +536,18 @@ def build_scheduler() -> AsyncIOScheduler:
         id="position_review", name="Position re-analysis + auto-exit", **common,
     )
 
-    # EOD review: Mon-Fri at 3:45 PM IST (15 min after market close)
+    # EOD review: Mon-Fri at 6:50 PM IST — AFTER incremental_ohlcv (6:30 PM)
+    # and the Upstox reconciliation (6:35 PM) have landed today's real bhavcopy
+    # close. This used to run at 3:45 PM (15 min after market close), which was
+    # a bug: ohlcv_daily's today-row doesn't exist yet at 3:45 PM, so
+    # fetch_actual_closes() silently fell back to the prior day's close — the
+    # same row already used as price_at_signal — making every "resolved" BUY
+    # signal show a fabricated 0.0% return. See eod_review.fetch_actual_closes
+    # for the same-day guard that now makes this fail loudly instead of
+    # silently if the schedule ever drifts again.
     scheduler.add_job(
         task_eod_review,
-        CronTrigger(day_of_week="mon-fri", hour=15, minute=45),
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=50),
         id="eod_review", name="EOD Claude review", **common,
     )
 
