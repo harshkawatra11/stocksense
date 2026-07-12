@@ -123,7 +123,7 @@ async def health():
 async def stream_signals():
     """
     Server-Sent Events endpoint.
-    Yields per-stage events (ml_result, kronos_result, slm_result) as each model
+    Yields per-stage events (ml_result, slm_result) as each model
     completes so the frontend terminals update in real time — not all at once.
     """
 
@@ -169,10 +169,8 @@ async def stream_signals():
                             "stop_loss": last_slm_event.get("stop_loss"),
                             "target": last_slm_event.get("target"),
                             "ml_confidence": last_slm_event.get("ml_confidence"),
-                            "kronos_confidence": last_slm_event.get("kronos_confidence"),
                             "slm_confidence": last_slm_event.get("slm_confidence"),
                             "ml_reasoning": last_slm_event.get("ml_reasoning", ""),
-                            "kronos_reasoning": last_slm_event.get("kronos_reasoning", ""),
                             "slm_reasoning": last_slm_event.get("slm_reasoning", ""),
                             "combined_reasoning": last_slm_event.get("combined_reasoning", ""),
                         }

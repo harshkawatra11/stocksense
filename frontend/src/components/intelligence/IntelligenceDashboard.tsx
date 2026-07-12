@@ -42,7 +42,6 @@ export default function IntelligenceDashboard() {
   const [subTab, setSubTab] = useState<SubTab>('live')
   const [signals, setSignals] = useState<Signal[]>([])
   const [mlLines, setMlLines] = useState<TerminalLine[]>([])
-  const [kronosLines, setKronosLines] = useState<TerminalLine[]>([])
   const [slmLines, setSlmLines] = useState<TerminalLine[]>([])
   const [claudeLines, setClaudeLines] = useState<TerminalLine[]>([])
   const [lastUpdate, setLastUpdate] = useState<string | null>(null)
@@ -57,7 +56,6 @@ export default function IntelligenceDashboard() {
       if (Array.isArray(rows)) {
         const ordered = [...rows].reverse()
         setMlLines(ordered.filter(r => r.model_name === 'lgbm').map(toLine).slice(-300))
-        setKronosLines(ordered.filter(r => r.model_name === 'kronos').map(toLine).slice(-300))
         setSlmLines(ordered.filter(r => r.model_name === 'macro' || r.model_name === 'slm').map(toLine).slice(-300))
         setClaudeLines(ordered.filter(r => r.model_name === 'claude' || r.model_name === 'combined').map(toLine).slice(-300))
         if (rows.length > 0) setLastUpdate(istTime(rows[0].created_at))
@@ -100,12 +98,11 @@ export default function IntelligenceDashboard() {
 
       {subTab === 'live' ? (
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* 4 Terminals */}
-          <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-px bg-border overflow-hidden">
+          {/* 3 Terminals */}
+          <div className="flex-1 grid grid-cols-3 grid-rows-1 gap-px bg-border overflow-hidden">
             <TerminalBase title="TERMINAL 1 — ML MODEL (LightGBM)" lines={mlLines} />
-            <TerminalBase title="TERMINAL 2 — KRONOS FOUNDATION" lines={kronosLines} />
-            <TerminalBase title="TERMINAL 3 — MACRO / SLM" lines={slmLines} />
-            <TerminalBase title="TERMINAL 4 — CLAUDE SONNET" lines={claudeLines} />
+            <TerminalBase title="TERMINAL 2 — MACRO / SLM" lines={slmLines} />
+            <TerminalBase title="TERMINAL 3 — CLAUDE SONNET" lines={claudeLines} />
           </div>
 
           {/* Signal Feed */}

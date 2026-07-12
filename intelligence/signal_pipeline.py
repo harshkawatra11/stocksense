@@ -542,7 +542,7 @@ async def save_signal(conn, signal: dict) -> int:
         signal.get("target"),
         signal.get("stop_loss"),
         signal.get("ml_confidence"),
-        signal.get("kronos_confidence"),
+        None,  # kronos_confidence — Kronos dropped (Stage 3); column kept for historical rows
         signal.get("slm_confidence"),
         signal.get("confidence"),
         datetime.now(timezone.utc),
@@ -550,7 +550,6 @@ async def save_signal(conn, signal: dict) -> int:
 
     for model_name, reasoning_key in [
         ("lgbm", "ml_reasoning"),
-        ("kronos", "kronos_reasoning"),
         ("slm", "slm_reasoning"),
         ("combined", "combined_reasoning"),
     ]:
@@ -658,16 +657,17 @@ async def run_single_ticker_multi(
             "target": target,
             "target_eta_days": eta_days,
             "expected_move_pct": move_pct,
-            "predicted_path": [round(float(r.get("close", 0)), 2) for r in (path or [])],
+            # predicted_path/kronos fields removed: Kronos dropped (Stage 3), and the old
+            # `path`/`kr` variables referenced here were never defined in this function
+            # (a latent NameError bug on this dead code path).
+            "predicted_path": [],
             "affordable": affordable,
             "shares_affordable": shares,
             "macro_sector_score": round(sector_score, 4),
             "sector": sector,
             "held": held,
             "ml_confidence": ml_result.get("confidence"),
-            "kronos_confidence": kr.get("confidence"),
             "ml_reasoning": ml_result.get("reasoning", ""),
-            "kronos_reasoning": kr.get("reasoning", ""),
             "combined_reasoning": combined.get("combined_reasoning", ""),
             "macro_reasoning": (
                 f"Macro: market {macro.market_bias}; sector {sector or 'n/a'} "
@@ -709,7 +709,7 @@ async def save_signal_multi(conn, signal: dict) -> int:
         signal.get("target"),
         signal.get("stop_loss"),
         signal.get("ml_confidence"),
-        signal.get("kronos_confidence"),
+        None,  # kronos_confidence — Kronos dropped (Stage 3); column kept for historical rows
         None,  # slm_confidence — SLM is now the global macro layer, not per-signal
         signal.get("confidence"),
         signal.get("affordable"),
@@ -724,7 +724,6 @@ async def save_signal_multi(conn, signal: dict) -> int:
 
     for model_name, key in [
         ("lgbm", "ml_reasoning"),
-        ("kronos", "kronos_reasoning"),
         ("combined", "combined_reasoning"),
         ("macro", "macro_reasoning"),
     ]:

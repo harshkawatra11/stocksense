@@ -25,10 +25,12 @@ export interface Signal {
   stop_loss?: number
   target?: number
   ml_confidence?: number
+  /** Historical only — Kronos was dropped (Stage 3); new signals never populate this. */
   kronos_confidence?: number
   slm_confidence?: number
   claude_confidence?: number
   ml_reasoning?: string
+  /** Historical only — Kronos was dropped (Stage 3); new signals never populate this. */
   kronos_reasoning?: string
   slm_reasoning?: string
   claude_reasoning?: string
