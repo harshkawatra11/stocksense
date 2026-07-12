@@ -21,7 +21,7 @@ from models.ml.predict import (
 # and A/B it against the ensemble in the walk-forward harness; call sites
 # below skip it entirely on the default path.
 from models.kronos.integration import forecast as kronos_forecast, get_kronos_status
-from models.kronos.combine import combine_signals, quantile_target_stop
+from models.ml.combine import combine_signals, quantile_target_stop
 from models.slm.infer import slm_enrich
 from intelligence.portfolio_guard import get_portfolio_tickers
 from intelligence.macro_context import get_macro_context, MacroContext

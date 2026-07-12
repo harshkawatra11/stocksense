@@ -3,7 +3,7 @@
 <img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=0:0D0F14,50:00B894,100:00D4AA&height=200&section=header&text=StockSense&fontSize=64&fontColor=ffffff&animation=fadeIn&fontAlignY=38&desc=Autonomous%20NSE%20swing-trading%20intelligence&descSize=18&descAlignY=60" />
 
 <a href="https://github.com/harshkawatra11/stocksense">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=20&duration=3000&pause=900&color=00D4AA&center=true&vCenter=true&width=820&height=46&lines=Autonomous+NSE+swing-trading+brain;LightGBM+%2B+Kronos+%2B+macro+%2B+LLM+synthesis;Bring+your+own+CLI%3A+Claude+%2F+Codex+%2F+Gemini;It+paper-trades%2C+calibrates%2C+and+learns+every+market+day" alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=20&duration=3000&pause=900&color=00D4AA&center=true&vCenter=true&width=820&height=46&lines=Autonomous+NSE+swing-trading+brain;LightGBM+ensemble+%2B+quantiles+%2B+macro+%2B+LLM+synthesis;Bring+your+own+CLI%3A+Claude+%2F+Codex+%2F+Gemini;It+paper-trades%2C+calibrates%2C+and+learns+every+market+day" alt="Typing SVG" />
 </a>
 
 <br/><br/>
@@ -31,13 +31,13 @@
 
 </div>
 
-> **StockSense** is a self-running stock-research brain for the Indian market (NSE). Every 30 minutes during market hours it scans ~2,500 tradeable stocks through a four-layer model ensemble, produces BUY signals with a target, a stop, and an expected holding time, paper-trades the strongest ones, and tunes itself on what actually happened — all on your own machine, powered by whichever LLM CLI you already have.
+> **StockSense** is a self-running stock-research brain for the Indian market (NSE). Every 30 minutes during market hours it scans ~2,500 tradeable stocks through a multi-layer model ensemble, produces BUY signals with a target, a stop, and an expected holding time, paper-trades the strongest ones, and tunes itself on what actually happened — all on your own machine, powered by whichever LLM CLI you already have.
 
 ---
 
 ## ✨ Highlights
 
-- 🧠 **Four-layer signal ensemble** — LightGBM (40+ features, SHAP) → Kronos time-series forecaster → Qwen-class macro/news layer → an LLM synthesis pass, fused through a confidence-gated combine.
+- 🧠 **Three-layer signal ensemble** — a 3-seed LightGBM classifier ensemble (40+ features, SHAP, confidence-by-agreement) with q10/q50/q90 quantile-derived targets/stops → a Qwen-class macro/news layer → an LLM synthesis pass, fused through a confidence-gated combine. (Kronos was tried and dropped — see Design & Honesty Notes.)
 - 🤖 **Fully autonomous** — generates signals, paper-buys, monitors positions, and exits on target / stop / time, every market day. No buttons required.
 - 🔌 **Bring your own engine** — the synthesis layer runs on **your** Claude Code, Codex, or Gemini CLI; the macro layer on **local Ollama or Ollama Cloud**. No provider API key is wired in.
 - 📈 **Real targets, fractional ETAs** — each signal carries a price target, stop-loss, expected % move, and an interpolated "touches target in ~2.5 days" estimate.
@@ -72,7 +72,7 @@
 
 ## 🧠 Introduction
 
-Markets speak in candlesticks. StockSense is built to read that language end to end and act on it without a human in the loop. It treats a trading decision as a pipeline: a directional **machine-learning prior**, a **time-series foundation-model** forecast of the price path, a **macro/news** sentiment read of the sector, and a final **LLM synthesis** pass that confirms or rejects each idea — then a paper-trading executor that sizes, holds, and exits positions on its own.
+Markets speak in candlesticks. StockSense is built to read that language end to end and act on it without a human in the loop. It treats a trading decision as a pipeline: a directional **machine-learning ensemble** (confidence by cross-seed agreement, target/stop from quantile regression), a **macro/news** sentiment read of the sector, and a final **LLM synthesis** pass that confirms or rejects each idea — then a paper-trading executor that sizes, holds, and exits positions on its own.
 
 What makes it more than a screener is the loop. Signals are scored against real outcomes, the model-combine weights re-balance on rolling accuracy, end-of-day reviews are written back as learnings that shape the next synthesis prompt, and a conservative nightly calibration nudges the brain's own parameters within hard bounds. It is offline-first and provider-agnostic: clone it, connect a CLI you already pay for, and it runs on your machine.
 
@@ -102,11 +102,9 @@ flowchart TD
 
     subgraph ENGINE["🧠 Signal Engine"]
         direction TB
-        B1["LightGBM<br/>40+ features · SHAP"]
-        B2["Kronos<br/>1D–5D price paths"]
+        B1["LightGBM Ensemble<br/>3-seed · 40+ features · SHAP<br/>q10/q50/q90 target·stop"]
         B3["Macro Layer<br/>14-sector sentiment"]
-        B1 --> C["Weighted Combine"]
-        B2 --> C
+        B1 --> C["Confidence-Gated Combine"]
         B3 -->|±0.10 nudge| C
         C --> D{"Confidence<br/>Gate ≥ 0.55"}
         D --> E["Synthesis CLI<br/>Claude · Codex · Gemini"]
@@ -131,8 +129,8 @@ flowchart TD
 | :--- | :--- | :--- |
 | **Database** | TimescaleDB (PostgreSQL) | OHLCV hypertables, signals, portfolio, learnings, brain params |
 | **Backend** | Python 3.11 · FastAPI | REST + SSE streaming API; serves the built frontend |
-| **Directional prior** | LightGBM | 40+ engineered features, top-5 SHAP reasons per call |
-| **Forecaster** | Kronos | Decoder-only time-series foundation model, 1D–5D paths |
+| **Directional ensemble** | LightGBM (3-seed) | 40+ engineered features, top-5 SHAP reasons, confidence by cross-seed agreement |
+| **Target / stop** | LightGBM quantile regression | q10/q50/q90 forward-return interval sizes the target and stop |
 | **Macro layer** | Qwen2.5 / Nemotron via **Ollama (local or cloud)** | RSS headlines → 14-sector sentiment |
 | **Synthesis** | **Pluggable CLI** — Claude Code · Codex · Gemini | Final confirm/reject + confidence + learnings |
 | **Scheduler** | APScheduler (IST) | 12 cron jobs across the market day |
@@ -149,17 +147,16 @@ flowchart TD
 For each ticker:
   1. Load ~300 daily OHLCV candles from TimescaleDB
   2. Compute 40+ features ............ RSI · MACD · Bollinger · SMAs · F&O OI/PCR
-  3. LightGBM inference .............. (signal, confidence, top-5 SHAP features)
-  4. Kronos forecast ................. price path [close_1 .. close_N]
-        per timeframe (1D..5D):
-          • target  = peak close in the forecast path
-          • ETA     = interpolated fractional day the path first crosses target (e.g. 2.5d)
-  5. Weighted combine ............... avg(ml_conf, kronos_conf) + macro nudge
+  3. Ensemble inference .............. 3-seed LightGBM classifiers, same features
+        • confidence = mean probability across seeds
+        • agreement  = 1 - normalized std across seeds (98%+ = seeds converge)
+  4. Quantile target/stop ............ q10/q50/q90 LightGBM regressors, forward 5d return
+        • target = price scaled by q90 (BUY) / q10 (SELL); stop = the opposing quantile
+  5. Confidence-gated combine ....... ensemble confidence + macro nudge
         • macro nudge = sector_score ∈ [-1,+1] × macro_nudge_cap (0.10)
         • gate: drop if final_confidence < confidence_threshold (0.55)
-  6. Annotate ....................... target_eta_days · expected_move_pct
-                                      predicted_path · affordable · shares_affordable
-  7. ATR-based stop / 2R target
+  6. Annotate ....................... target_eta_days (fixed 5d quantile horizon)
+                                      expected_move_pct · affordable · shares_affordable
 ─────────────────────────────────────────────────────────────────────────────
 Batch → Synthesis CLI (top-N + learnings) → CONFIRM / REJECT + final confidence
 ```
@@ -223,7 +220,6 @@ The choice is saved in the `app_config` table; secrets stay in `.env` only. Re-o
 
 <img src="https://skillicons.dev/icons?i=pytorch,sklearn&theme=dark" />
 <img src="https://img.shields.io/badge/LightGBM-00D4AA?style=for-the-badge&logo=lightning&logoColor=white&labelColor=0D0F14" />
-<img src="https://img.shields.io/badge/Kronos-00B894?style=for-the-badge&logo=tradingview&logoColor=white&labelColor=0D0F14" />
 <img src="https://img.shields.io/badge/Ollama-3D85C8?style=for-the-badge&logo=ollama&logoColor=white&labelColor=0D0F14" />
 <img src="https://img.shields.io/badge/SHAP-00D4AA?style=for-the-badge&logo=scikitlearn&logoColor=white&labelColor=0D0F14" />
 
@@ -264,8 +260,8 @@ stocksense/
 │   ├── calibration.py · brain_params.py
 │   ├── position_monitor.py · trading_account.py · activity.py
 ├── models/
-│   ├── ml/         (train.py · predict.py · retrain_trigger.py)
-│   ├── kronos/     (integration.py · combine.py · kronos_repo/)
+│   ├── ml/         (train.py · predict.py · combine.py · retrain_trigger.py)
+│   ├── kronos/     (integration.py — thin archived stub, Kronos dropped in Stage 3)
 │   └── slm/        (infer.py · ollama_client.py — local/cloud client)
 ├── data/
 │   ├── db/         (schema.sql … schema_v4_brain.sql · schema_v5_providers.sql · schema_v6_health.sql)
@@ -291,7 +287,7 @@ stocksense/
 <summary><b>Signals & reasoning</b></summary>
 
 - **`signals`** — type, timeframe, price/target/stop, `final_confidence`, ETA, predicted path, status, `components_json` (per-component pipeline health snapshot — Stage 0 truth layer).
-- **`signal_reasoning`** — per-model reasoning (`lgbm` · `kronos` · `macro` · `claude`/synthesis) for each signal.
+- **`signal_reasoning`** — per-model reasoning (`lgbm` · `macro` · `claude`/synthesis) for each signal.
 - **`learnings`** — EOD-extracted, structured learnings fed back into synthesis.
 </details>
 
@@ -321,7 +317,7 @@ stocksense/
 
 - **Python 3.11+**, **Node.js 18+**, **Docker Desktop** (TimescaleDB + Redis)
 - **One synthesis CLI** (Claude Code / Codex / Gemini) + **Ollama** (local) *or* an Ollama Cloud key — see [Bring Your Own Engine](#-bring-your-own-engine)
-- *(optional)* a GPU, only if you run the macro layer locally or fine-tune Kronos
+- *(optional)* a GPU, only if you run the macro layer locally (LightGBM training/inference is CPU-only)
 
 ### 1 · Clone and configure
 
@@ -450,34 +446,36 @@ All times **IST**, driven by APScheduler in [`scheduler/market_runner.py`](sched
 
 **Single machine, single URL.** `npm run build` bundles the frontend into `frontend/dist`; the backend serves it, so everything runs from `http://localhost:8000` — no separate dev server. `start_stocksense.ps1` brings up Docker, the backend, and the scheduler, and is registered to run at Windows login, so the brain is live whenever the machine is on.
 
-> **Public hosting** would be a larger lift: multi-tenant data model, auth, cloud compute (the macro/Kronos GPU is the awkward part), a commercial market-data license, and — for publishing signals to others in India — the relevant SEBI considerations. The pluggable-engine work is the first step toward it; the rest is deliberately out of scope for a personal tool.
+> **Public hosting** would be a larger lift: multi-tenant data model, auth, cloud compute (the macro-layer GPU is the awkward part), a commercial market-data license, and — for publishing signals to others in India — the relevant SEBI considerations. The pluggable-engine work is the first step toward it; the rest is deliberately out of scope for a personal tool.
 
 ---
 
 ## 🧪 Design & Honesty Notes
 
-- **Paper-mode by default.** Trades are simulated against real prices; a track record must exist before any live execution is considered. The app is decision support, not a broker.
-- **Edge is unproven.** This is a research system. In thin periods many signals simply expire without hitting target or stop — calibration deliberately refuses to tune on weak evidence. Treat outputs as hypotheses, not advice.
+- **Paper-mode by default.** Trades are simulated against real prices; a track record must exist before any live execution is considered. Even then, live execution is designed to require a human approve/reject on every individual trade — never fully unattended.
+- **Edge is measured, not assumed, and it's currently thin.** A genuine walk-forward backtest (fresh model retrained at each quarterly checkpoint, scored strictly out-of-sample) over 2024–2026 shows +10.4 bps/trade net expectancy and a 45.3% win rate — and underperforms simply buying and holding NIFTYBEES over the same period (+1.0% vs +14.4%). Treat outputs as hypotheses, not advice; see `backtest/walkforward.py` and `backtest/reports/`.
+- **Kronos was tried and dropped.** An earlier design used the Kronos time-series foundation model for price-path forecasting. It never ran fine-tuned on NSE data (the fine-tune job OOM'd and was never re-run) — what was live in practice was either off-domain pretrained weights or a mock forecaster, and its confidence score was fabricated by construction. It's been replaced by a 3-seed LightGBM ensemble (confidence by cross-seed agreement) plus quantile regression (q10/q50/q90 sizes target/stop) — both properly validated in the walk-forward harness above. The old integration module is kept as a thin, honest stub so nothing silently breaks; the vendored model code and weights were deleted.
 - **NSE-only.** The universe is NSE cash-equity (EQ/BE). BSE-exclusive names are out of scope by design.
-- **Graceful degradation.** No synthesis CLI → that stage is skipped and ML+Kronos+macro still produce signals. No Ollama / no key → neutral macro context. Nothing hard-fails on a missing engine.
+- **Graceful degradation.** No synthesis CLI → that stage is skipped and the ensemble + macro layer still produce signals. No Ollama / no key → neutral macro context. Nothing hard-fails on a missing engine.
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] Upstox live intraday feed (primary) → sub-day timeframes (30m / 2h); Groww archived pending resubscription
+- [ ] Investigate whether the macro nudge + synthesis confirm/reject layer improves on the raw ensemble's walk-forward result (thin edge, underperforms NIFTYBEES as of the LightGBM-only backtest)
+- [ ] Sub-day timeframes (30m / 2h) once an intraday feed is fully wired
 - [ ] Auto-trim exits (sell half at first target, trail the rest)
 - [ ] Verify Gemini CLI flags + confirm Ollama Cloud model ids
-- [ ] Backtest harness with walk-forward, out-of-sample edge reporting
 - [ ] Optional multi-tenant hosting path
 
 ---
 
 ## 🙏 Acknowledgements
 
-- [**Kronos**](https://github.com/shiyu-coder/Kronos) — the open-source foundation model for financial candlesticks that powers the forecasting layer.
+- [**LightGBM**](https://github.com/microsoft/LightGBM) — the classifier ensemble and quantile regressors that drive the signal engine.
 - [**Ollama**](https://ollama.com) — local + cloud model serving for the macro layer.
 - **Claude Code · Codex · Gemini** CLIs — the interchangeable synthesis engines.
+- [**Kronos**](https://github.com/shiyu-coder/Kronos) — evaluated as an earlier forecasting layer and ultimately dropped; see Design & Honesty Notes.
 
 ---
 

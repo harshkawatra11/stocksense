@@ -20,8 +20,10 @@ from datetime import datetime, timezone
 import asyncpg
 
 from config import settings
-from intelligence.signal_pipeline import fetch_ohlcv, target_and_eta
-from models.kronos.integration import forecast as kronos_forecast
+from intelligence.signal_pipeline import fetch_ohlcv, compute_atr
+from models.ml.predict import predict_with_ensemble
+from models.ml.combine import quantile_target_stop
+from models.ml.train import QUANTILE_HORIZON_DAYS
 from intelligence.activity import log_activity
 
 log = logging.getLogger(__name__)
@@ -134,12 +136,23 @@ async def review_position(conn, pos: dict) -> dict | None:
     progress_pct = round((current - entry) / denom * 100, 2)
     status, verdict = _classify(progress_pct, days_elapsed, eta_days)
 
-    # Fresh forward look — updated target/ETA from here.
+    # Fresh forward look — updated target/ETA from here. Uses the same
+    # ensemble+quantile path signal_pipeline.py uses for new signals (Stage
+    # 3 — replaces the old Kronos candle-path forecast here too; this call
+    # site was still calling kronos_forecast() unconditionally, unlike the
+    # signal-generation path's KRONOS_ENABLED gate — see WHAT_TO_DO_NEXT.txt
+    # Kronos-drop follow-up).
     fresh_target = fresh_eta = fresh_move = None
     try:
-        kr = kronos_forecast(df, steps=settings.KRONOS_FORECAST_STEPS)
-        if not kr.get("error"):
-            fresh_target, fresh_eta, fresh_move = target_and_eta(current, kr.get("candle_forecast"))
+        pred = predict_with_ensemble(df, ticker, sector=pos.get("sector"))
+        q10, q50, q90 = pred.get("q10"), pred.get("q50"), pred.get("q90")
+        if q10 is not None and q50 is not None and q90 is not None:
+            atr = compute_atr(df)
+            fresh_stop, fresh_target = quantile_target_stop(
+                current, pred.get("signal", "HOLD"), q10, q50, q90, atr=atr,
+            )
+            fresh_eta = float(QUANTILE_HORIZON_DAYS)
+            fresh_move = (fresh_target - current) / current if current else None
     except Exception as e:
         log.debug("Fresh forecast failed for %s: %s", ticker, e)
 

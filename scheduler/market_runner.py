@@ -344,7 +344,7 @@ async def task_calibration() -> str:
 @instrumented("refresh_weights")
 async def task_refresh_weights() -> str:
     """Refresh combine.py model weights from rolling DB accuracy."""
-    from models.kronos.combine import refresh_weights_from_db
+    from models.ml.combine import refresh_weights_from_db
     await refresh_weights_from_db()
     return "ok"
 
