@@ -130,6 +130,32 @@ async def fetch_ohlcv(conn, ticker: str, limit: int = 300) -> pd.DataFrame:
     return df
 
 
+async def fetch_fo(conn, ticker: str, limit: int = 300) -> pd.DataFrame:
+    """Recent F&O daily aggregates for one ticker, same window/shape convention as
+    fetch_ohlcv (most-recent-first then re-sorted ascending), so predict_with_ensemble
+    sees the same feature distribution live as it learned on in training (train.py's
+    load_fo_data). Returns an empty DataFrame — not a crash — for tickers with no F&O
+    coverage (non-F&O-eligible small caps, or dates before fo_daily's 2010-12-16 start);
+    compute_features() degrades those rows to its documented sentinel defaults."""
+    rows = await conn.fetch(
+        """
+        SELECT time, total_oi, oi_change, put_oi, call_oi, pcr
+        FROM fo_daily
+        WHERE ticker = $1
+        ORDER BY time DESC LIMIT $2
+        """,
+        ticker, limit,
+    )
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=["time", "total_oi", "oi_change", "put_oi", "call_oi", "pcr"])
+    df["time"] = pd.to_datetime(df["time"], utc=True)
+    df = df.set_index("time").sort_index()
+    for col in ["total_oi", "oi_change", "put_oi", "call_oi", "pcr"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
 def compute_atr(df: pd.DataFrame, period: int = 14) -> float | None:
     """14-day Average True Range in absolute price terms. None if insufficient data."""
     if len(df) < period + 1:
@@ -263,6 +289,7 @@ async def run_single_ticker_streaming(
     if df.empty or len(df) < 60:
         return
 
+    fo_df = await fetch_fo(conn, ticker)
     current_price = float(df["close"].iloc[-1])
     held = ticker in portfolio_tickers
     sector = (sector_map or {}).get(ticker)
@@ -271,7 +298,7 @@ async def run_single_ticker_streaming(
     # Replaces the old ML-then-Kronos two-stage handoff (Kronos archived —
     # config.KRONOS_ENABLED, default false; see WHAT_TO_DO_NEXT.txt Section 3).
     try:
-        ml_result = predict_with_ensemble(df, ticker, sector=sector)
+        ml_result = predict_with_ensemble(df, ticker, sector=sector, fo_df=fo_df)
         yield {
             "type": "ml_result",
             "ticker": ticker,
@@ -383,13 +410,14 @@ async def run_single_ticker(
     if df.empty or len(df) < 60:
         return None
 
+    fo_df = await fetch_fo(conn, ticker)
     current_price = float(df["close"].iloc[-1])
     held = ticker in portfolio_tickers
     sector = (sector_map or {}).get(ticker)
 
     # Step 1: LightGBM ensemble (Kronos archived — see module header / config.KRONOS_ENABLED)
     try:
-        ml_result = predict_with_ensemble(df, ticker, sector=sector)
+        ml_result = predict_with_ensemble(df, ticker, sector=sector, fo_df=fo_df)
     except Exception as e:
         log.warning(f"Ensemble predict failed for {ticker}: {e}")
         return None
@@ -586,6 +614,7 @@ async def run_single_ticker_multi(
     if df.empty or len(df) < 60:
         return []
 
+    fo_df = await fetch_fo(conn, ticker)
     price = float(df["close"].iloc[-1])
     sector = sector_map.get(ticker)
     held = ticker in portfolio_tickers
@@ -597,7 +626,7 @@ async def run_single_ticker_multi(
     # q10/q50/q90 quantiles (5-day horizon, models/ml/train.py) now supply
     # the target/stop role that Kronos's per-horizon forecast path used to.
     try:
-        ml_result = predict_with_ensemble(df, ticker, sector=sector)
+        ml_result = predict_with_ensemble(df, ticker, sector=sector, fo_df=fo_df)
     except Exception as e:
         log.warning("Ensemble predict failed for %s: %s", ticker, e)
         return []

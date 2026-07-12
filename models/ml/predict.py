@@ -214,7 +214,9 @@ def get_ensemble():
     return _ensemble_models, _quantile_models
 
 
-def predict_with_ensemble(df: pd.DataFrame, ticker: str, sector: str | None = None) -> dict:
+def predict_with_ensemble(
+    df: pd.DataFrame, ticker: str, sector: str | None = None, fo_df: pd.DataFrame | None = None,
+) -> dict:
     """
     Ensemble + quantile inference. Returns:
         {
@@ -235,7 +237,7 @@ def predict_with_ensemble(df: pd.DataFrame, ticker: str, sector: str | None = No
 
     if not ensemble_models:
         # Degrade to the single-model path but keep the same return shape.
-        base = predict_with_reasoning(df, ticker, sector=sector)
+        base = predict_with_reasoning(df, ticker, sector=sector, fo_df=fo_df)
         if "error" in base:
             return base
         base.update({
@@ -249,7 +251,7 @@ def predict_with_ensemble(df: pd.DataFrame, ticker: str, sector: str | None = No
         })
         return base
 
-    feat_df = compute_features(df, ticker=ticker, sector=sector)
+    feat_df = compute_features(df, ticker=ticker, sector=sector, fo_df=fo_df)
     feat_df = feat_df.dropna(subset=feature_cols)
     if feat_df.empty:
         return {"error": "Not enough data to compute features"}
@@ -412,15 +414,20 @@ def _feature_to_text(feat_name: str, value: float, shap_val: float) -> str:
     return f"{ctx} ({direction} signal, weight: {pct:.1f}%)"
 
 
-def predict_with_reasoning(df: pd.DataFrame, ticker: str, sector: str | None = None) -> dict:
+def predict_with_reasoning(
+    df: pd.DataFrame, ticker: str, sector: str | None = None, fo_df: pd.DataFrame | None = None,
+) -> dict:
     """
     df: raw OHLCV DataFrame for a single ticker
     sector: sector name from the stocks DB table (optional; falls back to static map)
+    fo_df: optional recent F&O DataFrame (total_oi, oi_change, put_oi, call_oi, pcr),
+           indexed by date — same shape load_fo_data()/fetch_fo() produce. None/empty
+           degrades to compute_features' documented sentinel defaults.
     Returns: {confidence, signal, reasoning_text, shap_values, features}
     """
     model, explainer, feature_cols, threshold = get_model()
 
-    feat_df = compute_features(df, ticker=ticker, sector=sector)
+    feat_df = compute_features(df, ticker=ticker, sector=sector, fo_df=fo_df)
     feat_df = feat_df.dropna(subset=feature_cols)
 
     if feat_df.empty:

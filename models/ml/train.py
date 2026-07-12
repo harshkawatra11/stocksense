@@ -95,10 +95,42 @@ async def load_training_data(conn, tickers: list = None) -> pd.DataFrame:
     return df
 
 
-def _features_for_group(ticker: str, group: pd.DataFrame, feature_cols: list) -> pd.DataFrame | None:
+async def load_fo_data(conn, tickers: list = None) -> pd.DataFrame:
+    """Loads F&O daily aggregates (total_oi, oi_change, put_oi, call_oi, pcr) from
+    fo_daily, batched consistently with load_training_data (same ticker batches) so
+    we never pull all 693K+ rows into memory for tickers outside the current batch.
+    fo_daily only has coverage from 2010-12-16 onward and only for F&O-eligible
+    tickers — callers must handle tickers/date-ranges with no matching rows (see
+    compute_features' fo_df is None/empty branch, which sentinel-defaults those
+    rows honestly rather than crashing)."""
+    query = """
+        SELECT time, ticker, total_oi, oi_change, put_oi, call_oi, pcr
+        FROM fo_daily
+    """
+    if tickers:
+        placeholders = ",".join(f"${i+1}" for i in range(len(tickers)))
+        query += f" WHERE ticker IN ({placeholders})"
+        rows = await conn.fetch(query, *tickers)
+    else:
+        rows = await conn.fetch(query)
+
+    cols = ["time", "ticker", "total_oi", "oi_change", "put_oi", "call_oi", "pcr"]
+    df = pd.DataFrame(rows, columns=cols)
+    if df.empty:
+        return df
+    for col in ["total_oi", "oi_change", "put_oi", "call_oi", "pcr"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["time"] = pd.to_datetime(df["time"], utc=True)
+    df = df.set_index("time").sort_index()
+    return df
+
+
+def _features_for_group(
+    ticker: str, group: pd.DataFrame, feature_cols: list, fo_df: pd.DataFrame | None = None,
+) -> pd.DataFrame | None:
     if len(group) < 300:
         return None
-    feat = compute_features(group, ticker=ticker)
+    feat = compute_features(group, ticker=ticker, fo_df=fo_df)
     # Quantile regression target: forward QUANTILE_HORIZON_DAYS return.
     # Computed here (not in feature_engineering.py, which is out of this
     # module's scope) from the raw close series, index-aligned to feat.
@@ -153,15 +185,21 @@ async def load_and_build_features(conn, tickers: list = None, batch_size: int = 
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i:i + batch_size]
         df = await load_training_data(conn, batch)
+        fo_df_batch = await load_fo_data(conn, batch)
         total_rows += len(df)
         for ticker, group in df.groupby("ticker"):
             try:
-                keep = _features_for_group(ticker, group, feature_cols)
+                fo_group = None
+                if not fo_df_batch.empty:
+                    fo_group = fo_df_batch[fo_df_batch["ticker"] == ticker]
+                    if fo_group.empty:
+                        fo_group = None
+                keep = _features_for_group(ticker, group, feature_cols, fo_df=fo_group)
                 if keep is not None:
                     all_features.append(keep)
             except Exception as e:
                 log.warning(f"Feature error for {ticker}: {e}")
-        del df
+        del df, fo_df_batch
         log.info(f"  batch {i//batch_size + 1}/{(len(tickers)+batch_size-1)//batch_size} done "
                  f"({total_rows:,} raw rows so far)")
 
@@ -170,7 +208,11 @@ async def load_and_build_features(conn, tickers: list = None, batch_size: int = 
 
 
 def build_feature_matrix(df: pd.DataFrame) -> tuple:
-    """Legacy in-memory path (kept for callers that already hold a raw df)."""
+    """Legacy in-memory path (kept for callers that already hold a raw df).
+    NOTE: no DB connection here, so F&O features are NOT wired in this path —
+    compute_features degrades to its documented sentinel defaults (oi_change_pct=0.0,
+    pcr=1.0, oi_rising=0) for every row. Unused by train()/load_and_build_features()
+    (which do wire fo_df); not currently called anywhere in the codebase."""
     feature_cols = get_all_feature_columns()
     all_features = []
     for ticker, group in df.groupby("ticker"):
