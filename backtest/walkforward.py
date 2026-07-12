@@ -418,14 +418,32 @@ async def main():
                      help="Override the per-window F1-optimal threshold with a fixed gate.")
     args = ap.parse_args()
 
+    # NOTE: the DB connection used to load `raw` was previously held open
+    # across the entire run_walkforward() call below -- which, for a
+    # multi-year run, is many minutes to hours of pure CPU-bound synchronous
+    # LightGBM training that blocks the asyncio event loop completely (no
+    # await points, so the connection is never touched but also never gets
+    # a chance to send/receive a keepalive). Docker Desktop's networking
+    # (WSL2 vswitch) resets long-idle TCP connections, which surfaced as a
+    # "ConnectionResetError: [WinError 10054]" crash — not a bug in the
+    # walk-forward logic itself, an artifact of holding a DB connection open
+    # and idle for far longer than any real query needs it. Fix: close the
+    # connection immediately after loading the raw data (all of it is
+    # already in memory as a DataFrame at that point, no further DB access
+    # happens during training/simulation), then open a FRESH connection
+    # afterward only for the benchmark load.
     conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
         log.info("Loading ohlcv_daily...")
         raw = await load_ohlcv(conn)
         log.info("Loaded %d rows, %d tickers", len(raw), raw["ticker"].nunique())
+    finally:
+        await conn.close()
 
-        result = run_walkforward(raw, args.from_year, args.to_year, args.confidence_threshold)
+    result = run_walkforward(raw, args.from_year, args.to_year, args.confidence_threshold)
 
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
         log.info("Loading benchmark (%s)...", BENCHMARK_TICKER)
         bench_df = await load_benchmark(conn, args.from_year, args.to_year)
         bench = benchmark_buy_and_hold(bench_df)

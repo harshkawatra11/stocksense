@@ -40,6 +40,38 @@ LGBM_PARAMS = {
     "n_jobs": -1,
 }
 
+# ------------------------------------------------------------------ #
+# Ensemble + quantile regression (replaces Kronos's target/stop/ETA role
+# — see WHAT_TO_DO_NEXT.txt Section 3 / Stage 3 of the build plan).
+# ------------------------------------------------------------------ #
+# 3-seed classifier ensemble: same LGBM_PARAMS/features/labels, different
+# random seeds. Confidence = mean probability across seeds; agreement (1 -
+# normalized std) is a secondary signal exposed to combine.py.
+ENSEMBLE_SEEDS = [42, 123, 2024]
+
+# Quantile regressors (q10/q50/q90) of the forward N-day return. Horizon
+# matches HOLD_DAYS from backtest/walkforward.py's convention (5D) — see
+# that module's `HOLD_DAYS = 5` and target_1d_return in feature_engineering.py
+# for the 1-day classifier label. The quantile target below is a separate,
+# longer horizon (5-day forward return) so q10/q50/q90 can size a
+# stop/target band the way Kronos's forecast path used to.
+QUANTILE_HORIZON_DAYS = 5
+QUANTILE_ALPHAS = {"q10": 0.1, "q50": 0.5, "q90": 0.9}
+QUANTILE_PARAMS_BASE = {
+    "boosting_type": "gbdt",
+    "num_leaves": 63,
+    "learning_rate": 0.03,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "min_child_samples": 50,
+    "lambda_l1": 0.1,
+    "lambda_l2": 0.1,
+    "n_estimators": 500,
+    "verbose": -1,
+    "n_jobs": -1,
+}
+
 
 async def load_training_data(conn, tickers: list = None) -> pd.DataFrame:
     query = """
@@ -72,6 +104,12 @@ def build_feature_matrix(df: pd.DataFrame) -> tuple:
         try:
             feat = compute_features(group, ticker=ticker)
             feat["ticker"] = ticker
+            # Quantile regression target: forward QUANTILE_HORIZON_DAYS return.
+            # Computed here (not in feature_engineering.py, which is out of this
+            # module's scope) from the raw close series, index-aligned to feat.
+            feat["target_nd_return"] = (
+                group["close"].pct_change(QUANTILE_HORIZON_DAYS).shift(-QUANTILE_HORIZON_DAYS)
+            )
             all_features.append(feat)
         except Exception as e:
             log.warning(f"Feature error for {ticker}: {e}")
@@ -105,6 +143,53 @@ def compute_optimal_threshold(model, X_val: pd.DataFrame, y_val: pd.Series) -> f
             best_thresh = t
     log.info(f"Optimal threshold: {best_thresh:.2f} (val F1={best_f1:.4f})")
     return float(round(best_thresh, 4))
+
+
+def train_ensemble_seeds(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFrame, y_val: pd.Series,
+                          scale_pos_weight: float) -> list:
+    """
+    Train ENSEMBLE_SEEDS independent LGBM classifiers on identical data/features,
+    differing only by random_state. Used at inference for confidence-by-agreement
+    (mean probability + std across seeds) instead of a single point estimate —
+    replaces Kronos's fabricated sigmoid-of-move-magnitude confidence (see
+    WHAT_TO_DO_NEXT.txt 2.2).
+    """
+    models = []
+    for seed in ENSEMBLE_SEEDS:
+        params = {**LGBM_PARAMS, "scale_pos_weight": scale_pos_weight, "random_state": seed,
+                   "bagging_seed": seed, "feature_fraction_seed": seed}
+        m = lgb.LGBMClassifier(**params)
+        m.fit(
+            X_tr, y_tr,
+            eval_set=[(X_val, y_val)],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
+        )
+        models.append(m)
+        log.info(f"Ensemble seed {seed} trained.")
+    return models
+
+
+def train_quantile_models(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFrame, y_val: pd.Series) -> dict:
+    """
+    Train LightGBM quantile regressors (q10/q50/q90) of the forward
+    QUANTILE_HORIZON_DAYS return. These replace Kronos's forecast-path role:
+    q50 = expected move, q10/q90 = a predictive interval sized into
+    stop-loss/target instead of the flat ATR-multiple heuristic
+    (see models/kronos/combine.py and intelligence/signal_pipeline.py's
+    former target_and_eta()).
+    """
+    models = {}
+    for name, alpha in QUANTILE_ALPHAS.items():
+        params = {**QUANTILE_PARAMS_BASE, "objective": "quantile", "alpha": alpha, "metric": "quantile"}
+        m = lgb.LGBMRegressor(**params)
+        m.fit(
+            X_tr, y_tr,
+            eval_set=[(X_val, y_val)],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
+        )
+        models[name] = m
+        log.info(f"Quantile model {name} (alpha={alpha}) trained.")
+    return models
 
 
 async def train(tickers=None):
@@ -227,6 +312,49 @@ async def train(tickers=None):
 
     log.info(f"Model saved: {model_path}")
     log.info(f"Top 10 features: {top_importances[:10]}")
+
+    # ------------------------------------------------------------------ #
+    # 3-seed ensemble + quantile regressors (Stage 3 — replaces Kronos)   #
+    # ------------------------------------------------------------------ #
+    try:
+        ensemble_models = train_ensemble_seeds(X_ftr, y_ftr, X_fval, y_fval, scale_pos_weight)
+        ensemble_paths = []
+        for seed, m in zip(ENSEMBLE_SEEDS, ensemble_models):
+            p = os.path.join(MODEL_SAVE_DIR, f"lgbm_seed{seed}.pkl")
+            with open(p, "wb") as f:
+                pickle.dump(m, f)
+            ensemble_paths.append(p)
+        log.info(f"Ensemble saved: {ensemble_paths}")
+
+        # Quantile targets: reuse the same train/val split, but drop rows with
+        # no forward-return label (the trailing QUANTILE_HORIZON_DAYS rows).
+        q_col = "target_nd_return"
+        q_train_df = combined.loc[X_ftr.index].dropna(subset=[q_col])
+        q_val_df = combined.loc[X_fval.index].dropna(subset=[q_col])
+        if len(q_train_df) > 100 and len(q_val_df) > 20:
+            quantile_models = train_quantile_models(
+                q_train_df[feature_cols], q_train_df[q_col],
+                q_val_df[feature_cols], q_val_df[q_col],
+            )
+            quantile_bundle_path = os.path.join(MODEL_SAVE_DIR, "lgbm_quantiles.pkl")
+            with open(quantile_bundle_path, "wb") as f:
+                pickle.dump(quantile_models, f)
+            log.info(f"Quantile models saved: {quantile_bundle_path}")
+        else:
+            log.warning("Not enough labeled rows for quantile training — skipping.")
+
+        ensemble_meta = {
+            "version": version,
+            "seeds": ENSEMBLE_SEEDS,
+            "quantile_horizon_days": QUANTILE_HORIZON_DAYS,
+            "quantile_alphas": QUANTILE_ALPHAS,
+            "trained_at": datetime.now().isoformat(),
+        }
+        with open(os.path.join(MODEL_SAVE_DIR, "lgbm_ensemble_meta.json"), "w") as f:
+            json.dump(ensemble_meta, f, indent=2)
+    except Exception as e:
+        log.warning(f"Ensemble/quantile training failed (non-fatal — single-model lgbm_latest.pkl "
+                    f"still saved): {e}")
 
     # Persist to DB
     # Determine period start/end from index

@@ -173,8 +173,20 @@ class Settings:
         return os.getenv("GEMINI_DEEP_MODEL", "gemini-2.5-pro")
 
     # ------------------------------------------------------------------ #
-    # Kronos forecast                                                      #
+    # Kronos forecast — ARCHIVED (see WHAT_TO_DO_NEXT.txt Section 2.1/2.2 and
+    # Stage 3 of quiet-giggling-bumblebee.md). Kronos never ran fine-tuned on
+    # NSE data; what was live was either off-domain pretrained weights or a
+    # random-walk mock. Dropped in favor of a 3-seed LightGBM ensemble +
+    # quantile regressors (models/ml/train.py, models/ml/predict.py). Code is
+    # left intact (not deleted) behind this flag, same archiving convention
+    # as the Groww retirement — default OFF. Flip KRONOS_ENABLED=true only to
+    # A/B a resurrected, properly fine-tuned Kronos against the ensemble in
+    # the walk-forward harness.
     # ------------------------------------------------------------------ #
+    @property
+    def KRONOS_ENABLED(self) -> bool:
+        return os.getenv("KRONOS_ENABLED", "false").lower() in ("1", "true", "yes")
+
     @property
     def KRONOS_FORECAST_STEPS(self) -> int:
         return int(os.getenv("KRONOS_FORECAST_STEPS", "5"))
