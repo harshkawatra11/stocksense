@@ -157,6 +157,23 @@ async def system_health():
         # it without special-casing.
         components["scheduler"] = await _scheduler_heartbeat(conn)
         components["quote_feed"] = _quote_feed_health()
+
+        # get_component_statuses() defaults macro=None (this route never runs
+        # the pipeline, so it has no live MacroContext to pass), which made
+        # it unconditionally report "unavailable" even when the macro/qwen
+        # layer is actually healthy — found live 2026-07-13: recent signals'
+        # components_json->'macro' showed real ok/ollama_local reads the
+        # whole time. Pull the most recent real read from signals instead of
+        # re-running the macro layer here (that would mean a live Ollama call
+        # on every health-check poll).
+        latest_macro = await conn.fetchval(
+            "SELECT components_json->'macro' FROM signals "
+            "WHERE components_json->'macro' IS NOT NULL "
+            "ORDER BY fired_at DESC LIMIT 1"
+        )
+        if latest_macro:
+            import json
+            components["macro"] = json.loads(latest_macro) if isinstance(latest_macro, str) else latest_macro
     finally:
         await conn.close()
 
