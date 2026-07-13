@@ -52,26 +52,41 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
     Sizing: unlike intelligence/auto_trader.py's PAPER path (which sizes off
     the fixed settings.CASH_AVAILABLE ledger by design — see trading_account.py
     module docstring on "epoch 2"), this is the human-approval path that
-    actually places Upstox sandbox orders (API-parity rehearsal of the real
-    account), so it sizes off REAL funds fetched live from Upstox via
+    actually places Upstox sandbox orders, so it's SUPPOSED to size off REAL
+    funds fetched live from Upstox via
     data/pipeline/upstox_orders.get_available_funds(). Fetched once per run
-    (not once per candidate) and reused across the whole batch. If funds are
-    unavailable for any reason, this does NOT fall back to shares_affordable
-    or CASH_AVAILABLE — it skips queueing entirely for the run, consistent
-    with the project's "no silent fallback to fake data" rule.
+    (not once per candidate) and reused across the whole batch.
+
+    TEMPORARY STOPGAP (see config.SANDBOX_VIRTUAL_CAPITAL's docstring for the
+    full story): get_available_funds() currently ALWAYS returns unavailable —
+    Upstox's sandbox has no funds endpoint at all, and the live endpoint needs
+    a static IP that isn't registered yet. Rather than skip queueing entirely
+    every single run (which would make the sandbox flow untestable until a
+    static IP exists), this falls back to settings.SANDBOX_VIRTUAL_CAPITAL —
+    a config number, NOT a real balance. Every reasoning string, Telegram
+    message, and this function's returned dict is labeled
+    "[SANDBOX VIRTUAL CAPITAL]" whenever this fallback is used, so it's never
+    confused with a real-funds read. DELETE THIS FALLBACK once a static IP
+    is registered and get_available_funds() starts returning "ok" — see the
+    TODO on SANDBOX_VIRTUAL_CAPITAL in config.py.
     """
     if not settings.LIVE_CONFIRMATION_ENABLED:
         return {"queued": [], "skipped": [], "reason": "LIVE_CONFIRMATION_ENABLED is false"}
 
     funds = await get_available_funds()
+    funds_label = ""
     if funds["status"] != "ok" or funds.get("available") is None:
         detail = funds.get("detail", "unknown error")
-        log.warning("queue_fresh_signals: skipping run — Upstox funds unavailable: %s", detail)
-        return {
-            "queued": [], "skipped": [],
-            "reason": f"Upstox funds unavailable: {detail}",
-        }
-    available_funds = float(funds["available"])
+        log.warning(
+            "queue_fresh_signals: real Upstox funds unavailable (%s) — falling back to "
+            "SANDBOX_VIRTUAL_CAPITAL (₹%.0f), NOT your real balance. See config.py "
+            "SANDBOX_VIRTUAL_CAPITAL docstring — delete this fallback once a static IP "
+            "is registered.", detail, settings.SANDBOX_VIRTUAL_CAPITAL,
+        )
+        available_funds = settings.SANDBOX_VIRTUAL_CAPITAL
+        funds_label = "[SANDBOX VIRTUAL CAPITAL — not your real Upstox balance] "
+    else:
+        available_funds = float(funds["available"])
 
     from intelligence.brain_params import get_params
 
@@ -114,13 +129,13 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
             if qty < 1 or price <= 0:
                 skipped.append({
                     "ticker": ticker,
-                    "why": f"no affordable quantity (budget ₹{remaining_budget:.0f} @ ₹{price:.2f}, "
-                           f"real Upstox funds ₹{available_funds:.0f})",
+                    "why": f"{funds_label}no affordable quantity (budget ₹{remaining_budget:.0f} "
+                           f"@ ₹{price:.2f}, funds ₹{available_funds:.0f})",
                 })
                 continue
 
             reasoning = (
-                f"conf={float(s['final_confidence'] or 0):.2f} tf={s.get('timeframe')} "
+                f"{funds_label}conf={float(s['final_confidence'] or 0):.2f} tf={s.get('timeframe')} "
                 f"target=₹{s.get('target_price')} eta={s.get('target_eta_days')}d"
             )
             row = await conn.fetchrow(
@@ -154,7 +169,16 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
             except Exception as e:
                 log.warning("Telegram notify failed for %s (queueing unaffected): %s", ticker, e)
 
-        return {"queued": queued, "skipped": skipped}
+        result = {"queued": queued, "skipped": skipped}
+        if funds_label:
+            result["funds_source"] = "sandbox_virtual_capital"
+            result["warning"] = (
+                "Sized against SANDBOX_VIRTUAL_CAPITAL, not your real Upstox balance "
+                "— see config.py for why and how to remove this fallback."
+            )
+        else:
+            result["funds_source"] = "live_upstox_funds"
+        return result
     finally:
         if own_conn:
             await conn.close()

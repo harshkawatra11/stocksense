@@ -92,7 +92,7 @@ the entire live-data path.
 
 ## 2c. Sandbox — risk-free order-API rehearsal
 
-`sandbox.upstox.com/v2` emulates the real API (place/modify/cancel orders)
+`api-sandbox.upstox.com/v2` emulates the real API (place/modify/cancel orders)
 with no time restrictions and a separate sandbox access token — no real
 money, no real market impact. This is the natural place to rehearse the
 confirmation-gated execution path (`pending_trade_confirmations` table,

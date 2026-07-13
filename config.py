@@ -240,7 +240,7 @@ class Settings:
 
     @property
     def UPSTOX_SANDBOX_TOKEN(self) -> str:
-        """Separate access token for sandbox.upstox.com/v2 — risk-free order
+        """Separate access token for api-sandbox.upstox.com/v2 — risk-free order
         rehearsal, no real money, no market impact. Generated from a
         dedicated 'Sandbox' section of the developer portal, distinct from
         both the live OAuth token and UPSTOX_ANALYTICS_TOKEN above. Required
@@ -279,6 +279,27 @@ class Settings:
         to avoid hitting the funds endpoint once per candidate ticker within
         the same run, not to avoid hitting it across runs. Default 30s."""
         return int(os.getenv("UPSTOX_FUNDS_CACHE_SECONDS", "30"))
+
+    @property
+    def SANDBOX_VIRTUAL_CAPITAL(self) -> float:
+        """TEMPORARY STOPGAP — DELETE THIS SETTING ONCE REAL FUNDS ARE READABLE.
+
+        get_available_funds() (data/pipeline/upstox_orders.py) currently
+        cannot read your real Upstox balance: sandbox has no funds/margin
+        endpoint at all, and the live Analytics-Token funds endpoint returns
+        UDAPI1221 ("permitted only from the static IP configured in your
+        account") because no static IP is registered. Until one is set up
+        (SEBI allows changing it once/week — see docs/UPSTOX_API_NOTES.md),
+        intelligence/live_confirmation.py falls back to sizing sandbox
+        rehearsal trades against THIS number instead of skipping queueing
+        entirely. It is NOT your real balance — every reasoning string and
+        Telegram message built from this fallback is labeled
+        "[SANDBOX VIRTUAL CAPITAL]" so it can never be mistaken for a real
+        funds read. Once a static IP is registered and get_available_funds()
+        returns status "ok", this setting becomes dead code — remove it,
+        the SANDBOX_VIRTUAL_CAPITAL branch in queue_fresh_signals(), and this
+        docstring together."""
+        return float(os.getenv("SANDBOX_VIRTUAL_CAPITAL", "100000"))
 
     @property
     def CONFIRMATION_EXPIRY_MINUTES(self) -> int:

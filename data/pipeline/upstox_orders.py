@@ -1,5 +1,5 @@
 """
-Upstox SANDBOX order placement — sandbox.upstox.com/v2, risk-free rehearsal.
+Upstox SANDBOX order placement — api-sandbox.upstox.com/v2, risk-free rehearsal.
 
 This is the ONLY order-placement code in the app, and it only ever talks to
 Upstox's sandbox environment: no real money, no real market impact, a
@@ -31,9 +31,13 @@ from data.pipeline.upstox_client import resolve_instrument_key
 
 log = logging.getLogger(__name__)
 
-SANDBOX_ORDER_URL = "https://sandbox.upstox.com/v2/order/place"
-SANDBOX_ORDER_DETAILS_URL = "https://sandbox.upstox.com/v2/order/details"
-SANDBOX_FUNDS_URL = "https://sandbox.upstox.com/v2/user/get-funds-and-margin"
+# The correct sandbox host is api-sandbox.upstox.com, NOT sandbox.upstox.com
+# (the latter does not resolve at all — confirmed via DNS lookup, "Non-existent
+# domain" — an earlier version of this file had it wrong and every sandbox
+# call was silently failing with a network error, not an auth error).
+SANDBOX_ORDER_URL = "https://api-sandbox.upstox.com/v2/order/place"
+SANDBOX_ORDER_DETAILS_URL = "https://api-sandbox.upstox.com/v2/order/details"
+SANDBOX_FUNDS_URL = "https://api-sandbox.upstox.com/v2/user/get-funds-and-margin"
 
 # Upstox order statuses that mean "still working" — poll again later.
 # Everything else (complete, rejected, cancelled) is terminal.
