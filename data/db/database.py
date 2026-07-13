@@ -63,7 +63,6 @@ class Signal(Base):
     target_price = Column(Numeric(12, 2))
     stop_loss = Column(Numeric(12, 2))
     ml_confidence = Column(Numeric(5, 4))
-    kronos_confidence = Column(Numeric(5, 4))
     slm_confidence = Column(Numeric(5, 4))
     claude_confidence = Column(Numeric(5, 4))
     final_confidence = Column(Numeric(5, 4))

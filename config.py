@@ -69,23 +69,24 @@ class Settings:
     # ------------------------------------------------------------------ #
     # Signal horizons (concurrent, config-driven)                          #
     # ------------------------------------------------------------------ #
-    # Each horizon produces its own signal per ticker per run. `kronos_steps`
-    # is the forecast horizon fed to Kronos; `hold_days` is how long a signal
-    # stays active before it's resolved/expired; `requires_intraday` marks
-    # sub-day horizons that stay dormant until a live intraday feed exists.
+    # Each horizon produces its own signal per ticker per run. `forecast_steps`
+    # is the forward-looking window used when deriving target/stop from the
+    # quantile regressors; `hold_days` is how long a signal stays active
+    # before it's resolved/expired; `requires_intraday` marks sub-day
+    # horizons that stay dormant until a live intraday feed exists.
     # Add/remove a dict here to add/remove a timeframe — nothing else hardcodes them.
-    # Integer-day horizons are Kronos-backed (daily candles). Fractional precision
-    # (e.g. "touches target in ~2.5 days") is delivered per-signal by target_eta_days,
-    # NOT by separate half-day buckets — there's no half-day candle to forecast.
+    # Fractional precision (e.g. "touches target in ~2.5 days") is delivered
+    # per-signal by target_eta_days, NOT by separate half-day buckets — there's
+    # no half-day candle to forecast.
     TIMEFRAMES: list[dict] = [
-        {"label": "1D", "kronos_steps": 1, "hold_days": 1, "requires_intraday": False},
-        {"label": "2D", "kronos_steps": 2, "hold_days": 2, "requires_intraday": False},
-        {"label": "3D", "kronos_steps": 3, "hold_days": 3, "requires_intraday": False},
-        {"label": "4D", "kronos_steps": 4, "hold_days": 4, "requires_intraday": False},
-        {"label": "5D", "kronos_steps": 5, "hold_days": 5, "requires_intraday": False},
+        {"label": "1D", "forecast_steps": 1, "hold_days": 1, "requires_intraday": False},
+        {"label": "2D", "forecast_steps": 2, "hold_days": 2, "requires_intraday": False},
+        {"label": "3D", "forecast_steps": 3, "hold_days": 3, "requires_intraday": False},
+        {"label": "4D", "forecast_steps": 4, "hold_days": 4, "requires_intraday": False},
+        {"label": "5D", "forecast_steps": 5, "hold_days": 5, "requires_intraday": False},
         # Sub-day horizons — enabled automatically once intraday data is present.
-        {"label": "30m", "kronos_steps": 1, "hold_days": 0, "requires_intraday": True},
-        {"label": "2h", "kronos_steps": 1, "hold_days": 0, "requires_intraday": True},
+        {"label": "30m", "forecast_steps": 1, "hold_days": 0, "requires_intraday": True},
+        {"label": "2h", "forecast_steps": 1, "hold_days": 0, "requires_intraday": True},
     ]
 
     @property
@@ -173,33 +174,6 @@ class Settings:
         return os.getenv("GEMINI_DEEP_MODEL", "gemini-2.5-pro")
 
     # ------------------------------------------------------------------ #
-    # Kronos forecast — ARCHIVED (see WHAT_TO_DO_NEXT.txt Section 2.1/2.2 and
-    # Stage 3 of quiet-giggling-bumblebee.md). Kronos never ran fine-tuned on
-    # NSE data; what was live was either off-domain pretrained weights or a
-    # random-walk mock. Dropped in favor of a 3-seed LightGBM ensemble +
-    # quantile regressors (models/ml/train.py, models/ml/predict.py). Code is
-    # left intact (not deleted) behind this flag, same archiving convention
-    # as the Groww retirement — default OFF. Flip KRONOS_ENABLED=true only to
-    # A/B a resurrected, properly fine-tuned Kronos against the ensemble in
-    # the walk-forward harness.
-    # ------------------------------------------------------------------ #
-    @property
-    def KRONOS_ENABLED(self) -> bool:
-        return os.getenv("KRONOS_ENABLED", "false").lower() in ("1", "true", "yes")
-
-    @property
-    def KRONOS_FORECAST_STEPS(self) -> int:
-        return int(os.getenv("KRONOS_FORECAST_STEPS", "5"))
-
-    @property
-    def KRONOS_MIN_CANDLES(self) -> int:
-        return int(os.getenv("KRONOS_MIN_CANDLES", "30"))
-
-    @property
-    def KRONOS_MODEL_SIZE(self) -> str:
-        return os.getenv("KRONOS_MODEL_SIZE", "mini")
-
-    # ------------------------------------------------------------------ #
     # Groww (primary live feed — TOTP auth, no IP whitelisting)            #
     # ------------------------------------------------------------------ #
     @property
@@ -254,7 +228,7 @@ class Settings:
         """Opt-in flag: when true, intelligence/live_confirmation.py queues
         qualifying fresh signals into pending_trade_confirmations for human
         approve/reject. Default OFF — nothing queues for your review until
-        you explicitly turn this on, same pattern as KRONOS_ENABLED."""
+        you explicitly turn this on."""
         return os.getenv("LIVE_CONFIRMATION_ENABLED", "false").lower() in ("1", "true", "yes")
 
     @property

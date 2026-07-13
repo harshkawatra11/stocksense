@@ -25,13 +25,9 @@ export interface Signal {
   stop_loss?: number
   target?: number
   ml_confidence?: number
-  /** Historical only — Kronos was dropped (Stage 3); new signals never populate this. */
-  kronos_confidence?: number
   slm_confidence?: number
   claude_confidence?: number
   ml_reasoning?: string
-  /** Historical only — Kronos was dropped (Stage 3); new signals never populate this. */
-  kronos_reasoning?: string
   slm_reasoning?: string
   claude_reasoning?: string
   combined_reasoning?: string
@@ -226,12 +222,11 @@ export interface BrainStatus {
 export interface ComponentStatus {
   status: 'ok' | 'degraded' | 'unavailable'
   detail: string
-  source?: string   // kronos: finetuned|pretrained|mock|unavailable; llm_synthesis: claude|codex|gemini|skipped; macro: ollama_local|ollama_cloud|neutral_fallback
+  source?: string   // llm_synthesis: claude|codex|gemini|skipped; macro: ollama_local|ollama_cloud|neutral_fallback
   stale?: boolean   // lightgbm only
 }
 
 export interface ComponentStatuses {
-  kronos: ComponentStatus
   lightgbm: ComponentStatus
   llm_synthesis: ComponentStatus
   macro: ComponentStatus

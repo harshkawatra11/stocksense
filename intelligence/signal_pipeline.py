@@ -16,11 +16,6 @@ from data.pipeline.feature_engineering import compute_features
 from models.ml.predict import (
     predict_with_reasoning, get_model_status, predict_with_ensemble, get_ensemble_status,
 )
-# Kronos is archived (config.KRONOS_ENABLED, default false) — see
-# WHAT_TO_DO_NEXT.txt Section 3. Import kept so an operator can flip the flag
-# and A/B it against the ensemble in the walk-forward harness; call sites
-# below skip it entirely on the default path.
-from models.kronos.integration import forecast as kronos_forecast, get_kronos_status
 from models.ml.combine import combine_signals, quantile_target_stop
 from models.slm.infer import slm_enrich
 from intelligence.portfolio_guard import get_portfolio_tickers
@@ -58,38 +53,6 @@ def apply_macro_nudge(
     score = macro.sector_score(sector)  # -1.0 .. +1.0
     delta = cap * score if signal == "BUY" else (-cap * score if signal == "SELL" else 0.0)
     return max(0.0, min(0.97, confidence + delta)), score
-
-
-def target_and_eta(
-    current_price: float, forecast_records: list[dict] | None
-) -> tuple[float | None, float | None, float | None]:
-    """
-    From a Kronos daily forecast path, derive:
-      - target  : the peak predicted price over the path (where it's headed)
-      - eta_days : fractional days to first reach that target (e.g. 2.5)
-      - move_pct : expected % move to target
-    Interpolates within a day between the prior close and that day's high so the
-    ETA lands on fractional days like 1.5 / 2.5. Returns (None,None,None) if no path.
-    """
-    if not forecast_records:
-        return None, None, None
-    highs = [float(r.get("high", r.get("close", current_price))) for r in forecast_records]
-    target = max(highs)
-    if target <= current_price:
-        return None, None, None  # no upside in the forecast
-
-    prev = current_price
-    eta = float(len(forecast_records))
-    for i, r in enumerate(forecast_records, start=1):
-        hi = float(r.get("high", r.get("close", prev)))
-        if hi >= target - 1e-9:
-            span = hi - prev
-            frac = (target - prev) / span if span > 1e-9 else 1.0
-            eta = round((i - 1) + max(0.0, min(1.0, frac)), 1)
-            break
-        prev = float(r.get("close", prev))
-    move_pct = (target - current_price) / current_price * 100
-    return round(target, 2), eta, round(move_pct, 2)
 
 
 def horizon_stops(
@@ -176,15 +139,13 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> float | None:
 # ------------------------------------------------------------------ #
 # Shared status contract (see WHAT_TO_DO_NEXT.txt Section 4 / Stage 0):
 #   {status: "ok"|"degraded"|"unavailable", detail: <str>, source: <enum>}
-# Components: kronos (finetuned|pretrained|mock|unavailable),
-#             lightgbm (status + stale: bool, no source),
+# Components: lightgbm (status + stale: bool, no source),
 #             llm_synthesis (claude|codex|gemini|skipped),
 #             macro (ollama_local|ollama_cloud|neutral_fallback)
 #
 # Each producer module exposes its own status getter — this is a thin
 # passthrough that assembles them into one snapshot dict:
 #   models/ml/predict.py       -> get_model_status()   (source: loaded|stale|hot_reload_check_failed|unavailable)
-#   models/kronos/integration.py -> get_kronos_status() (source: finetuned|pretrained|mock|unavailable)
 #   intelligence/llm_cli.py    -> get_component_status() (source: claude|codex|gemini|skipped)
 #   intelligence/macro_context.py -> MacroContext.component_status/_source/_detail
 
@@ -193,20 +154,6 @@ def _lightgbm_status() -> dict:
         return get_model_status()
     except Exception as e:  # noqa: BLE001
         return {"status": "unavailable", "detail": f"lightgbm status check failed: {e}", "source": "unavailable"}
-
-
-def _kronos_status() -> dict:
-    if not settings.KRONOS_ENABLED:
-        return {
-            "status": "unavailable",
-            "detail": "Kronos archived (KRONOS_ENABLED=false) — replaced by the LGBM ensemble "
-                      "+ quantile regressors, see models/ml/predict.py:predict_with_ensemble",
-            "source": "archived",
-        }
-    try:
-        return get_kronos_status()
-    except Exception as e:  # noqa: BLE001
-        return {"status": "unavailable", "detail": f"kronos status check failed: {e}", "source": "unavailable"}
 
 
 def _ensemble_status() -> dict:
@@ -244,7 +191,6 @@ def get_component_statuses(macro: "MacroContext | None" = None) -> dict:
     Shape (each component key maps to {status, detail, source}):
         {
           "lightgbm":      {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "loaded"|"stale"|"hot_reload_check_failed"|"unavailable"},
-          "kronos":        {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "finetuned"|"pretrained"|"mock"|"unavailable"},
           "llm_synthesis": {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "claude"|"codex"|"gemini"|"skipped"},
           "macro":         {"status": "ok"|"degraded"|"unavailable", "detail": str, "source": "ollama_local"|"ollama_cloud"|"neutral_fallback"},
         }
@@ -254,7 +200,6 @@ def get_component_statuses(macro: "MacroContext | None" = None) -> dict:
     components_json, and exposed via GET /api/system/health.
     """
     return {
-        "kronos": _kronos_status(),
         "ensemble": _ensemble_status(),
         "lightgbm": _lightgbm_status(),
         "llm_synthesis": _llm_synthesis_status(),
@@ -295,8 +240,6 @@ async def run_single_ticker_streaming(
     sector = (sector_map or {}).get(ticker)
 
     # Stage 1: LightGBM ensemble (confidence = cross-seed agreement) + quantiles.
-    # Replaces the old ML-then-Kronos two-stage handoff (Kronos archived —
-    # config.KRONOS_ENABLED, default false; see WHAT_TO_DO_NEXT.txt Section 3).
     try:
         ml_result = predict_with_ensemble(df, ticker, sector=sector, fo_df=fo_df)
         yield {
@@ -325,22 +268,6 @@ async def run_single_ticker_streaming(
             "price": current_price,
         }
 
-    # Kronos (archived, opt-in via KRONOS_ENABLED) — diagnostic only, no longer
-    # blended into combine_signals(). Left in for an operator A/B, not called
-    # on the default path.
-    if settings.KRONOS_ENABLED:
-        try:
-            kr_diag = kronos_forecast(df, steps=5)
-            yield {
-                "type": "kronos_result",
-                "ticker": ticker,
-                "signal": kr_diag.get("signal", "HOLD"),
-                "confidence": kr_diag.get("confidence", 0.5),
-                "kronos_reasoning": kr_diag.get("reasoning", ""),
-            }
-        except Exception as e:
-            log.debug(f"Kronos diagnostic forecast failed for {ticker}: {e}")
-
     # Stage 2: Combine (ensemble-only) + SLM enrichment
     combined = combine_signals(ml_result)
 
@@ -356,7 +283,6 @@ async def run_single_ticker_streaming(
             price=current_price,
             combined_signal=combined,
             ml_reasoning=ml_result.get("reasoning", ml_result.get("ml_reasoning", "")),
-            kronos_reasoning="",  # Kronos archived — no second-model reasoning to pass
             portfolio_held=held,
             learnings_context=learnings,
             atr=atr,
@@ -393,10 +319,8 @@ async def run_single_ticker_streaming(
         "pass_to_claude": slm_result.get("pass_to_claude", False),
         "price": current_price,
         "ml_confidence": ml_result.get("confidence"),
-        "kronos_confidence": None,
         "slm_confidence": slm_result.get("confidence"),
         "ml_reasoning": ml_result.get("reasoning", ml_result.get("ml_reasoning", "")),
-        "kronos_reasoning": "",
         "combined_reasoning": combined.get("combined_reasoning", ""),
         "fired_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -415,7 +339,7 @@ async def run_single_ticker(
     held = ticker in portfolio_tickers
     sector = (sector_map or {}).get(ticker)
 
-    # Step 1: LightGBM ensemble (Kronos archived — see module header / config.KRONOS_ENABLED)
+    # Step 1: LightGBM ensemble
     try:
         ml_result = predict_with_ensemble(df, ticker, sector=sector, fo_df=fo_df)
     except Exception as e:
@@ -437,7 +361,6 @@ async def run_single_ticker(
         price=current_price,
         combined_signal=combined,
         ml_reasoning=ml_result.get("reasoning", ml_result.get("ml_reasoning", "")),
-        kronos_reasoning="",
         portfolio_held=held,
         learnings_context=learnings,
         atr=atr,
@@ -459,10 +382,8 @@ async def run_single_ticker(
         "stop_loss": slm_result.get("stop_loss", q_stop),
         "target": slm_result.get("target", q_target),
         "ml_confidence": ml_result.get("confidence"),
-        "kronos_confidence": None,
         "slm_confidence": slm_result.get("confidence"),
         "ml_reasoning": ml_result.get("reasoning", ml_result.get("ml_reasoning", "")),
-        "kronos_reasoning": "",
         "slm_reasoning": slm_result.get("reasoning", ""),
         "pass_to_claude": slm_result.get("pass_to_claude", False),
         "combined_reasoning": combined.get("combined_reasoning", ""),
@@ -558,9 +479,9 @@ async def save_signal(conn, signal: dict) -> int:
         INSERT INTO signals (
             ticker, signal_type, timeframe, price_at_signal,
             target_price, stop_loss,
-            ml_confidence, kronos_confidence, slm_confidence,
+            ml_confidence, slm_confidence,
             final_confidence, fired_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         RETURNING id
         """,
         signal["ticker"],
@@ -570,7 +491,6 @@ async def save_signal(conn, signal: dict) -> int:
         signal.get("target"),
         signal.get("stop_loss"),
         signal.get("ml_confidence"),
-        None,  # kronos_confidence — Kronos dropped (Stage 3); column kept for historical rows
         signal.get("slm_confidence"),
         signal.get("confidence"),
         datetime.now(timezone.utc),
@@ -596,8 +516,8 @@ async def save_signal(conn, signal: dict) -> int:
 
 # ================================================================== #
 # LIVE multi-timeframe pipeline                                       #
-#   ML (next-day prior) → Kronos per horizon → combine → macro nudge  #
-#   → BUY-only filter → affordability annotation → save per horizon.  #
+#   ML ensemble prior → combine → macro nudge → BUY-only filter →     #
+#   affordability annotation → save per horizon.                      #
 #   The SLM's old per-ticker enrich is replaced by the global macro   #
 #   layer (intelligence/macro_context), run once per cycle.           #
 # ================================================================== #
@@ -621,10 +541,8 @@ async def run_single_ticker_multi(
     atr = compute_atr(df)
 
     # Ensemble directional prior — computed once, reused across horizons.
-    # Kronos (per-horizon forecast) is archived (config.KRONOS_ENABLED,
-    # default false) — see WHAT_TO_DO_NEXT.txt Section 3. The ensemble's
-    # q10/q50/q90 quantiles (5-day horizon, models/ml/train.py) now supply
-    # the target/stop role that Kronos's per-horizon forecast path used to.
+    # The ensemble's q10/q50/q90 quantiles (5-day horizon, models/ml/train.py)
+    # supply the target/stop role.
     try:
         ml_result = predict_with_ensemble(df, ticker, sector=sector, fo_df=fo_df)
     except Exception as e:
@@ -654,10 +572,9 @@ async def run_single_ticker_multi(
         if conf < gate:
             continue
 
-        # Target + stop from the ensemble's q10/q50/q90 forward-return quantiles
-        # (replaces Kronos's forecast-path target_and_eta()). The quantile
-        # regressors are trained on a fixed QUANTILE_HORIZON_DAYS (5-day)
-        # horizon (models/ml/train.py); eta_days is approximated as this
+        # Target + stop from the ensemble's q10/q50/q90 forward-return quantiles.
+        # The quantile regressors are trained on a fixed QUANTILE_HORIZON_DAYS
+        # (5-day) horizon (models/ml/train.py); eta_days is approximated as this
         # timeframe's own hold_days since there's no per-horizon forecast path
         # anymore — an honest simplification, not a fabricated fractional ETA.
         stop, target = quantile_target_stop(
@@ -686,9 +603,6 @@ async def run_single_ticker_multi(
             "target": target,
             "target_eta_days": eta_days,
             "expected_move_pct": move_pct,
-            # predicted_path/kronos fields removed: Kronos dropped (Stage 3), and the old
-            # `path`/`kr` variables referenced here were never defined in this function
-            # (a latent NameError bug on this dead code path).
             "predicted_path": [],
             "affordable": affordable,
             "shares_affordable": shares,
@@ -723,11 +637,11 @@ async def save_signal_multi(conn, signal: dict) -> int:
         INSERT INTO signals (
             ticker, signal_type, timeframe, horizon_days, price_at_signal,
             target_price, stop_loss,
-            ml_confidence, kronos_confidence, slm_confidence, final_confidence,
+            ml_confidence, slm_confidence, final_confidence,
             affordable, shares_affordable, macro_sector_score,
             target_eta_days, expected_move_pct, predicted_path, fired_at,
             components_json
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         RETURNING id
         """,
         signal["ticker"],
@@ -738,7 +652,6 @@ async def save_signal_multi(conn, signal: dict) -> int:
         signal.get("target"),
         signal.get("stop_loss"),
         signal.get("ml_confidence"),
-        None,  # kronos_confidence — Kronos dropped (Stage 3); column kept for historical rows
         None,  # slm_confidence — SLM is now the global macro layer, not per-signal
         signal.get("confidence"),
         signal.get("affordable"),

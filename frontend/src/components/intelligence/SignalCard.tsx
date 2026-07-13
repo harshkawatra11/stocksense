@@ -8,7 +8,7 @@ const DOT_COLOR: Record<ComponentStatus['status'], string> = {
   ok: 'bg-green', degraded: 'bg-yellow', unavailable: 'bg-red',
 }
 const LABEL: Record<string, string> = {
-  kronos: 'Kronos', lightgbm: 'LGBM', llm_synthesis: 'Synthesis', macro: 'Macro',
+  lightgbm: 'LGBM', llm_synthesis: 'Synthesis', macro: 'Macro',
 }
 
 /** Minimal honest provenance dots — hover for what actually produced this signal. */

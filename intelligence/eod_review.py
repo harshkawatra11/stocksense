@@ -22,12 +22,10 @@ async def fetch_todays_signals(conn) -> list[dict]:
                s.target_price, s.stop_loss, s.final_confidence,
                s.fired_at,
                ml.reasoning as ml_reasoning,
-               kr.reasoning as kronos_reasoning,
                sl.reasoning as slm_reasoning,
                cl.reasoning as claude_reasoning
         FROM signals s
         LEFT JOIN signal_reasoning ml ON ml.signal_id = s.id AND ml.model_name = 'lgbm'
-        LEFT JOIN signal_reasoning kr ON kr.signal_id = s.id AND kr.model_name = 'kronos'
         LEFT JOIN signal_reasoning sl ON sl.signal_id = s.id AND sl.model_name = 'slm'
         LEFT JOIN signal_reasoning cl ON cl.signal_id = s.id AND cl.model_name = 'claude'
         WHERE s.fired_at::date = $1
@@ -227,7 +225,7 @@ async def update_model_accuracy(conn, predictions: list[dict], today: date):
     acc = round(correct / total, 4) if total else 0.0
 
     # Record one row per model layer so combine.py weight refresh has data to read
-    for model_name in ("lgbm", "kronos", "slm", "combined"):
+    for model_name in ("lgbm", "slm", "combined"):
         await conn.execute(
             """
             INSERT INTO model_accuracy
@@ -293,7 +291,6 @@ async def run_eod_review():
             "predicted_close": predicted_close,
             "actual_close": actual,
             "ml_reasoning": s.get("ml_reasoning", ""),
-            "kronos_reasoning": s.get("kronos_reasoning", ""),
             "slm_reasoning": s.get("slm_reasoning", ""),
             "claude_reasoning": s.get("claude_reasoning", ""),
         })

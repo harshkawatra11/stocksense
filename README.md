@@ -261,7 +261,6 @@ stocksense/
 │   ├── position_monitor.py · trading_account.py · activity.py
 ├── models/
 │   ├── ml/         (train.py · predict.py · combine.py · retrain_trigger.py)
-│   ├── kronos/     (integration.py — thin archived stub, Kronos dropped in Stage 3)
 │   └── slm/        (infer.py · ollama_client.py — local/cloud client)
 ├── data/
 │   ├── db/         (schema.sql … schema_v4_brain.sql · schema_v5_providers.sql · schema_v6_health.sql)
@@ -454,7 +453,7 @@ All times **IST**, driven by APScheduler in [`scheduler/market_runner.py`](sched
 
 - **Paper-mode by default.** Trades are simulated against real prices; a track record must exist before any live execution is considered. Even then, live execution is designed to require a human approve/reject on every individual trade — never fully unattended.
 - **Edge is measured, not assumed, and it's currently thin.** A genuine walk-forward backtest (fresh model retrained at each quarterly checkpoint, scored strictly out-of-sample) over 2024–2026 shows +10.4 bps/trade net expectancy and a 45.3% win rate — and underperforms simply buying and holding NIFTYBEES over the same period (+1.0% vs +14.4%). Treat outputs as hypotheses, not advice; see `backtest/walkforward.py` and `backtest/reports/`.
-- **Kronos was tried and dropped.** An earlier design used the Kronos time-series foundation model for price-path forecasting. It never ran fine-tuned on NSE data (the fine-tune job OOM'd and was never re-run) — what was live in practice was either off-domain pretrained weights or a mock forecaster, and its confidence score was fabricated by construction. It's been replaced by a 3-seed LightGBM ensemble (confidence by cross-seed agreement) plus quantile regression (q10/q50/q90 sizes target/stop) — both properly validated in the walk-forward harness above. The old integration module is kept as a thin, honest stub so nothing silently breaks; the vendored model code and weights were deleted.
+- **Kronos was tried and dropped.** An earlier design used the Kronos time-series foundation model for price-path forecasting. It never ran fine-tuned on NSE data (the fine-tune job OOM'd and was never re-run) — what was live in practice was either off-domain pretrained weights or a mock forecaster, and its confidence score was fabricated by construction. It's been replaced by a 3-seed LightGBM ensemble (confidence by cross-seed agreement) plus quantile regression (q10/q50/q90 sizes target/stop) — both properly validated in the walk-forward harness above. Every Kronos reference — code, config flags, DB columns, frontend fields — was hard-removed on 2026-07-13; nothing of it remains in the codebase.
 - **NSE-only.** The universe is NSE cash-equity (EQ/BE). BSE-exclusive names are out of scope by design.
 - **Graceful degradation.** No synthesis CLI → that stage is skipped and the ensemble + macro layer still produce signals. No Ollama / no key → neutral macro context. Nothing hard-fails on a missing engine.
 

@@ -2,7 +2,7 @@
 System health API — the Stage 0 truth layer, surfaced.
 
 Answers "what is actually running right now?" for each pipeline component
-(kronos, lightgbm, llm_synthesis, macro), plus overall data freshness, the
+(lightgbm, llm_synthesis, macro), plus overall data freshness, the
 Angel One circuit-breaker state, and LightGBM model age. This is the
 read-only counterpart to the per-signal components_json: it reflects
 CURRENT component health rather than what was true at the moment a
@@ -142,7 +142,7 @@ async def _scheduler_heartbeat(conn) -> dict:
 async def system_health():
     """
     One-shot rollup of every truth-layer signal in the app:
-      - components: {kronos, lightgbm, llm_synthesis, macro} status per the shared contract
+      - components: {lightgbm, llm_synthesis, macro} status per the shared contract
       - data_freshness: is the pipeline running on live intraday or stale EOD data
       - angel_one: circuit-breaker state for the live index feed
       - lightgbm_model: on-disk model file age (independent of in-memory cache)

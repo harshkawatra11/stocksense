@@ -11,10 +11,10 @@ const COMPONENT_DOT: Record<ComponentStatus['status'], string> = {
   ok: 'bg-green', degraded: 'bg-yellow', unavailable: 'bg-red',
 }
 const COMPONENT_LABEL: Record<string, string> = {
-  kronos: 'Kronos', lightgbm: 'LGBM', llm_synthesis: 'Synth', macro: 'Macro',
+  lightgbm: 'LGBM', llm_synthesis: 'Synth', macro: 'Macro',
 }
 
-/** Small honest per-signal provenance badges — e.g. "Kronos: pretrained (not NSE)". */
+/** Small honest per-signal provenance badges — e.g. "LGBM: loaded (fresh)". */
 function ComponentBadges({ components }: { components: LiveSignal['components_json'] }) {
   if (!components) return null
   return (

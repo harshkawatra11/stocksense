@@ -56,7 +56,6 @@ CREATE TABLE signals (
     target_price NUMERIC(12,2),
     stop_loss NUMERIC(12,2),
     ml_confidence NUMERIC(5,4),
-    kronos_confidence NUMERIC(5,4),
     slm_confidence NUMERIC(5,4),
     claude_confidence NUMERIC(5,4),
     final_confidence NUMERIC(5,4),

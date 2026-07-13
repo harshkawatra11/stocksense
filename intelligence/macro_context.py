@@ -2,8 +2,8 @@
 Macro / news context layer.
 
 This is the SLM's *new* job (see slm-repositioned-as-macro-news-layer):
-instead of re-forecasting price like Kronos, the SLM reads live financial
-news and produces a per-sector sentiment read for the Indian market.
+instead of re-forecasting price, the SLM reads live financial news and
+produces a per-sector sentiment read for the Indian market.
 
 Pipeline role:
     Runs ONCE per pipeline cycle (macro context is market-wide, not per-ticker).

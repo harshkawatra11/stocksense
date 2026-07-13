@@ -22,10 +22,9 @@ _threshold = 0.5
 _model_mtime: float = 0.0
 
 # ------------------------------------------------------------------ #
-# Ensemble + quantile models (Stage 3 — replaces Kronos's confidence/    #
-# target/stop/ETA role; see models/ml/train.py and models/kronos/       #
-# combine.py). Loaded lazily, same hot-reload-on-mtime-change pattern   #
-# as the single LightGBM model above.                                   #
+# Ensemble + quantile models; see models/ml/train.py and                #
+# models/ml/combine.py. Loaded lazily, same hot-reload-on-mtime-change  #
+# pattern as the single LightGBM model above.                           #
 # ------------------------------------------------------------------ #
 _ensemble_models: list = []          # list of LGBMClassifier, one per seed
 _quantile_models: dict = {}          # {"q10": model, "q50": model, "q90": model}
@@ -227,10 +226,10 @@ def predict_with_ensemble(
     confidence = mean predicted probability across the seed ensemble.
     agreement  = 1 - normalized std across seeds (1.0 = seeds fully agree).
     q10/q50/q90 = forward-return quantiles (fractional, e.g. 0.02 = +2%),
-    used by models/kronos/combine.py to size stop/target instead of Kronos's
-    forecast path. Falls back to the single-model predict_with_reasoning()
-    (still fully supported — see its own docstring) when the ensemble/
-    quantile models aren't available, so callers always get a usable result.
+    used by models/ml/combine.py to size stop/target. Falls back to the
+    single-model predict_with_reasoning() (still fully supported — see its
+    own docstring) when the ensemble/quantile models aren't available, so
+    callers always get a usable result.
     """
     _, _, feature_cols, threshold = get_model()  # ensures single model + feature_cols loaded
     ensemble_models, quantile_models = get_ensemble()

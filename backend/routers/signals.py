@@ -30,7 +30,7 @@ async def get_recent_signals(limit: int = Query(50, le=200)):
         """
         SELECT s.id, s.ticker, s.signal_type, s.timeframe,
                s.price_at_signal, s.target_price, s.stop_loss,
-               s.ml_confidence, s.kronos_confidence, s.slm_confidence,
+               s.ml_confidence, s.slm_confidence,
                s.claude_confidence, s.final_confidence,
                s.status, s.fired_at, s.actual_close,
                st.name as stock_name, st.sector, s.components_json

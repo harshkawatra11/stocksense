@@ -4,9 +4,9 @@ qualifying signals — the "real order, but only if you say yes" path,
 parallel to and independent of intelligence/auto_trader.py's fully-autonomous
 PAPER trading (which is unaffected by anything in this module).
 
-Gated behind config.LIVE_CONFIRMATION_ENABLED (default OFF, same pattern as
-KRONOS_ENABLED) — nothing queues for your review until you explicitly opt
-in. Even once enabled, this module ONLY ever inserts a PENDING row; nothing
+Gated behind config.LIVE_CONFIRMATION_ENABLED (default OFF) — nothing queues
+for your review until you explicitly opt in. Even once enabled, this module
+ONLY ever inserts a PENDING row; nothing
 here places an order. Order placement happens exclusively in
 backend/routers/confirmations.py's approve() endpoint, exclusively against
 Upstox's SANDBOX (data/pipeline/upstox_orders.py) — never live money, and

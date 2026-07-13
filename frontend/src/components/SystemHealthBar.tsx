@@ -8,7 +8,6 @@ const DOT_COLOR: Record<ComponentStatus['status'], string> = {
 }
 
 const LABEL: Record<string, string> = {
-  kronos: 'Kronos',
   lightgbm: 'LightGBM',
   llm_synthesis: 'Synthesis',
   macro: 'Macro',
@@ -42,8 +41,8 @@ function Chip({ name, c }: { name: string; c: ComponentStatus }) {
 /**
  * Persistent small strip surfacing the Stage 0 truth layer: what's actually
  * running right now for each pipeline component, honestly. Green = ok,
- * amber = degraded (running but not ideal — e.g. pretrained Kronos, stale
- * LightGBM), red = unavailable. Hover any chip for the detail text.
+ * amber = degraded (running but not ideal — e.g. stale LightGBM), red =
+ * unavailable. Hover any chip for the detail text.
  */
 export default function SystemHealthBar() {
   const health = useSystemHealth(30_000)

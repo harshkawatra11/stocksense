@@ -197,36 +197,6 @@ async def compute_net_expectancy(conn, n: int = 60) -> dict:
     }
 
 
-async def get_current_weights(conn) -> tuple[float, float]:
-    """Return (lgbm_weight, kronos_weight) from recent model_accuracy rows."""
-    rows = await conn.fetch(
-        """
-        SELECT model_name, accuracy
-        FROM model_accuracy
-        WHERE created_at >= NOW() - INTERVAL '7 days'
-        ORDER BY created_at DESC
-        LIMIT 20
-        """,
-    )
-
-    lgbm_accs = [r["accuracy"] for r in rows if r["model_name"] == "lgbm" and r["accuracy"]]
-    kronos_accs = [r["accuracy"] for r in rows if r["model_name"] == "kronos" and r["accuracy"]]
-
-    if not lgbm_accs or not kronos_accs:
-        return 0.40, 0.60  # defaults
-
-    lgbm_avg = sum(lgbm_accs) / len(lgbm_accs)
-    kronos_avg = sum(kronos_accs) / len(kronos_accs)
-
-    total = lgbm_avg + kronos_avg
-    if total == 0:
-        return 0.40, 0.60
-
-    lgbm_w = round(lgbm_avg / total, 2)
-    kronos_w = round(1.0 - lgbm_w, 2)
-    return lgbm_w, kronos_w
-
-
 async def run_accuracy_tracker():
     conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
@@ -279,9 +249,6 @@ async def run_accuracy_tracker():
                     "ALERT: Combined accuracy below 52% for 7 consecutive days. "
                     "Consider retraining LightGBM model."
                 )
-
-        lgbm_w, kronos_w = await get_current_weights(conn)
-        log.info(f"Dynamic weights — LightGBM: {lgbm_w:.2f}, Kronos: {kronos_w:.2f}")
 
         net_exp = await compute_net_expectancy(conn, n=60)
         log.info(

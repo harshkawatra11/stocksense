@@ -137,11 +137,7 @@ async def review_position(conn, pos: dict) -> dict | None:
     status, verdict = _classify(progress_pct, days_elapsed, eta_days)
 
     # Fresh forward look — updated target/ETA from here. Uses the same
-    # ensemble+quantile path signal_pipeline.py uses for new signals (Stage
-    # 3 — replaces the old Kronos candle-path forecast here too; this call
-    # site was still calling kronos_forecast() unconditionally, unlike the
-    # signal-generation path's KRONOS_ENABLED gate — see WHAT_TO_DO_NEXT.txt
-    # Kronos-drop follow-up).
+    # ensemble+quantile path signal_pipeline.py uses for new signals.
     fresh_target = fresh_eta = fresh_move = None
     try:
         pred = predict_with_ensemble(df, ticker, sector=pos.get("sector"))

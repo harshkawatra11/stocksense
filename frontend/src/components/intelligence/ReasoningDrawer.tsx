@@ -6,7 +6,6 @@ interface Props { signal: Signal; onClose: () => void }
 export default function ReasoningDrawer({ signal, onClose }: Props) {
   const blocks = [
     { label: 'ML MODEL (LightGBM)', text: signal.ml_reasoning, color: '#00d4aa' },
-    { label: 'KRONOS FOUNDATION',   text: signal.kronos_reasoning, color: '#3d85c8' },
     { label: 'SLM — NSE COMMANDER', text: signal.slm_reasoning, color: '#ffa502' },
     { label: 'CLAUDE SONNET',       text: signal.claude_reasoning, color: '#5c6bc0' },
   ].filter(b => b.text)

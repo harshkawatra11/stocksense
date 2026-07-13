@@ -90,7 +90,6 @@ def slm_enrich(
     price: float,
     combined_signal: dict,
     ml_reasoning: str,
-    kronos_reasoning: str,
     portfolio_held: bool,
     learnings_context: str = "",
     atr: float | None = None,
@@ -130,9 +129,6 @@ ATR-based stop/target guidance: stop ≈ ₹{suggested_stop:.2f}, target ≈ ₹
 
 ML Model Reasoning:
 {ml_reasoning}
-
-Kronos Forecast Reasoning:
-{kronos_reasoning}
 
 {learnings_block}
 

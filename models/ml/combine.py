@@ -2,21 +2,11 @@
 Combines the LightGBM ensemble's classification + quantile outputs into a
 unified signal with confidence, target and stop-loss.
 
-STAGE 3 REWRITE (see WHAT_TO_DO_NEXT.txt Section 3 / quiet-giggling-bumblebee.md
-Stage 3): Kronos is dropped. It never ran fine-tuned on NSE data — what was
-live was either off-domain pretrained weights or a random-walk mock (Section
-2.1), and its confidence score was fabricated by construction (a sigmoid of
-predicted move magnitude, Section 2.2). This module previously blended a
-40/60 LGBM/Kronos split; it now derives everything from the LGBM ensemble
-(models/ml/train.py + models/ml/predict.py:predict_with_ensemble):
-  - confidence: ensemble mean probability, nudged by cross-seed agreement
-    (no longer averaging two incommensurable numbers — see old 2.4).
+Derives everything from the LGBM ensemble (models/ml/train.py +
+models/ml/predict.py:predict_with_ensemble):
+  - confidence: ensemble mean probability, nudged by cross-seed agreement.
   - target / stop-loss: derived from the q10/q50/q90 forward-return quantile
-    regressors, replacing Kronos's forecast-path role.
-
-Kronos's module files are archived, not deleted (config.KRONOS_ENABLED,
-default false) — see models/kronos/integration.py and
-scheduler/market_runner.py for the rest of the archiving.
+    regressors.
 """
 import asyncpg
 import logging
@@ -34,9 +24,6 @@ _UNAVAILABLE_ENSEMBLE_SOURCES = {"unavailable"}
 
 def combine_signals(ensemble_result: dict) -> dict:
     """
-    Stage 3 signature: single argument (previously combine_signals(ml_result,
-    kronos_result) — Kronos is dropped, see module docstring).
-
     ensemble_result: the dict returned by models.ml.predict.predict_with_ensemble().
 
     Returns:
@@ -49,11 +36,7 @@ def combine_signals(ensemble_result: dict) -> dict:
           "combined_reasoning": str,
           "ensemble_component_status": "ok"|"degraded"|"unavailable",
           "ensemble_component_source": str,
-          # Back-compat aliases so existing consumers (accuracy_tracker,
-          # DB columns named ml_confidence/kronos_confidence) keep working
-          # without a schema migration in this module's scope:
           "ml_signal": str, "ml_confidence": float,
-          "kronos_signal": None, "kronos_confidence": None,
         }
     """
     if "error" in ensemble_result:
@@ -68,8 +51,6 @@ def combine_signals(ensemble_result: dict) -> dict:
             "ensemble_component_source": "error",
             "ml_signal": "HOLD",
             "ml_confidence": 0.0,
-            "kronos_signal": None,
-            "kronos_confidence": None,
         }
 
     signal = ensemble_result.get("signal", "HOLD")
@@ -121,13 +102,8 @@ def combine_signals(ensemble_result: dict) -> dict:
         "combined_reasoning": "\n".join(reasoning_lines),
         "ensemble_component_status": status,
         "ensemble_component_source": source,
-        # Back-compat aliases (see docstring) — Kronos fields kept as None so
-        # any lingering consumer sees an explicit "no Kronos" rather than a
-        # KeyError or stale mock value.
         "ml_signal": signal,
         "ml_confidence": round(conf, 4),
-        "kronos_signal": None,
-        "kronos_confidence": None,
     }
 
 
@@ -135,10 +111,8 @@ def quantile_target_stop(price: float, signal: str, q10: float | None, q50: floa
                           q90: float | None, atr: float | None = None) -> tuple[float, float]:
     """
     Derive (stop_loss, target) from the q10/q50/q90 forward-return quantile
-    interval, replacing the Kronos-forecast-path-derived target_and_eta() +
-    ATR-multiple horizon_stops() combo that used to live in
-    intelligence/signal_pipeline.py. Falls back to a plain ATR heuristic if
-    quantiles are unavailable (e.g. ensemble degraded to single-model mode).
+    interval. Falls back to a plain ATR heuristic if quantiles are
+    unavailable (e.g. ensemble degraded to single-model mode).
 
     For BUY: target = price*(1+q90) if q90 upside exists, else price*(1+q50);
              stop   = price*(1+q10) if q10 is a real downside, else ATR-based.
@@ -161,19 +135,18 @@ def quantile_target_stop(price: float, signal: str, q10: float | None, q50: floa
 
 
 # ------------------------------------------------------------------ #
-# Weight refresh — retained for the scheduler job (task_refresh_weights,       #
-# scheduler/market_runner.py), repurposed to track LGBM-ensemble accuracy      #
-# only now that Kronos is out of the blend. No-op placeholder until Stage 2's  #
-# walk-forward harness (backtest/walkforward.py) produces IC to act on.        #
+# Weight refresh — retained for the scheduler job (task_refresh_weights,  #
+# scheduler/market_runner.py), tracks LGBM-ensemble accuracy. No-op       #
+# placeholder until the walk-forward harness (backtest/walkforward.py)    #
+# produces IC to act on.                                                  #
 # ------------------------------------------------------------------ #
 async def refresh_weights_from_db():
     """
     Kept as a scheduler entry point (see scheduler/market_runner.py
-    task_refresh_weights) for interface stability. There is no longer a
-    lgbm/kronos weight split to refresh — logs the rolling LGBM accuracy for
-    visibility and returns. TODO: once backtest/walkforward.py's IC numbers
-    exist, use this hook to adjust the agreement-nudge constants in
-    combine_signals() instead of leaving them hand-set.
+    task_refresh_weights) for interface stability. Logs the rolling LGBM
+    accuracy for visibility and returns. TODO: once backtest/walkforward.py's
+    IC numbers exist, use this hook to adjust the agreement-nudge constants
+    in combine_signals() instead of leaving them hand-set.
     """
     try:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
@@ -188,6 +161,6 @@ async def refresh_weights_from_db():
             await conn.close()
         if avg_acc is not None:
             log.info(f"LGBM ensemble rolling 7-day accuracy: {float(avg_acc):.4f} "
-                      "(Kronos dropped — no weight split to refresh; TODO IC-based nudge tuning)")
+                      "(TODO IC-based nudge tuning)")
     except Exception as e:
         log.warning(f"Could not refresh LGBM accuracy snapshot: {e}")

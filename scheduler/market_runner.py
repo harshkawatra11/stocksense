@@ -662,7 +662,8 @@ def build_scheduler() -> AsyncIOScheduler:
     )
 
     # Position re-analysis + autonomous exits: offset 10 min from the pipeline
-    # so Kronos (signals) and Kronos (re-analysis) don't fight for the 4GB GPU.
+    # so signal generation and position re-analysis don't contend for the
+    # same LightGBM/Ollama resources at the same instant.
     # Same post-close fix as signal_pipeline above: last run is 15:25 IST, not
     # 15:55 (which would review positions using a stale post-close price).
     scheduler.add_job(

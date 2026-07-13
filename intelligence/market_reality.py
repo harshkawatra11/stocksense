@@ -2,9 +2,8 @@
 Market-reality layer — Upstox live data as a sanity-check on signals, NOT a
 forecaster.
 
-Stage 3 of WHAT_TO_DO_NEXT.txt repositions Upstox: instead of replacing
-Kronos as a forecasting input, it becomes a "is this signal still true right
-now" check. A signal computed from EOD/intraday data can go stale by the time
+Upstox live data isn't used as a forecasting input — it's a "is this signal
+still true right now" check. A signal computed from EOD/intraday data can go stale by the time
 it's actually reviewed/approved (dashboard latency, human approval delay,
 etc). This module compares a signal's price-at-signal-time against the
 CURRENT live LTP (backend/services/quote_cache.py, populated by

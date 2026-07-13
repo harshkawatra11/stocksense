@@ -42,8 +42,7 @@ LGBM_PARAMS = {
 }
 
 # ------------------------------------------------------------------ #
-# Ensemble + quantile regression (replaces Kronos's target/stop/ETA role
-# — see WHAT_TO_DO_NEXT.txt Section 3 / Stage 3 of the build plan).
+# Ensemble + quantile regression (target/stop/ETA role)                #
 # ------------------------------------------------------------------ #
 # 3-seed classifier ensemble: same LGBM_PARAMS/features/labels, different
 # random seeds. Confidence = mean probability across seeds; agreement (1 -
@@ -55,7 +54,7 @@ ENSEMBLE_SEEDS = [42, 123, 2024]
 # that module's `HOLD_DAYS = 5` and target_1d_return in feature_engineering.py
 # for the 1-day classifier label. The quantile target below is a separate,
 # longer horizon (5-day forward return) so q10/q50/q90 can size a
-# stop/target band the way Kronos's forecast path used to.
+# stop/target band.
 QUANTILE_HORIZON_DAYS = 5
 QUANTILE_ALPHAS = {"q10": 0.1, "q50": 0.5, "q90": 0.9}
 QUANTILE_PARAMS_BASE = {
@@ -250,9 +249,7 @@ def train_ensemble_seeds(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFram
     """
     Train ENSEMBLE_SEEDS independent LGBM classifiers on identical data/features,
     differing only by random_state. Used at inference for confidence-by-agreement
-    (mean probability + std across seeds) instead of a single point estimate —
-    replaces Kronos's fabricated sigmoid-of-move-magnitude confidence (see
-    WHAT_TO_DO_NEXT.txt 2.2).
+    (mean probability + std across seeds) instead of a single point estimate.
 
     Saves each seed's model to disk immediately after fitting and frees it from
     memory before starting the next seed (save_dir given) — holding all 3 fitted
@@ -289,11 +286,9 @@ def train_quantile_models(X_tr: pd.DataFrame, y_tr: pd.Series, X_val: pd.DataFra
                            save_path: str | None = None) -> dict:
     """
     Train LightGBM quantile regressors (q10/q50/q90) of the forward
-    QUANTILE_HORIZON_DAYS return. These replace Kronos's forecast-path role:
-    q50 = expected move, q10/q90 = a predictive interval sized into
-    stop-loss/target instead of the flat ATR-multiple heuristic
-    (see models/kronos/combine.py and intelligence/signal_pipeline.py's
-    former target_and_eta()).
+    QUANTILE_HORIZON_DAYS return: q50 = expected move, q10/q90 = a
+    predictive interval sized into stop-loss/target instead of the flat
+    ATR-multiple heuristic (see models/ml/combine.py).
 
     Saves the full {q10,q50,q90} bundle once all three are trained (small
     regressors, unlike the classifier ensemble — memory pressure here is
@@ -437,7 +432,7 @@ async def train(tickers=None):
     log.info(f"Top 10 features: {top_importances[:10]}")
 
     # ------------------------------------------------------------------ #
-    # 3-seed ensemble + quantile regressors (Stage 3 — replaces Kronos)   #
+    # 3-seed ensemble + quantile regressors                               #
     # ------------------------------------------------------------------ #
     # Free what the classic-model path no longer needs before the memory-
     # heavier ensemble step — holding X/X_test/y_test/best_* alongside 3

@@ -52,7 +52,7 @@ async def trading_mode():
 async def actionable_signals(limit: int = 30, only_affordable: bool = False):
     """Latest BUY signals, affordable-first. Each has target + target_eta_days.
     Includes components_json (Stage 0 truth layer) when present, so the frontend
-    can show per-signal provenance — e.g. "Kronos: pretrained (not NSE)"."""
+    can show per-signal provenance — e.g. "LightGBM: loaded (fresh)"."""
     conn = await asyncpg.connect(DB_DSN)
     try:
         sigs = await get_actionable_signals(conn, limit=limit, only_affordable=only_affordable)
@@ -236,7 +236,7 @@ async def trigger_review():
 async def run_pipeline(limit: int = 50):
     """
     Trigger a live multi-timeframe run over the top `limit` active tickers.
-    Synchronous (macro SLM + Kronos make this take a couple of minutes) — intended
+    Synchronous (macro SLM makes this take a couple of minutes) — intended
     for manual triggering; the scheduler runs it automatically during market hours.
     Returns a compact summary of generated BUY signals.
     """

@@ -33,11 +33,10 @@ Design choices (documented, not hidden):
   - Trade simulation: reuses intelligence/signal_pipeline.py's horizon_stops()
     for stop/target sizing (ATR x sqrt(hold_days), clamped 0.5%-8%, target at
     2R) -- the exact function the live pipeline uses for its ATR-derived
-    stop/target when Kronos is unavailable. This backtest does NOT invoke
-    Kronos or the live target_and_eta() forecast-path logic (that needs a
-    Kronos candle forecast which this harness has no live model for); it is
-    honest about testing the ATR-stop swing-trade logic, not Kronos-derived
-    targets.
+    stop/target when the quantile regressors are unavailable. This backtest
+    does NOT invoke the quantile-derived target/stop logic used in live
+    signal generation; it is honest about testing the ATR-stop swing-trade
+    logic specifically.
   - Horizon tested: 5 trading days (the "5D" entry in config.TIMEFRAMES).
     This is a DAILY-BAR SWING backtest, not an intraday backtest -- the
     deployed LightGBM model and its features (data/pipeline/feature_engineering.py)
