@@ -85,7 +85,8 @@ async def brain_status():
                    COUNT(*) FILTER (WHERE action = 'PASS') AS passes,
                    COALESCE(SUM(pnl) FILTER (WHERE action = 'SELL'), 0) AS realized_pnl
             FROM decisions
-            WHERE decided_at::date = CURRENT_DATE AND rationale LIKE '[AUTO]%'
+            WHERE (decided_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+              AND rationale LIKE '[AUTO]%'
             """
         )
 

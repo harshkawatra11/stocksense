@@ -7,12 +7,22 @@ import PriceAgeDot from '../PriceAgeDot'
 
 export default function Portfolio() {
   const [items, setItems] = useState<PortfolioItem[]>([])
+  // Distinguishes "fetch failed" from "genuinely no holdings" — without this,
+  // a backend outage silently rendered the same empty-state row as an
+  // actually-empty portfolio, with no indication anything was wrong.
+  const [error, setError] = useState<string | null>(null)
   const { prices: livePrices, connected: wsConnected } = useRealtimePrices()
   const marketStatus = useMarketStatus()
   const marketOpen = marketStatus.state === 'open'
 
   useEffect(() => {
-    fetch('/api/portfolio/').then(r => r.json()).then(d => setItems(Array.isArray(d) ? d : []))
+    fetch('/api/portfolio/')
+      .then(r => {
+        if (!r.ok) throw new Error(`Portfolio fetch failed (${r.status})`)
+        return r.json()
+      })
+      .then(d => { setItems(Array.isArray(d) ? d : []); setError(null) })
+      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load portfolio'))
   }, [])
 
   // Per-position current price: prefer the ticking WS quote (main.py subscribes
@@ -88,7 +98,11 @@ export default function Portfolio() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {error ? (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-red text-xs">
+                Failed to load portfolio: {error}
+              </td></tr>
+            ) : rows.length === 0 ? (
               <tr><td colSpan={7} className="px-4 py-8 text-center text-text-secondary text-xs">
                 No holdings. Add positions via API: POST /api/portfolio/add
               </td></tr>

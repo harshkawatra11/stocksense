@@ -19,7 +19,9 @@ async def accuracy_summary():
             COUNT(*) FILTER (WHERE signal_type = 'BUY') as total_buys,
             COUNT(*) FILTER (WHERE signal_type = 'SELL') as total_sells,
             AVG(final_confidence) as avg_confidence,
-            COUNT(*) FILTER (WHERE fired_at::date = CURRENT_DATE) as today_total
+            COUNT(*) FILTER (
+                WHERE (fired_at AT TIME ZONE 'Asia/Kolkata')::date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+            ) as today_total
         FROM signals
         """
     )
@@ -74,13 +76,13 @@ async def daily_accuracy():
     rows = await conn.fetch(
         """
         SELECT
-            fired_at::date as date,
+            (fired_at AT TIME ZONE 'Asia/Kolkata')::date as date,
             COUNT(*) as total,
             COUNT(*) FILTER (WHERE status = 'hit_target') as correct,
             ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'hit_target') / NULLIF(COUNT(*),0), 1) as accuracy_pct
         FROM signals
         WHERE status != 'active'
-        GROUP BY fired_at::date
+        GROUP BY (fired_at AT TIME ZONE 'Asia/Kolkata')::date
         ORDER BY date DESC
         LIMIT 30
         """

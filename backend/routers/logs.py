@@ -33,7 +33,14 @@ async def get_learnings(limit: int = Query(50, le=200), ticker: str = None):
 async def get_todays_learnings():
     conn = await asyncpg.connect(DB_DSN)
     rows = await conn.fetch(
-        "SELECT * FROM learnings WHERE learning_date = CURRENT_DATE ORDER BY created_at DESC"
+        # learning_date is written as Python's date.today() (correct IST date,
+        # see intelligence/eod_review.py), but Postgres's bare CURRENT_DATE
+        # evaluates in the session's UTC timezone — for ~5.5h every evening
+        # (IST 00:00-05:30) UTC's calendar date still lags a day behind IST,
+        # so this would return nothing even though today's real learnings
+        # exist. Same bug class fixed elsewhere in this codebase today.
+        "SELECT * FROM learnings WHERE learning_date = (NOW() AT TIME ZONE 'Asia/Kolkata')::date "
+        "ORDER BY created_at DESC"
     )
     await conn.close()
     return [dict(r) for r in rows]

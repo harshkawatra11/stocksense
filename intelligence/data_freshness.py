@@ -13,12 +13,24 @@ Used by:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _fmt_date(d) -> str:
-    """'2026-06-05' style, tolerant of date/datetime."""
+    """'2026-06-05' style, tolerant of date/datetime.
+
+    ohlcv_daily.time is stored as midnight-IST-in-UTC (trading day D is
+    2026-07-(D-1) 18:30:00+00:00) — formatting the raw UTC value directly
+    shows the wrong calendar date (D-1 instead of D). Convert to IST first.
+    Found live 2026-07-13, same bug class already fixed in eod_review.py
+    and market_runner.py's Upstox/Bhavcopy reconciliation.
+    """
     try:
+        if hasattr(d, "tzinfo"):
+            dt = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+            return dt.astimezone(_IST).strftime("%Y-%m-%d")
         return d.strftime("%Y-%m-%d")
     except Exception:
         return str(d)
