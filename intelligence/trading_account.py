@@ -203,19 +203,35 @@ async def get_actionable_signals(conn, limit: int = 30, only_affordable: bool = 
     where = "WHERE s.signal_type = 'BUY'"
     if only_affordable:
         where += " AND s.affordable = TRUE"
+    # DISTINCT ON (s.ticker): a ticker can carry several signal rows within
+    # the lookback window (one per timeframe, or repeated pipeline runs) —
+    # without deduping, a couple of multi-timeframe tickers can dominate the
+    # whole LIMIT and starve every other candidate (found live: 45 signals
+    # produced across ~20 tickers, but the un-deduped top-20 held only 2
+    # distinct tickers). Keep each ticker's single best (affordable-first,
+    # then highest-confidence) row, then apply the caller's ranking/limit.
     rows = await conn.fetch(
         f"""
-        SELECT s.id, s.ticker, s.timeframe, s.horizon_days, s.price_at_signal,
-               s.target_price, s.stop_loss, s.final_confidence,
-               s.affordable, s.shares_affordable, s.macro_sector_score,
-               s.target_eta_days, s.expected_move_pct, s.predicted_path,
-               s.fired_at, st.sector, st.name, s.components_json
-        FROM signals s
-        JOIN stocks st ON st.ticker = s.ticker
-        {where}
-          AND st.active = TRUE          -- only currently-tradeable stocks (buyable on Angel One)
-          AND s.fired_at >= NOW() - INTERVAL '1 day'
-        ORDER BY s.affordable DESC NULLS LAST, s.final_confidence DESC
+        SELECT id, ticker, timeframe, horizon_days, price_at_signal,
+               target_price, stop_loss, final_confidence,
+               affordable, shares_affordable, macro_sector_score,
+               target_eta_days, expected_move_pct, predicted_path,
+               fired_at, sector, name, components_json
+        FROM (
+            SELECT DISTINCT ON (s.ticker)
+                   s.id, s.ticker, s.timeframe, s.horizon_days, s.price_at_signal,
+                   s.target_price, s.stop_loss, s.final_confidence,
+                   s.affordable, s.shares_affordable, s.macro_sector_score,
+                   s.target_eta_days, s.expected_move_pct, s.predicted_path,
+                   s.fired_at, st.sector, st.name, s.components_json
+            FROM signals s
+            JOIN stocks st ON st.ticker = s.ticker
+            {where}
+              AND st.active = TRUE      -- only currently-tradeable stocks (buyable on Angel One)
+              AND s.fired_at >= NOW() - INTERVAL '1 day'
+            ORDER BY s.ticker, s.affordable DESC NULLS LAST, s.final_confidence DESC
+        ) best_per_ticker
+        ORDER BY affordable DESC NULLS LAST, final_confidence DESC
         LIMIT $1
         """,
         limit,
