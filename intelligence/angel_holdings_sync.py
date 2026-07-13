@@ -71,7 +71,17 @@ async def sync_angel_holdings(conn=None) -> dict:
         synced = []
         seen_tickers: set[str] = set()
         for h in holdings:
-            ticker = h.get("tradingsymbol", "").replace("-EQ", "")
+            # Angel's tradingsymbol carries a series suffix (-EQ, -BE, ...).
+            # Found live 2026-07-13: stripping only "-EQ" left "APTECHT-BE"
+            # unmatched against the existing "APTECHT" row, so the sync
+            # created a duplicate row AND deactivated the real one thinking
+            # it had been sold. Strip any known NSE series suffix.
+            raw = h.get("tradingsymbol", "")
+            ticker = raw
+            for suffix in ("-EQ", "-BE", "-BZ", "-BN", "-SM"):
+                if ticker.endswith(suffix):
+                    ticker = ticker[: -len(suffix)]
+                    break
             qty = int(h.get("quantity") or 0)
             avg_price = float(h.get("averageprice") or 0)
             if not ticker or qty < 1 or avg_price <= 0:
@@ -82,14 +92,18 @@ async def sync_angel_holdings(conn=None) -> dict:
                 "INSERT INTO stocks (ticker, name) VALUES ($1, $1) ON CONFLICT DO NOTHING",
                 ticker,
             )
+            # Match on ticker alone (any watch_only row, active or not) so a
+            # previously-deactivated real position gets reactivated and
+            # updated in place instead of spawning a duplicate row.
             existing = await conn.fetchrow(
-                "SELECT id FROM portfolio WHERE ticker = $1 AND watch_only = TRUE AND active = TRUE",
+                "SELECT id FROM portfolio WHERE ticker = $1 AND watch_only = TRUE "
+                "ORDER BY active DESC, buy_date DESC LIMIT 1",
                 ticker,
             )
             if existing:
                 await conn.execute(
                     """
-                    UPDATE portfolio SET quantity = $2, avg_price = $3,
+                    UPDATE portfolio SET quantity = $2, avg_price = $3, active = TRUE,
                            notes = 'REAL Angel holding, live-synced'
                     WHERE id = $1
                     """,
