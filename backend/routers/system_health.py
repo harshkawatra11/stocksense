@@ -61,6 +61,44 @@ def _angel_one_circuit_breaker() -> dict:
         return {"tripped": None, "last_error": str(e)[:160], "retry_in_seconds": None}
 
 
+def _quote_feed_health() -> dict:
+    """
+    Is the Upstox live WS feed actually connected and ticking? A dead feed
+    used to silently disable ALL fast intraday stop enforcement with no
+    user-visible signal — this component exists so that shows up here
+    instead of only as a debug log line nobody reads.
+      - ok: connected and a tick landed within the last 60s
+      - degraded: connected but stale (60s-5min since last tick), or briefly
+        disconnected/reconnecting
+      - unavailable: no tick in 5+ min, or never connected
+    """
+    try:
+        from backend.services import quote_cache
+        status = quote_cache.feed_status()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "unavailable", "detail": f"quote_cache import/status failed: {str(e)[:160]}"}
+
+    age = status["last_tick_age_seconds"]
+    connected = status["connected"]
+    n = status["subscribed_count"]
+
+    if not connected:
+        detail = f"feed not connected ({n} keys subscribed when last up)"
+        if status["last_connect_error"]:
+            detail += f" — {status['last_connect_error']}"
+        return {"status": "unavailable", "detail": detail}
+
+    if age is None:
+        return {"status": "degraded", "detail": f"connected ({n} keys) but no tick received yet"}
+
+    detail = f"connected, {n} keys subscribed, last tick {age:.0f}s ago"
+    if age <= 60:
+        return {"status": "ok", "detail": detail}
+    if age <= 300:
+        return {"status": "degraded", "detail": detail + " — stale, fast stops may be lagging"}
+    return {"status": "unavailable", "detail": detail + " — feed likely dead, fast stops NOT protecting open positions"}
+
+
 async def _scheduler_heartbeat(conn) -> dict:
     """
     Is scheduler/market_runner.py actually alive? Every job it runs inserts a
@@ -118,6 +156,7 @@ async def system_health():
         # SystemHealthBar (which iterates Object.entries(components)) renders
         # it without special-casing.
         components["scheduler"] = await _scheduler_heartbeat(conn)
+        components["quote_feed"] = _quote_feed_health()
     finally:
         await conn.close()
 

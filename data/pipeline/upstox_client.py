@@ -287,6 +287,53 @@ async def get_historical_candles(
     return out
 
 
+# --------------------------------------------------------------------------- #
+# REST — LTP snapshot (fallback for when the WS feed has no tick yet)         #
+# --------------------------------------------------------------------------- #
+
+LTP_URL = "https://api.upstox.com/v2/market-quote/ltp"
+
+
+async def get_ltp_rest(instrument_key: str) -> float | None:
+    """
+    One-shot REST LTP lookup for a single instrument_key, e.g. "NSE_EQ|INE...".
+    Used as a fallback when the live WS feed has no tick for a position yet
+    (new same-day buy not subscribed, or the feed itself is down) — slower
+    than the WS path (a real HTTP round trip) but still far better than no
+    price at all for stop/target enforcement. Returns None on any failure
+    (missing token, bad response, unresolvable key) — never fabricates a price.
+    """
+    token = await get_data_token()
+    if token is None:
+        log.warning("get_ltp_rest: no valid Upstox token — cannot fetch LTP for %s", instrument_key)
+        return None
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    params = {"instrument_key": instrument_key}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(LTP_URL, headers=headers, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        log.warning("get_ltp_rest: request failed for %s: %s", instrument_key, e)
+        return None
+
+    quotes = (data.get("data") or {})
+    if not quotes:
+        return None
+    # Response is keyed by a normalized symbol string (e.g. "NSE_EQ:RELIANCE"),
+    # not the instrument_key we sent — there's exactly one entry per request
+    # since we only asked for one key, so just take the first value.
+    row = next(iter(quotes.values()), None)
+    if not row:
+        return None
+    try:
+        return float(row["last_price"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 if __name__ == "__main__":
     import asyncio
 

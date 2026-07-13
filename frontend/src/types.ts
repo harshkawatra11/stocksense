@@ -237,6 +237,8 @@ export interface ComponentStatuses {
   macro: ComponentStatus
   /** Scheduler process heartbeat, derived from job_runs MAX(started_at). Optional: only present on newer backends. */
   scheduler?: ComponentStatus
+  /** Upstox live WS quote feed connection + tick-staleness. Optional: only present on newer backends. */
+  quote_feed?: ComponentStatus
 }
 
 export interface SystemHealth {

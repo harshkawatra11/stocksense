@@ -133,6 +133,26 @@ async def approve_confirmation(confirmation_id: int) -> dict | None:
             """,
             confirmation_id, result.get("order_id"), result["status"], result.get("detail"),
         )
+
+        if row["action"] == "BUY" and result.get("status") not in ("FAILED", None):
+            # Same reasoning as intelligence/auto_trader.py's paper-BUY path:
+            # a sandbox-approved BUY is a real new position that needs fast
+            # stop coverage immediately, not whenever the backend next
+            # restarts. Best-effort — never let this break the confirmation.
+            try:
+                from data.pipeline.upstox_client import resolve_instrument_key
+                from backend.services.quote_cache import add_to_watchlist
+
+                key = await resolve_instrument_key(row["ticker"])
+                if key is not None:
+                    await add_to_watchlist(key, row["ticker"])
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "approve_confirmation: failed to add %s to live feed (order already placed, unaffected)",
+                    row["ticker"],
+                )
+
         return row_to_dict(updated)
     finally:
         await conn.close()

@@ -36,6 +36,27 @@ log = logging.getLogger(__name__)
 FRESH_WINDOW_MINUTES = 35
 
 
+async def _subscribe_new_position(ticker: str) -> None:
+    """
+    Get a freshly-bought ticker onto the live quote feed immediately instead
+    of waiting for the next backend restart — the watchlist used to be built
+    once at boot, so a same-day buy silently never got fast stop coverage.
+    Best-effort: any failure here must never break the BUY that already
+    landed in the DB, so this is fully swallowed (with a log) at the top.
+    """
+    try:
+        from data.pipeline.upstox_client import resolve_instrument_key
+        from backend.services.quote_cache import add_to_watchlist
+
+        key = await resolve_instrument_key(ticker)
+        if key is None:
+            log.warning("_subscribe_new_position: no ISIN on file for %s — cannot add to live feed", ticker)
+            return
+        await add_to_watchlist(key, ticker)
+    except Exception:
+        log.exception("_subscribe_new_position: failed to add %s to live feed (buy already recorded, unaffected)", ticker)
+
+
 async def _already_decided(conn, signal_id: int) -> bool:
     return bool(await conn.fetchval(
         "SELECT 1 FROM decisions WHERE signal_id = $1 LIMIT 1", signal_id
@@ -171,6 +192,7 @@ async def auto_trade(conn=None) -> dict:
                 bought.append({"ticker": ticker, "signal_id": sid, "qty": qty, "price": price})
                 log.info("AUTO BUY %s x%d @ ₹%.2f (conf %.2f, cash after ₹%.2f)",
                          ticker, qty, price, conf, result["cash_after"])
+                await _subscribe_new_position(ticker)
             except ValueError as e:
                 # Cash raced below requirement — degrade to PASS, never crash the loop.
                 try:

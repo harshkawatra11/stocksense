@@ -13,6 +13,7 @@ const LABEL: Record<string, string> = {
   llm_synthesis: 'Synthesis',
   macro: 'Macro',
   scheduler: 'Scheduler',
+  quote_feed: 'Quote Feed',
 }
 
 function sourceSuffix(c: ComponentStatus): string {

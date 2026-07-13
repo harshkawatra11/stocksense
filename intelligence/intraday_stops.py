@@ -38,10 +38,48 @@ log = logging.getLogger(__name__)
 POLL_SECONDS = 7
 
 
+async def _fallback_ltp(ticker: str) -> float | None:
+    """
+    Slower last-resort LTP lookup for a position the live WS feed has no
+    tick for (not subscribed yet, or the feed is down) — a REST round trip
+    beats leaving the position completely unmonitored for a whole 30-min
+    position_review cycle. Falls back again to ohlcv_daily's latest close
+    if even the REST call fails (stale, but still a number — better than
+    silently skipping enforcement entirely).
+    """
+    try:
+        from data.pipeline.upstox_client import resolve_instrument_key, get_ltp_rest
+        key = await resolve_instrument_key(ticker)
+        if key is not None:
+            ltp = await get_ltp_rest(key)
+            if ltp is not None:
+                return ltp
+    except Exception:
+        log.exception("intraday_stops: REST LTP fallback failed for %s", ticker)
+
+    try:
+        conn2 = await asyncpg.connect(settings.DATABASE_DSN)
+        try:
+            row = await conn2.fetchrow(
+                "SELECT close FROM ohlcv_daily WHERE ticker = $1 ORDER BY time DESC LIMIT 1",
+                ticker,
+            )
+        finally:
+            await conn2.close()
+        if row and row["close"] is not None:
+            return float(row["close"])
+    except Exception:
+        log.exception("intraday_stops: ohlcv_daily fallback close lookup failed for %s", ticker)
+
+    return None
+
+
 async def _check_once(conn) -> list[dict]:
-    """One breach-detection pass over all active positions. Missing/stale
-    quotes are skipped quietly (debug log only) — the feed may not be
-    subscribed to every ticker yet, and that's expected, not an error."""
+    """One breach-detection pass over all active positions. A missing live
+    quote is NOT silently swallowed anymore — it's a real coverage gap (the
+    feed isn't subscribed to this ticker yet, or is down), so it's logged at
+    WARNING and we fall back to a slower REST/EOD-close lookup for just that
+    position rather than skipping enforcement outright."""
     positions = await conn.fetch(
         "SELECT id, ticker, quantity, avg_price, buy_date FROM portfolio WHERE active = TRUE"
     )
@@ -50,13 +88,20 @@ async def _check_once(conn) -> list[dict]:
         pos = dict(p)
         ticker = pos["ticker"]
         quote = quote_cache.get(ticker)
-        if not quote or quote.get("ltp") is None:
-            log.debug("intraday_stops: no live quote yet for %s — skipping this cycle", ticker)
-            continue
+        ltp = quote.get("ltp") if quote else None
+        if ltp is None:
+            log.warning(
+                "intraday_stops: no live WS quote for %s — falling back to REST/EOD-close "
+                "lookup for this cycle (fast-path coverage gap)", ticker,
+            )
+            ltp = await _fallback_ltp(ticker)
+            if ltp is None:
+                log.warning("intraday_stops: no price available for %s from any source — skipping this cycle", ticker)
+                continue
         try:
-            hit = await check_stop_target_breach(conn, pos, float(quote["ltp"]))
+            hit = await check_stop_target_breach(conn, pos, float(ltp))
         except Exception as e:
-            log.debug("intraday_stops: breach check failed for %s: %s", ticker, e)
+            log.warning("intraday_stops: breach check failed for %s: %s", ticker, e)
             continue
         if hit:
             breaches.append(hit)
