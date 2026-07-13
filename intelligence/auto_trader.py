@@ -64,8 +64,19 @@ async def _already_decided(conn, signal_id: int) -> bool:
 
 
 async def _open_position_count(conn) -> int:
+    """
+    Count only genuine PAPER-bought open positions against max_open_positions.
+    watch_only=TRUE rows are real external Upstox holdings the brain merely
+    monitors/alerts on (see auto_exit's docstring) — they were never bought
+    by this engine and must not consume its position-cap budget. Found live
+    2026-07-13: 5 watch_only rows seeded 2026-06-25 were silently counted
+    here, making every auto_trade() run since then report "max open
+    positions reached (5/5)" and PASS on every candidate, even fresh ones
+    well above the confidence threshold — the paper engine has never
+    actually bought anything as a result.
+    """
     return int(await conn.fetchval(
-        "SELECT COUNT(*) FROM portfolio WHERE active = TRUE"
+        "SELECT COUNT(*) FROM portfolio WHERE active = TRUE AND (watch_only IS NULL OR watch_only = FALSE)"
     ) or 0)
 
 
