@@ -51,6 +51,16 @@ async def fetch_actual_closes(conn, tickers: list[str]) -> dict[str, float]:
     eod_review job comment), today's row should normally exist; if it doesn't
     (bhavcopy delayed/missing), the ticker is correctly omitted and skipped
     downstream rather than resolved on fake data.
+
+    Timezone note (found live 2026-07-13): ohlcv_daily.time is stored as
+    midnight-IST-in-UTC (e.g. trading day 2026-07-13 is stored as
+    2026-07-12 18:30:00+00:00). Postgres's default session timezone here is
+    UTC, so a bare `time::date` comparison evaluates in UTC and is
+    permanently one day behind the IST trading-day date Python's
+    date.today() returns on this machine — every row silently missed its
+    own trading day forever, which is the real reason the self-learning
+    loop (learnings table) had produced zero rows for weeks despite
+    eod_review running without error. Comparing in Asia/Kolkata fixes it.
     """
     if not tickers:
         return {}
@@ -59,7 +69,8 @@ async def fetch_actual_closes(conn, tickers: list[str]) -> dict[str, float]:
         """
         SELECT ticker, close
         FROM ohlcv_daily
-        WHERE ticker = ANY($1::text[]) AND close IS NOT NULL AND time::date = $2
+        WHERE ticker = ANY($1::text[]) AND close IS NOT NULL
+          AND (time AT TIME ZONE 'Asia/Kolkata')::date = $2
         """,
         list(set(tickers)), today,
     )

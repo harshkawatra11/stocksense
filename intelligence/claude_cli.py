@@ -110,9 +110,9 @@ def intraday_signal_check(signals: list[dict], learnings_context: str = "") -> l
 --- Signal {i}: {s['ticker']} ---
 Price: ₹{s.get('price', 0):.2f}
 Signal: {s.get('signal')} | Combined Confidence: {s.get('confidence', 0)*100:.1f}%
-ML: {s.get('ml_reasoning', '')[:300]}
-Kronos: {s.get('kronos_reasoning', '')[:300]}
-SLM: {s.get('slm_reasoning', '')[:300]}
+ML: {(s.get('ml_reasoning') or '')[:300]}
+Kronos: {(s.get('kronos_reasoning') or '')[:300]}
+SLM: {(s.get('slm_reasoning') or '')[:300]}
 Stop Loss: ₹{s.get('stop_loss', 0):.1f} | Target: ₹{s.get('target', 0):.1f}
 """
 
@@ -201,10 +201,10 @@ def eod_review_call(predictions: list[dict]) -> dict:
         pred_block += f"""
 {outcome} | {p['ticker']} | Signal: {p.get('signal')}
   Predicted: ₹{p.get('predicted_close', 0):.1f} → Actual: ₹{p.get('actual_close', 0):.1f} ({delta:+.1f}%)
-  ML said: {p.get('ml_reasoning', '')[:200]}
-  Kronos said: {p.get('kronos_reasoning', '')[:200]}
-  SLM said: {p.get('slm_reasoning', '')[:200]}
-  Claude said: {p.get('claude_reasoning', '')[:200]}
+  ML said: {(p.get('ml_reasoning') or '')[:200]}
+  Kronos said: {(p.get('kronos_reasoning') or '')[:200]}
+  SLM said: {(p.get('slm_reasoning') or '')[:200]}
+  Claude said: {(p.get('claude_reasoning') or '')[:200]}
 """
 
     prompt = f"""End-of-day model performance review for NSE trading signals.

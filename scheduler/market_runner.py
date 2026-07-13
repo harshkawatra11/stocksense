@@ -223,8 +223,13 @@ async def task_upstox_bhavcopy_reconciliation() -> str:
     conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
         today = date.today()
+        # ohlcv_daily.time is stored as midnight-IST-in-UTC (trading day D is
+        # 2026-07-(D-1) 18:30:00+00:00); a bare time::date compares in the
+        # Postgres session's UTC timezone and is permanently one day behind
+        # date.today() on this IST machine. See eod_review.fetch_actual_closes
+        # for the same bug, found live 2026-07-13.
         rows = await conn.fetch(
-            "SELECT ticker, close FROM ohlcv_daily WHERE time::date = $1",
+            "SELECT ticker, close FROM ohlcv_daily WHERE (time AT TIME ZONE 'Asia/Kolkata')::date = $1",
             today,
         )
         if not rows:
