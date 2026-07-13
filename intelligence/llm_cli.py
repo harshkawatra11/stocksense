@@ -31,6 +31,7 @@ import tempfile
 import time
 from functools import lru_cache
 
+from config import settings
 from intelligence.provider_config import get_active
 
 log = logging.getLogger(__name__)
