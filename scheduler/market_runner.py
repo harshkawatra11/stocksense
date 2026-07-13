@@ -551,6 +551,21 @@ async def task_ticker_sync() -> str:
     return f"{count} tickers"
 
 
+@instrumented("angel_holdings_sync")
+async def task_angel_holdings_sync() -> str:
+    """
+    Refresh the watch_only portfolio rows from real Angel One holdings.
+    Self-gated on ANGEL_ONE_* creds being set (see angel_holdings_sync.
+    creds_present()) — a harmless no-op until the user fills them in. These
+    rows are real external holdings the brain only monitors, never trades
+    (see auto_trader.py's watch_only exclusions) — added 2026-07-13 to
+    replace a one-time manual sync from 2026-06-25 that had gone stale.
+    """
+    from intelligence.angel_holdings_sync import sync_angel_holdings
+    result = await sync_angel_holdings()
+    return f"{result['status']}: {result['detail']}"
+
+
 # ------------------------------------------------------------------ #
 # Scheduler setup                                                       #
 # ------------------------------------------------------------------ #
@@ -566,6 +581,14 @@ def build_scheduler() -> AsyncIOScheduler:
     # lost. coalesce=True collapses multiple missed fires into a single run.
     common = dict(replace_existing=True, coalesce=True,
                   max_instances=1, misfire_grace_time=300)
+
+    # Angel One holdings sync: daily at 8:05 AM IST, just after ticker sync.
+    # Self-gated no-op until ANGEL_ONE_* creds are set in .env.
+    scheduler.add_job(
+        task_angel_holdings_sync,
+        CronTrigger(hour=8, minute=5),
+        id="angel_holdings_sync", name="Angel One holdings sync", **common,
+    )
 
     # Ticker sync: daily at 8:00 AM IST
     scheduler.add_job(
