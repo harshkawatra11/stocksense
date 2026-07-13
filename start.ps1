@@ -19,6 +19,22 @@ $py = Join-Path $root "venv\Scripts\python.exe"
 
 function Section($t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 
+# 0. Kill any already-running backend/scheduler instances -------------------
+# This script now also runs automatically at Windows logon (Task Scheduler
+# "StockSense-AutoStart"). Without this guard, a logon that happens while a
+# manually-started backend/scheduler is still alive (e.g. after sleep/wake,
+# or a second logon) would spawn a duplicate process pair — the exact
+# duplicate-python-process bug that caused repeated confusion during manual
+# restarts on 2026-07-13. Always start from a clean slate.
+Section "Clearing any existing StockSense processes"
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match [regex]::Escape($root) -and
+                   ($_.CommandLine -match "uvicorn backend.main" -or $_.CommandLine -match "scheduler.market_runner") } |
+    ForEach-Object {
+        Write-Host "Stopping stale process PID $($_.ProcessId): $($_.CommandLine)" -ForegroundColor Yellow
+        taskkill /F /T /PID $_.ProcessId *> $null
+    }
+
 # 1. Docker engine + DB ------------------------------------------------------
 Section "Docker / database"
 docker info *> $null
