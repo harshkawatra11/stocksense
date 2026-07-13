@@ -38,6 +38,33 @@ async def _already_queued(conn, ticker: str) -> bool:
     return row is not None
 
 
+async def _sandbox_net_position(conn, ticker: str) -> int:
+    """
+    Net sandbox-approved quantity for a ticker: sum of APPROVED BUY qty minus
+    APPROVED SELL qty, excluding attempts that FAILED to place. This is the
+    actual truth of "do we already hold this via the sandbox path" — the
+    PAPER portfolio table is a separate, parallel ledger and must not be
+    used to size or gate sandbox BUY/SELL decisions (mixing them was a real
+    bug: found live on 2026-07-13, ALKALI got queued and approved as a fresh
+    BUY three times in one session because the only dedup check was
+    status='PENDING', which stops matching the instant a confirmation
+    resolves to APPROVED — nothing tracked that the position was already
+    open). Callers use this to skip a new BUY once net_qty > 0, and to size
+    /gate a SELL to what's actually net-held instead of trusting the
+    unrelated PAPER portfolio table.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT COALESCE(SUM(CASE WHEN action = 'BUY' THEN quantity ELSE -quantity END), 0) AS net_qty
+        FROM pending_trade_confirmations
+        WHERE ticker = $1 AND status = 'APPROVED'
+          AND execution_status IS DISTINCT FROM 'FAILED'
+        """,
+        ticker,
+    )
+    return int(row["net_qty"] or 0)
+
+
 async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
     """
     Insert PENDING confirmation rows for fresh, qualifying BUY signals not
@@ -122,6 +149,9 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
             seen.add(ticker)
             if await _already_queued(conn, ticker):
                 skipped.append({"ticker": ticker, "why": "already queued for review"})
+                continue
+            if await _sandbox_net_position(conn, ticker) > 0:
+                skipped.append({"ticker": ticker, "why": "already holding via sandbox approval"})
                 continue
 
             price = float(s["price_at_signal"] or 0)
@@ -220,10 +250,25 @@ async def queue_exit_confirmations(reviews: list[dict], conn=None) -> dict:
                 "ORDER BY buy_date DESC LIMIT 1",
                 ticker,
             )
-            qty = int(pos["quantity"]) if pos and pos["quantity"] else 0
-            if qty < 1:
+            paper_qty = int(pos["quantity"]) if pos and pos["quantity"] else 0
+            if paper_qty < 1:
                 skipped.append({"ticker": ticker, "why": "no active held position"})
                 continue
+
+            # Cap to what's actually held via a real sandbox-approved BUY —
+            # the PAPER portfolio (paper_qty above) is a separate, parallel
+            # ledger and must not by itself authorize a sandbox SELL. Found
+            # live on 2026-07-13: three tickers got sandbox SELL orders
+            # placed purely off PAPER-ledger EXIT verdicts despite never
+            # having a corresponding sandbox BUY, doubling up across two
+            # 30-min review cycles because nothing tracked net sandbox
+            # exposure. See _sandbox_net_position()'s docstring.
+            sandbox_qty = await _sandbox_net_position(conn, ticker)
+            if sandbox_qty < 1:
+                skipped.append({"ticker": ticker,
+                                 "why": "no sandbox-held position to sell (PAPER-only exit)"})
+                continue
+            qty = min(paper_qty, sandbox_qty)
 
             already = await conn.fetchrow(
                 "SELECT 1 FROM pending_trade_confirmations "
