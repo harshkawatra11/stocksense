@@ -618,19 +618,39 @@ def build_scheduler() -> AsyncIOScheduler:
         id="incremental_fo", name="Incremental F&O update", **common,
     )
 
-    # Signal pipeline + autonomous trading: every 30 min during market hours
+    # Signal pipeline + autonomous trading: every 30 min during market hours.
+    # NSE closes at 15:30 IST. `hour="9-15", minute="15,45"` naively spans the
+    # WHOLE hour-15 block, which includes a 15:45 firing — 15 minutes AFTER
+    # close, generating real BUY/SELL decisions and sandbox confirmations off
+    # stale post-close prices. Found live 2026-07-13 (confirmed in job_runs:
+    # a signal_pipeline run at 10:15 UTC = 15:45 IST produced 45 signals and
+    # queued a confirmation). Split into two triggers so the last legitimate
+    # firing is 15:15 IST, matching the same lesson eod_review already
+    # learned about this exact hour="9-15" range (see its comment below).
     scheduler.add_job(
         task_signal_pipeline,
-        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="15,45"),
+        CronTrigger(day_of_week="mon-fri", hour="9-14", minute="15,45"),
         id="signal_pipeline", name="Signal pipeline + auto-trade", **common,
+    )
+    scheduler.add_job(
+        task_signal_pipeline,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=15),
+        id="signal_pipeline_close", name="Signal pipeline + auto-trade (last pre-close run)", **common,
     )
 
     # Position re-analysis + autonomous exits: offset 10 min from the pipeline
     # so Kronos (signals) and Kronos (re-analysis) don't fight for the 4GB GPU.
+    # Same post-close fix as signal_pipeline above: last run is 15:25 IST, not
+    # 15:55 (which would review positions using a stale post-close price).
     scheduler.add_job(
         task_position_review,
-        CronTrigger(day_of_week="mon-fri", hour="9-15", minute="25,55"),
+        CronTrigger(day_of_week="mon-fri", hour="9-14", minute="25,55"),
         id="position_review", name="Position re-analysis + auto-exit", **common,
+    )
+    scheduler.add_job(
+        task_position_review,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=25),
+        id="position_review_close", name="Position re-analysis + auto-exit (last pre-close run)", **common,
     )
 
     # EOD review: Mon-Fri at 6:50 PM IST — AFTER incremental_ohlcv (6:30 PM)
