@@ -308,8 +308,18 @@ async def task_signal_pipeline() -> str:
     log.info("Signal pipeline complete: %d BUY signals.", len(sigs))
 
     trade_summary = await auto_trade()
+
+    # Sandbox human-confirmation BUY queueing — self-gated on
+    # LIVE_CONFIRMATION_ENABLED inside queue_fresh_signals() (returns a no-op
+    # reason dict when off), so it's safe to call unconditionally. Purely
+    # additive to the paper auto_trade above.
+    from intelligence.live_confirmation import queue_fresh_signals
+    conf = await queue_fresh_signals()
+    conf_note = (f"; confirmations: {len(conf['queued'])} queued, {len(conf['skipped'])} skipped"
+                 if "reason" not in conf else "")
+
     return (f"{len(sigs)} signals; auto: {len(trade_summary['bought'])} bought, "
-            f"{len(trade_summary['passed'])} passed")
+            f"{len(trade_summary['passed'])} passed{conf_note}")
 
 
 @instrumented("position_review")
@@ -322,7 +332,17 @@ async def task_position_review() -> str:
     log.info("Position re-analysis complete: %d positions reviewed.", len(reviews))
 
     exit_summary = await auto_exit(reviews)
-    return f"{len(reviews)} reviewed; {len(exit_summary['sold'])} auto-exited"
+
+    # Sandbox human-confirmation SELL queueing from the same EXIT verdicts —
+    # ADDITIVE: the paper auto_exit above already ran unchanged (paper tracking
+    # is the control group; the sandbox approval flow is the experiment).
+    # Self-gated on LIVE_CONFIRMATION_ENABLED inside queue_exit_confirmations().
+    from intelligence.live_confirmation import queue_exit_confirmations
+    conf = await queue_exit_confirmations(reviews)
+    conf_note = (f"; SELL confirmations: {len(conf['queued'])} queued, {len(conf['skipped'])} skipped"
+                 if "reason" not in conf else "")
+
+    return f"{len(reviews)} reviewed; {len(exit_summary['sold'])} auto-exited{conf_note}"
 
 
 @instrumented("eod_review")
@@ -443,9 +463,74 @@ async def task_reconcile_sandbox_orders() -> str:
             updated += 1
             log.info("Reconciled order for %s (order_id=%s): %s",
                       r["ticker"], r["order_id"], result["status"])
+            # Push the status transition to Telegram (best-effort: a Telegram
+            # failure must never break reconciliation; safe no-op when the
+            # bot is unconfigured).
+            try:
+                from backend.services.telegram_bot import send_message
+                await send_message(
+                    f"Sandbox order update: {r['ticker']} #{r['id']} "
+                    f"PLACED -> {result['status']}"
+                    + (f" ({result.get('detail')})" if result.get("detail") else "")
+                )
+            except Exception as e:
+                log.warning("Telegram order-update push failed: %s", e)
         return f"{updated}/{len(open_rows)} order(s) reconciled"
     finally:
         await conn.close()
+
+
+@instrumented("telegram_eod_summary")
+async def task_telegram_eod_summary() -> str:
+    """
+    Short end-of-day digest to the Telegram chat: today's confirmation-queue
+    counts (queued/approved/rejected/expired) + today's realized paper P&L
+    from the decisions table. Purely informational — sends no buttons and
+    can trigger no orders. Double-gated: no-ops unless BOTH
+    LIVE_CONFIRMATION_ENABLED and the Telegram bot are configured, same
+    self-gating convention as task_expire_confirmations above (registered
+    unconditionally, gating lives in config).
+    """
+    if not settings.LIVE_CONFIRMATION_ENABLED:
+        return "LIVE_CONFIRMATION_ENABLED is false — no summary"
+    from backend.services.telegram_bot import send_message, telegram_configured
+    if not telegram_configured():
+        return "Telegram unconfigured — no summary"
+
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        q = await conn.fetchrow(
+            """
+            SELECT COUNT(*) FILTER (WHERE created_at::date = CURRENT_DATE)   AS queued,
+                   COUNT(*) FILTER (WHERE status = 'APPROVED'
+                                      AND resolved_at::date = CURRENT_DATE) AS approved,
+                   COUNT(*) FILTER (WHERE status = 'REJECTED'
+                                      AND resolved_at::date = CURRENT_DATE) AS rejected,
+                   COUNT(*) FILTER (WHERE status = 'EXPIRED'
+                                      AND resolved_at::date = CURRENT_DATE) AS expired,
+                   COUNT(*) FILTER (WHERE status = 'PENDING')               AS still_pending
+            FROM pending_trade_confirmations
+            """
+        )
+        pnl = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(pnl), 0) AS realized_pnl, COUNT(*) AS closed
+            FROM decisions
+            WHERE decided_at::date = CURRENT_DATE AND pnl IS NOT NULL
+            """
+        )
+    finally:
+        await conn.close()
+
+    text = (
+        "StockSense EOD summary (sandbox confirmations)\n"
+        f"Queued today: {q['queued']}  |  Approved: {q['approved']}  |  "
+        f"Rejected: {q['rejected']}  |  Expired: {q['expired']}\n"
+        f"Still pending: {q['still_pending']}\n"
+        f"Paper P&L today: ₹{float(pnl['realized_pnl']):,.2f} across {pnl['closed']} closed decision(s)"
+    )
+    await send_message(text)
+    return "summary sent"
 
 
 @instrumented("ticker_sync")
@@ -467,6 +552,13 @@ async def task_ticker_sync() -> str:
 
 def build_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
+    # Misfire behavior: every job gets misfire_grace_time=300s + coalesce=True.
+    # If the machine sleeps through a scheduled fire (e.g. asleep at 9:15,
+    # wakes 9:40), APScheduler runs the missed job only if the wake happens
+    # within 5 minutes of the scheduled time; otherwise the run is silently
+    # skipped and the next cron slot (:15/:45 for the pipeline) picks things
+    # up. That's acceptable at this cadence — at worst one 30-min cycle is
+    # lost. coalesce=True collapses multiple missed fires into a single run.
     common = dict(replace_existing=True, coalesce=True,
                   max_instances=1, misfire_grace_time=300)
 
@@ -601,6 +693,15 @@ def build_scheduler() -> AsyncIOScheduler:
         task_reconcile_sandbox_orders,
         CronTrigger(day_of_week="mon-fri", hour="9-18", minute="*/5"),
         id="reconcile_sandbox_orders", name="Reconcile sandbox order status", **common,
+    )
+
+    # Telegram EOD digest: Mon-Fri 18:55 IST, right after eod_review (18:50)
+    # so today's resolved outcomes are already in. Self-gated on both
+    # LIVE_CONFIRMATION_ENABLED and telegram_configured() (see task docstring).
+    scheduler.add_job(
+        task_telegram_eod_summary,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=55),
+        id="telegram_eod_summary", name="Telegram EOD confirmation digest", **common,
     )
 
     return scheduler

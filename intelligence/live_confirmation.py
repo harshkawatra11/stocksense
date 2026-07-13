@@ -96,6 +96,108 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
             log.info("Queued for confirmation: %s x%d @ ₹%.2f (confirmation_id=%d)",
                       ticker, qty, price, row["id"])
 
+            # Push to Telegram (approve/reject from the phone). Strictly
+            # best-effort: a missing module or any Telegram failure must
+            # never break queueing — the web UI remains the source of truth.
+            try:
+                from backend.services.telegram_bot import notify_new_confirmation
+                await notify_new_confirmation({
+                    "id": row["id"], "ticker": ticker, "action": "BUY",
+                    "quantity": qty, "price": price, "reasoning": reasoning,
+                })
+            except ImportError:
+                pass
+            except Exception as e:
+                log.warning("Telegram notify failed for %s (queueing unaffected): %s", ticker, e)
+
+        return {"queued": queued, "skipped": skipped}
+    finally:
+        if own_conn:
+            await conn.close()
+
+
+async def queue_exit_confirmations(reviews: list[dict], conn=None) -> dict:
+    """
+    SELL-side twin of queue_fresh_signals(): for each EXIT verdict in the
+    position_monitor review dicts, insert a PENDING SELL row into
+    pending_trade_confirmations (quantity = the held position's quantity,
+    price = the review's current_price, reasoning = the review's reasoning).
+
+    Purely ADDITIVE to the autonomous PAPER auto_exit flow — this only queues
+    a proposal for human review; the paper exit has already happened (or will)
+    independently. Same gates as the BUY path: no-op unless
+    LIVE_CONFIRMATION_ENABLED, skip if a PENDING SELL already exists for the
+    ticker, skip if the position isn't actually held.
+    """
+    if not settings.LIVE_CONFIRMATION_ENABLED:
+        return {"queued": [], "skipped": [], "reason": "LIVE_CONFIRMATION_ENABLED is false"}
+
+    own_conn = conn is None
+    if own_conn:
+        conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        queued, skipped = [], []
+        seen: set[str] = set()
+        for r in reviews:
+            ticker = r.get("ticker")
+            if not ticker or r.get("verdict") != "EXIT":
+                continue
+            if ticker in seen:
+                skipped.append({"ticker": ticker, "why": "duplicate in batch"})
+                continue
+            seen.add(ticker)
+
+            pos = await conn.fetchrow(
+                "SELECT quantity FROM portfolio WHERE ticker = $1 AND active = TRUE "
+                "ORDER BY buy_date DESC LIMIT 1",
+                ticker,
+            )
+            qty = int(pos["quantity"]) if pos and pos["quantity"] else 0
+            if qty < 1:
+                skipped.append({"ticker": ticker, "why": "no active held position"})
+                continue
+
+            already = await conn.fetchrow(
+                "SELECT 1 FROM pending_trade_confirmations "
+                "WHERE ticker = $1 AND action = 'SELL' AND status = 'PENDING'",
+                ticker,
+            )
+            if already:
+                skipped.append({"ticker": ticker, "why": "SELL already queued for review"})
+                continue
+
+            price = float(r.get("current_price") or 0)
+            if price <= 0:
+                skipped.append({"ticker": ticker, "why": "no current price in review"})
+                continue
+
+            reasoning = (r.get("reasoning") or f"{ticker}: EXIT verdict from position review")[:1000]
+            row = await conn.fetchrow(
+                """
+                INSERT INTO pending_trade_confirmations
+                    (signal_id, ticker, action, quantity, price, reasoning)
+                VALUES ($1, $2, 'SELL', $3, $4, $5)
+                RETURNING id
+                """,
+                r.get("signal_id"), ticker, qty, price, reasoning,
+            )
+            entry = {"ticker": ticker, "confirmation_id": row["id"], "qty": qty, "price": price}
+            queued.append(entry)
+            log.info("Queued SELL for confirmation: %s x%d @ ₹%.2f (confirmation_id=%d)",
+                      ticker, qty, price, row["id"])
+            # Push to Telegram — same defensive best-effort pattern as the BUY
+            # path above: a missing module or Telegram failure never blocks queueing.
+            try:
+                from backend.services.telegram_bot import notify_new_confirmation
+                await notify_new_confirmation({
+                    "id": row["id"], "ticker": ticker, "action": "SELL",
+                    "quantity": qty, "price": price, "reasoning": reasoning,
+                })
+            except ImportError:
+                pass
+            except Exception as e:
+                log.warning("Telegram notify failed for %s (queueing unaffected): %s", ticker, e)
+
         return {"queued": queued, "skipped": skipped}
     finally:
         if own_conn:

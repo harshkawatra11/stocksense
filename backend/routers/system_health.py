@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 from fastapi import APIRouter
@@ -61,6 +61,45 @@ def _angel_one_circuit_breaker() -> dict:
         return {"tripped": None, "last_error": str(e)[:160], "retry_in_seconds": None}
 
 
+async def _scheduler_heartbeat(conn) -> dict:
+    """
+    Is scheduler/market_runner.py actually alive? Every job it runs inserts a
+    job_runs row, so MAX(started_at) is a de-facto heartbeat. Thresholds are
+    deliberately simple (weekends/holidays make "stale" fuzzy):
+      - during IST market hours (Mon-Fri, 9:00-18:59) jobs fire at least every
+        30 min, so > 2 hours old = degraded;
+      - otherwise (nights/weekends) the daily 8:00 ticker_sync still fires, so
+        > 26 hours old = unavailable regardless of holidays.
+    The scheduler being down was invisible for weeks (mid-June incident) —
+    this component exists so that never happens silently again.
+    """
+    try:
+        last = await conn.fetchval("SELECT MAX(started_at) FROM job_runs")
+    except Exception as e:  # noqa: BLE001
+        return {"status": "unavailable", "detail": f"job_runs query failed: {str(e)[:160]}"}
+    if last is None:
+        return {"status": "unavailable", "detail": "no job_runs rows at all — scheduler has never run"}
+
+    now = datetime.now(timezone.utc)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    age_hours = (now - last).total_seconds() / 3600
+
+    # Market hours in IST (UTC+5:30), Mon-Fri 9:00-18:59 — covers the trading
+    # cadence plus the evening data jobs.
+    ist = now + timedelta(hours=5, minutes=30)
+    market_hours = ist.weekday() < 5 and 9 <= ist.hour < 19
+    threshold = 2 if market_hours else 26
+
+    detail = f"last job_runs heartbeat {age_hours:.1f}h ago (threshold {threshold}h)"
+    if age_hours <= threshold:
+        return {"status": "ok", "detail": detail}
+    if age_hours <= 26:
+        return {"status": "degraded", "detail": detail + " — scheduler may be down or asleep"}
+    return {"status": "unavailable",
+            "detail": detail + " — scheduler process appears DOWN (check start.ps1 / market_runner window)"}
+
+
 @router.get("/health")
 async def system_health():
     """
@@ -75,6 +114,10 @@ async def system_health():
     conn = await asyncpg.connect(DB_DSN)
     try:
         freshness = await get_data_freshness(conn)
+        # Scheduler heartbeat rides in the components dict so the frontend
+        # SystemHealthBar (which iterates Object.entries(components)) renders
+        # it without special-casing.
+        components["scheduler"] = await _scheduler_heartbeat(conn)
     finally:
         await conn.close()
 

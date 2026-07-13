@@ -16,7 +16,12 @@ import asyncpg
 from fastapi import APIRouter, HTTPException
 
 from config import settings
-from data.pipeline.upstox_orders import get_order_status, place_sandbox_order
+from data.pipeline.upstox_orders import get_order_status
+from intelligence.confirmation_actions import (
+    approve_confirmation,
+    reject_confirmation,
+    row_to_dict as _row_to_dict,
+)
 from intelligence.live_confirmation import queue_fresh_signals
 
 router = APIRouter()
@@ -33,16 +38,6 @@ async def queue_fresh():
     Returns {"queued": [], "skipped": [], "reason": "..."} if the flag is off.
     """
     return await queue_fresh_signals()
-
-
-def _row_to_dict(row: asyncpg.Record) -> dict:
-    d = dict(row)
-    if d.get("price") is not None:
-        d["price"] = float(d["price"])
-    for key in ("created_at", "resolved_at"):
-        if d.get(key) is not None:
-            d[key] = d[key].isoformat()
-    return d
 
 
 @router.get("/pending")
@@ -85,101 +80,18 @@ async def list_pending():
 async def approve(confirmation_id: int):
     """
     Flip a pending confirmation to APPROVED and place the order on Upstox
-    SANDBOX (never live). If sandbox isn't configured (no UPSTOX_SANDBOX_TOKEN)
-    or the order fails, the confirmation still moves to APPROVED — the human
-    decision is recorded regardless — but execution_status/execution_detail
-    report the real outcome instead of silently pretending it worked.
-
-    Duplicate-click / retry safety: the `UPDATE ... WHERE status = 'PENDING'`
-    below is a single atomic statement. Postgres row-locks the target row for
-    its duration, so if two approve() requests for the SAME id race, exactly
-    one UPDATE affects a row (returns it) and the other affects zero rows
-    (returns None -> 404 here). There is no window between "read PENDING"
-    and "write APPROVED" for a second request to slip through — the read and
-    write are the same statement. This is safe under concurrency without any
-    extra locking.
-
-    The remaining risk isn't a duplicate order — it's the opposite: if this
-    process crashes or the DB connection drops between the status flip and
-    place_sandbox_order() actually running, the row would be stuck APPROVED
-    with execution_status still NULL forever (looking neither pending nor
-    resolved). We close that gap by always recording *some* execution_status
-    in a finally-equivalent: place_sandbox_order() itself never raises (it
-    catches and returns FAILED), and if it does somehow raise unexpectedly,
-    the except below still records FAILED with the exception text rather
-    than leaving the row in limbo. A stuck APPROVED-with-NULL-status row is
-    still possible only if the process dies mid-UPDATE, which is the same
-    residual risk any non-transactional two-step write has; that's an
-    acceptable, visible failure mode (the row is easy to spot and re-drive
-    manually) rather than a silent double-order risk.
+    SANDBOX (never live). The actual logic — atomic PENDING->APPROVED flip,
+    stale-quote re-check, sandbox order placement, outcome recording — lives
+    in intelligence/confirmation_actions.approve_confirmation(), shared
+    verbatim with the Telegram bot (backend/services/telegram_bot.py) so
+    both surfaces behave identically. See that module's docstrings for the
+    concurrency/crash-safety reasoning. Response shape is unchanged from
+    when this logic lived inline here.
     """
-    conn = await asyncpg.connect(DB_DSN)
-    try:
-        row = await conn.fetchrow(
-            """
-            UPDATE pending_trade_confirmations
-            SET status = 'APPROVED', resolved_at = NOW()
-            WHERE id = $1 AND status = 'PENDING'
-            RETURNING id, signal_id, ticker, action, quantity, price, reasoning,
-                      status, created_at, resolved_at
-            """,
-            confirmation_id,
-        )
-        if row is None:
-            raise HTTPException(status_code=404, detail="Confirmation not found or not pending")
-
-        # Stale-quote guard: re-check age at approve time, not just at queue
-        # time. A row can sit PENDING for a while with a browser tab open;
-        # the quoted price/reasoning may no longer reflect reality by the
-        # time the human actually clicks. Refuse to place the order (but
-        # keep the APPROVED status — the human decision is still recorded)
-        # and flip the row to EXPIRED instead so it's clearly distinguishable
-        # from a real placement attempt.
-        age_minutes = (row["resolved_at"] - row["created_at"]).total_seconds() / 60.0
-        if age_minutes > settings.CONFIRMATION_EXPIRY_MINUTES:
-            expired = await conn.fetchrow(
-                """
-                UPDATE pending_trade_confirmations
-                SET status = 'EXPIRED',
-                    execution_status = 'FAILED',
-                    execution_detail = $2
-                WHERE id = $1
-                RETURNING id, signal_id, ticker, action, quantity, price, reasoning,
-                          status, created_at, resolved_at, order_id, execution_status,
-                          execution_detail, is_sandbox
-                """,
-                confirmation_id,
-                f"confirmation was {age_minutes:.0f} min old (limit "
-                f"{settings.CONFIRMATION_EXPIRY_MINUTES}) — quoted price likely stale, "
-                f"order not placed",
-            )
-            return _row_to_dict(expired)
-
-        try:
-            result = await place_sandbox_order(
-                ticker=row["ticker"], action=row["action"],
-                quantity=row["quantity"], price=float(row["price"]),
-            )
-        except Exception as e:
-            # place_sandbox_order() is documented to never raise, but if it
-            # somehow does, still record a terminal execution_status instead
-            # of leaving the row APPROVED with execution_status NULL forever.
-            result = {"status": "FAILED", "detail": f"unexpected exception: {e}"}
-
-        updated = await conn.fetchrow(
-            """
-            UPDATE pending_trade_confirmations
-            SET order_id = $2, execution_status = $3, execution_detail = $4
-            WHERE id = $1
-            RETURNING id, signal_id, ticker, action, quantity, price, reasoning,
-                      status, created_at, resolved_at, order_id, execution_status,
-                      execution_detail, is_sandbox
-            """,
-            confirmation_id, result.get("order_id"), result["status"], result.get("detail"),
-        )
-        return _row_to_dict(updated)
-    finally:
-        await conn.close()
+    result = await approve_confirmation(confirmation_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Confirmation not found or not pending")
+    return result
 
 
 @router.get("/{confirmation_id}/order-status")
@@ -224,22 +136,9 @@ async def order_status(confirmation_id: int):
 
 @router.post("/{confirmation_id}/reject")
 async def reject(confirmation_id: int):
-    """Flip a pending confirmation to REJECTED. Never places an order."""
-    conn = await asyncpg.connect(DB_DSN)
-    try:
-        row = await conn.fetchrow(
-            """
-            UPDATE pending_trade_confirmations
-            SET status = 'REJECTED', resolved_at = NOW()
-            WHERE id = $1 AND status = 'PENDING'
-            RETURNING id, signal_id, ticker, action, quantity, price, reasoning,
-                      status, created_at, resolved_at, order_id, execution_status,
-                      execution_detail, is_sandbox
-            """,
-            confirmation_id,
-        )
-        if row is None:
-            raise HTTPException(status_code=404, detail="Confirmation not found or not pending")
-        return _row_to_dict(row)
-    finally:
-        await conn.close()
+    """Flip a pending confirmation to REJECTED. Never places an order.
+    Shared logic: intelligence/confirmation_actions.reject_confirmation()."""
+    result = await reject_confirmation(confirmation_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Confirmation not found or not pending")
+    return result

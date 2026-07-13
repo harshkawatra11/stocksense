@@ -282,6 +282,22 @@ class Settings:
         return int(os.getenv("CONFIRMATION_EXPIRY_MINUTES", "120"))
 
     # ------------------------------------------------------------------ #
+    # Telegram (approve/reject control surface for the confirmation queue) #
+    # ------------------------------------------------------------------ #
+    @property
+    def TELEGRAM_BOT_TOKEN(self) -> str:
+        """Bot token from @BotFather. Empty = Telegram surface disabled
+        (backend/services/telegram_bot.py becomes a clean no-op)."""
+        return os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+    @property
+    def TELEGRAM_CHAT_ID(self) -> str:
+        """The ONE chat id the bot talks to and listens to. Updates from any
+        other chat/user/group are silently ignored (logged, never answered)
+        — trade data must never leak to an unverified chat."""
+        return os.getenv("TELEGRAM_CHAT_ID", "")
+
+    # ------------------------------------------------------------------ #
     # Angel One (Phase 2 — optional live trading)                          #
     # ------------------------------------------------------------------ #
     @property

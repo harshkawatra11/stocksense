@@ -235,6 +235,8 @@ export interface ComponentStatuses {
   lightgbm: ComponentStatus
   llm_synthesis: ComponentStatus
   macro: ComponentStatus
+  /** Scheduler process heartbeat, derived from job_runs MAX(started_at). Optional: only present on newer backends. */
+  scheduler?: ComponentStatus
 }
 
 export interface SystemHealth {

@@ -187,8 +187,11 @@ async def review_position(conn, pos: dict) -> dict | None:
     )
 
     log.info("Reviewed %s: %s → %s (%.0f%%)", ticker, status, verdict, progress_pct)
+    # current_price / signal_id are consumed by live_confirmation.queue_exit_confirmations
+    # (the sandbox SELL-confirmation path); additive keys, ignored by auto_exit.
     return {"review_id": review_id, "ticker": ticker, "status": status,
-            "verdict": verdict, "progress_pct": progress_pct, "reasoning": reasoning}
+            "verdict": verdict, "progress_pct": progress_pct, "reasoning": reasoning,
+            "current_price": current, "signal_id": signal_id}
 
 
 async def review_all_positions() -> list[dict]:

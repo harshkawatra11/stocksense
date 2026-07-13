@@ -77,6 +77,12 @@ async def lifespan(app: FastAPI):
     # position_review scheduler cycle. See intelligence/intraday_stops.py.
     asyncio.create_task(start_intraday_stop_monitor())
 
+    # Telegram approve/reject bot: long-polls the Bot API so the human can
+    # decide each queued SANDBOX trade from their phone. Clean no-op (logs
+    # once, returns) when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are unset.
+    from backend.services.telegram_bot import start_telegram_bot
+    asyncio.create_task(start_telegram_bot())
+
     log.info("StockSense backend started")
     yield
     log.info("StockSense backend shutting down")

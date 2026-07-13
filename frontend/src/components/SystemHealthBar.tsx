@@ -12,6 +12,7 @@ const LABEL: Record<string, string> = {
   lightgbm: 'LightGBM',
   llm_synthesis: 'Synthesis',
   macro: 'Macro',
+  scheduler: 'Scheduler',
 }
 
 function sourceSuffix(c: ComponentStatus): string {
