@@ -83,6 +83,12 @@ async def lifespan(app: FastAPI):
     from backend.services.telegram_bot import start_telegram_bot
     asyncio.create_task(start_telegram_bot())
 
+    # Scheduler-death watchdog: alerts Telegram the moment job_runs goes
+    # stale, instead of the mid-June incident where the scheduler was down
+    # for weeks with nothing surfacing it. See intelligence/scheduler_watchdog.py.
+    from intelligence.scheduler_watchdog import start_scheduler_watchdog
+    asyncio.create_task(start_scheduler_watchdog())
+
     log.info("StockSense backend started")
     yield
     log.info("StockSense backend shutting down")
