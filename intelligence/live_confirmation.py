@@ -25,6 +25,7 @@ import asyncpg
 from config import settings
 from intelligence.trading_account import get_actionable_signals
 from intelligence.portfolio_guard import get_portfolio_tickers
+from data.pipeline.upstox_orders import get_available_funds
 
 log = logging.getLogger(__name__)
 
@@ -47,19 +48,54 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
     at the scheduler-registration level, so this is safe to call directly
     (e.g. from a manual trigger or a test) without accidentally bypassing the
     opt-in gate.
+
+    Sizing: unlike intelligence/auto_trader.py's PAPER path (which sizes off
+    the fixed settings.CASH_AVAILABLE ledger by design — see trading_account.py
+    module docstring on "epoch 2"), this is the human-approval path that
+    actually places Upstox sandbox orders (API-parity rehearsal of the real
+    account), so it sizes off REAL funds fetched live from Upstox via
+    data/pipeline/upstox_orders.get_available_funds(). Fetched once per run
+    (not once per candidate) and reused across the whole batch. If funds are
+    unavailable for any reason, this does NOT fall back to shares_affordable
+    or CASH_AVAILABLE — it skips queueing entirely for the run, consistent
+    with the project's "no silent fallback to fake data" rule.
     """
     if not settings.LIVE_CONFIRMATION_ENABLED:
         return {"queued": [], "skipped": [], "reason": "LIVE_CONFIRMATION_ENABLED is false"}
+
+    funds = await get_available_funds()
+    if funds["status"] != "ok" or funds.get("available") is None:
+        detail = funds.get("detail", "unknown error")
+        log.warning("queue_fresh_signals: skipping run — Upstox funds unavailable: %s", detail)
+        return {
+            "queued": [], "skipped": [],
+            "reason": f"Upstox funds unavailable: {detail}",
+        }
+    available_funds = float(funds["available"])
+
+    from intelligence.brain_params import get_params
 
     own_conn = conn is None
     if own_conn:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
+        params = await get_params(conn)
+        max_position_pct = params["max_position_pct"]
+        budget = available_funds * max_position_pct
+
         held = await get_portfolio_tickers(conn)
-        candidates = await get_actionable_signals(conn, limit=limit, only_affordable=True)
+        # Not passing only_affordable=True: that flag filters on s.affordable,
+        # a column pre-computed from the static CASH_AVAILABLE ledger (see
+        # signal_pipeline.annotate_affordability) — using it here as a
+        # pre-filter would let a stale static-derived flag silently exclude
+        # trades that are actually affordable with real Upstox funds (or
+        # include ones that aren't). Fetch the broader candidate list and do
+        # real affordability filtering below using the live-fetched balance.
+        candidates = await get_actionable_signals(conn, limit=limit, only_affordable=False)
 
         queued, skipped = [], []
         seen: set[str] = set()
+        remaining_budget = budget
         for s in candidates:
             ticker = s["ticker"]
             if ticker in held:
@@ -74,9 +110,13 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
                 continue
 
             price = float(s["price_at_signal"] or 0)
-            qty = int(s.get("shares_affordable") or 0)
+            qty = int(remaining_budget // price) if price > 0 else 0
             if qty < 1 or price <= 0:
-                skipped.append({"ticker": ticker, "why": "no affordable quantity"})
+                skipped.append({
+                    "ticker": ticker,
+                    "why": f"no affordable quantity (budget ₹{remaining_budget:.0f} @ ₹{price:.2f}, "
+                           f"real Upstox funds ₹{available_funds:.0f})",
+                })
                 continue
 
             reasoning = (
@@ -93,6 +133,10 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
                 s["id"], ticker, qty, price, reasoning,
             )
             queued.append({"ticker": ticker, "confirmation_id": row["id"], "qty": qty, "price": price})
+            # Each position drawn from the same real Upstox balance for this
+            # batch — decrement so later candidates in the batch don't
+            # oversize against funds already earmarked by earlier ones.
+            remaining_budget -= qty * price
             log.info("Queued for confirmation: %s x%d @ ₹%.2f (confirmation_id=%d)",
                       ticker, qty, price, row["id"])
 

@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 SANDBOX_ORDER_URL = "https://sandbox.upstox.com/v2/order/place"
 SANDBOX_ORDER_DETAILS_URL = "https://sandbox.upstox.com/v2/order/details"
+SANDBOX_FUNDS_URL = "https://sandbox.upstox.com/v2/user/get-funds-and-margin"
 
 # Upstox order statuses that mean "still working" — poll again later.
 # Everything else (complete, rejected, cancelled) is terminal.
@@ -175,6 +176,96 @@ async def get_order_status(order_id: str) -> dict:
     status = str(order_data.get("status", "")).lower()
     detail = order_data.get("status_message") or status
     return {"status": status, "detail": detail}
+
+
+async def get_available_funds() -> dict:
+    """
+    Fetch real available equity funds from Upstox sandbox via
+    GET /v2/user/get-funds-and-margin — used to size trades on the
+    human-confirmation path (backend/routers/confirmations.py's approve(),
+    intelligence/live_confirmation.py) against what's ACTUALLY sitting in
+    the account, rather than a static config number. Sandbox mirrors this
+    endpoint the same way it mirrors /v2/order/place and /v2/order/details
+    (see docs/UPSTOX_API_NOTES.md §2c — "sandbox emulates the real API").
+
+    Upstox's documented response shape is:
+        {"status": "success", "data": {"equity": {"available_margin": ...,
+         "used_margin": ..., ...}, "commodity": {...}}}
+    but exact field naming has drifted across Upstox API versions/docs, so
+    this parses defensively: tries a set of known/likely field names for the
+    equity segment's available balance, and logs the raw shape if none match
+    so a mismatch is debuggable instead of silently wrong.
+
+    Returns {"status": "ok", "available": <float>} on success, or
+    {"status": "unavailable", "detail": <str>, "available": None} on ANY
+    failure (no token configured, network error, unparseable response) —
+    never raises, same never-raise contract as place_sandbox_order() and
+    get_order_status(). Callers must treat available=None as "cannot size a
+    trade right now" — never coerce to 0 or infinity.
+    """
+    if not sandbox_configured():
+        return {
+            "status": "unavailable",
+            "detail": "UPSTOX_SANDBOX_TOKEN not set",
+            "available": None,
+        }
+
+    headers = {
+        "Authorization": f"Bearer {settings.UPSTOX_SANDBOX_TOKEN}",
+        "Accept": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(SANDBOX_FUNDS_URL, params={"segment": "SEC"}, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text[:300] if e.response is not None else str(e)
+        log.warning("Upstox funds fetch failed: %s", detail)
+        return {
+            "status": "unavailable",
+            "detail": f"HTTP {e.response.status_code if e.response else '?'}: {detail}",
+            "available": None,
+        }
+    except Exception as e:
+        log.warning("Upstox funds request failed: %s", e)
+        return {"status": "unavailable", "detail": str(e), "available": None}
+
+    payload = data.get("data")
+    equity = None
+    if isinstance(payload, dict):
+        # Common shapes: {"data": {"equity": {...}, "commodity": {...}}}
+        equity = payload.get("equity")
+        if equity is None and ("available_margin" in payload or "availablemargin" in payload):
+            # Some responses are flat (no per-segment nesting).
+            equity = payload
+
+    if not isinstance(equity, dict):
+        log.warning("Upstox funds response had no parseable equity segment: %s", data)
+        return {
+            "status": "unavailable",
+            "detail": f"unexpected funds response shape: {data}",
+            "available": None,
+        }
+
+    available = None
+    for key in ("available_margin", "availablemargin", "available_balance", "net"):
+        if key in equity and equity[key] is not None:
+            try:
+                available = float(equity[key])
+                break
+            except (TypeError, ValueError):
+                continue
+
+    if available is None:
+        log.warning("Upstox funds equity segment had no recognizable balance field: %s", equity)
+        return {
+            "status": "unavailable",
+            "detail": f"no recognizable balance field in equity segment: {equity}",
+            "available": None,
+        }
+
+    return {"status": "ok", "available": available}
 
 
 def is_order_open(status: str) -> bool:

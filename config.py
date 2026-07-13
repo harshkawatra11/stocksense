@@ -270,6 +270,17 @@ class Settings:
         return float(os.getenv("MAX_SANDBOX_ORDER_VALUE", "50000"))
 
     @property
+    def UPSTOX_FUNDS_CACHE_SECONDS(self) -> int:
+        """How long a fetched Upstox available-funds figure may be reused
+        within a single queue_fresh_signals() batch (intelligence/
+        live_confirmation.py) before re-fetching. Short by design — this is
+        real account money sizing real (sandbox) orders, so staleness should
+        be measured in seconds, not minutes; the point of the cache is only
+        to avoid hitting the funds endpoint once per candidate ticker within
+        the same run, not to avoid hitting it across runs. Default 30s."""
+        return int(os.getenv("UPSTOX_FUNDS_CACHE_SECONDS", "30"))
+
+    @property
     def CONFIRMATION_EXPIRY_MINUTES(self) -> int:
         """How long a PENDING row in pending_trade_confirmations stays valid
         before its quoted price is considered stale. Default 120 minutes (2h)

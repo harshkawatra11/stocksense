@@ -68,6 +68,16 @@ Note: this is **separate** from `UPSTOX_ANALYTICS_TOKEN`, which is already confi
 and used for live market data (quotes/candles). The sandbox token is used only for
 placing simulated orders. Both live in `.env`; don't swap them.
 
+Also note: this token is what powers **position sizing** on the human-confirmation
+path. `intelligence/live_confirmation.py` fetches your real available balance from
+Upstox (`GET /v2/user/get-funds-and-margin`, via `get_available_funds()` in
+`data/pipeline/upstox_orders.py`) and sizes proposed trades off that — not off the
+`CASH_AVAILABLE` value in `.env`. `CASH_AVAILABLE` only feeds the separate, fully
+autonomous **PAPER-mode** ledger (`intelligence/auto_trader.py`), which intentionally
+keeps a fixed hypothetical starting balance to build a track record over time — that
+path is unaffected by this token. If the sandbox token is missing or the funds fetch
+fails, the confirmation queue skips that run entirely rather than guessing a number.
+
 ## 4. The flip: enable human-confirmation mode
 
 In `.env`, set:
