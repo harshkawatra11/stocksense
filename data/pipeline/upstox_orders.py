@@ -64,6 +64,11 @@ async def place_sandbox_order(ticker: str, action: str, quantity: int, price: fl
     callers (the approve() endpoint) can always record a clear outcome
     against the confirmation row instead of a 500.
     """
+    from intelligence.kill_switch import is_tripped
+    tripped, kill_reason = await is_tripped()
+    if tripped:
+        return {"status": "FAILED", "detail": f"kill switch is tripped: {kill_reason}"}
+
     if not sandbox_configured():
         return {
             "status": "FAILED",

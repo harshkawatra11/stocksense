@@ -250,6 +250,15 @@ async def _handle_message(m: dict) -> None:
             "here with Approve/Reject buttons — one decision per trade, no "
             "bulk or auto-approve, ever. No real money is involved."
         )
+    elif text.startswith("/kill"):
+        from intelligence.kill_switch import trip
+        reason = m.get("text", "").strip()[5:].strip() or "manual kill switch via Telegram"
+        await trip(reason)
+        await send_message(f"🛑 Kill switch TRIPPED: {reason}\nNo new orders will be placed until /reset.")
+    elif text.startswith("/reset"):
+        from intelligence.kill_switch import reset
+        await reset()
+        await send_message("✅ Kill switch reset — order placement resumed.")
 
 
 # ------------------------------------------------------------------ #

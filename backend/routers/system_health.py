@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import asyncpg
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from config import settings
 from intelligence.data_freshness import get_data_freshness
@@ -184,3 +185,32 @@ async def system_health():
         "angel_one": _angel_one_circuit_breaker(),
         "lightgbm_model": _lightgbm_model_age(),
     }
+
+
+class KillRequest(BaseModel):
+    reason: str = "manual kill switch via API"
+
+
+@router.post("/kill")
+async def kill_switch(req: KillRequest):
+    """Halt all new order placement (sandbox today, the future live path
+    too) — checked in data/pipeline/upstox_orders.place_sandbox_order()
+    before every attempt. Does not cancel already-open orders (Upstox
+    sandbox doesn't expose a bulk-cancel we can safely call blind)."""
+    from intelligence.kill_switch import trip
+    await trip(req.reason)
+    return {"status": "tripped", "reason": req.reason}
+
+
+@router.post("/kill/reset")
+async def kill_switch_reset():
+    from intelligence.kill_switch import reset
+    await reset()
+    return {"status": "reset"}
+
+
+@router.get("/kill")
+async def kill_switch_status():
+    from intelligence.kill_switch import is_tripped
+    tripped, reason = await is_tripped()
+    return {"tripped": tripped, "reason": reason}

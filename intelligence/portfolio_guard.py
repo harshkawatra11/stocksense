@@ -15,6 +15,10 @@ DB_DSN = settings.DATABASE_DSN
 # ------------------------------------------------------------------ #
 MAX_OPEN_POSITIONS = 8                  # hard cap on concurrent open positions
 MAX_SECTOR_ALLOCATION_PCT = 0.25        # max share of deployable capital in one sector
+MAX_SINGLE_POSITION_PCT = 0.15          # max share of deployable capital in ONE instrument
+                                         # (Upstox Agent Skill guardrail #5, MPP — sector
+                                         # concentration alone doesn't stop over-concentrating
+                                         # in a single ticker within an allowed sector)
 DAILY_LOSS_CIRCUIT_BREAKER_PCT = 0.02   # halt new BUYs once today's P&L hits -2% of capital
 
 
@@ -164,6 +168,37 @@ async def check_sector_concentration(conn, ticker: str, order_value: float) -> t
     if pct > MAX_SECTOR_ALLOCATION_PCT:
         return False, (f"sector '{sector}' would reach {pct*100:.0f}% of deployable capital "
                         f"(limit {MAX_SECTOR_ALLOCATION_PCT*100:.0f}%)")
+    return True, ""
+
+
+async def check_single_position_cap(conn, ticker: str, order_value: float) -> tuple[bool, str]:
+    """
+    Block a new BUY if it would push this ONE instrument above
+    MAX_SINGLE_POSITION_PCT of deployable capital — check_sector_concentration
+    only caps a whole sector, so a single ticker inside an under-limit sector
+    could still absorb the entire account. This is the Upstox Agent Skill's
+    guardrail #5 (Market Price Protection / per-position cap) implemented as
+    real enforced code rather than left as a documentation reference.
+    """
+    existing = await conn.fetchrow(
+        """
+        SELECT p.quantity,
+               COALESCE((SELECT close FROM ohlcv_daily WHERE ticker = p.ticker ORDER BY time DESC LIMIT 1),
+                         p.avg_price) AS current_price
+        FROM portfolio p WHERE p.ticker = $1 AND p.active = TRUE
+        """,
+        ticker,
+    )
+    existing_value = float(existing["quantity"]) * float(existing["current_price"]) if existing else 0.0
+
+    deployable, _ = await _deployable_capital(conn)
+    if deployable <= 0:
+        return True, ""
+
+    pct = (existing_value + order_value) / deployable
+    if pct > MAX_SINGLE_POSITION_PCT:
+        return False, (f"{ticker} would reach {pct*100:.0f}% of deployable capital in one "
+                        f"position (limit {MAX_SINGLE_POSITION_PCT*100:.0f}%)")
     return True, ""
 
 

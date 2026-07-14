@@ -25,6 +25,7 @@ from intelligence.portfolio_guard import (
     get_portfolio_tickers,
     check_position_limit,
     check_sector_concentration,
+    check_single_position_cap,
     check_daily_loss_circuit_breaker,
 )
 from intelligence.trading_account import get_account, get_actionable_signals, record_decision
@@ -163,6 +164,10 @@ async def auto_trade(conn=None) -> dict:
                     sector_ok, sector_reason = await check_sector_concentration(conn, ticker, order_value)
                     if not sector_ok:
                         reason = f"[risk] {sector_reason}"
+                    else:
+                        pos_cap_ok, pos_cap_reason = await check_single_position_cap(conn, ticker, order_value)
+                        if not pos_cap_ok:
+                            reason = f"[risk] {pos_cap_reason}"
 
             if reason:
                 try:
