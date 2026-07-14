@@ -235,7 +235,9 @@ async def get_historical_candles(
     from_date: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    GET /v3/historical-candle/{instrument_key}/{unit}/{interval}/{to_date}/{from_date}
+    Uses the official upstox_client SDK's HistoryV3Api (upstox-python-sdk,
+    installed but previously unused — every Upstox call in this codebase was
+    hand-rolled httpx against the same endpoints the SDK already wraps).
 
     unit: "minutes" | "hours" | "days" | "weeks" | "months"
     interval: e.g. "1", "5", "15" for minutes; "1"-"5" for hours; "1" for days/weeks/months
@@ -243,30 +245,39 @@ async def get_historical_candles(
 
     Returns a list of {timestamp, open, high, low, close, volume} dicts,
     oldest-to-newest is NOT guaranteed by Upstox — caller should sort if order matters.
-    Returns [] on missing token or request failure (no silent fallback data).
+    Returns [] on missing token or request failure (no silent fallback data) —
+    same never-raise contract as the hand-rolled version this replaces.
     """
     token = await get_data_token()
     if token is None:
         log.warning("No valid Upstox token — cannot fetch historical candles for %s (re-auth required, or set UPSTOX_ANALYTICS_TOKEN)", instrument_key)
         return []
 
-    path_parts = [instrument_key, unit, interval, to_date]
-    if from_date:
-        path_parts.append(from_date)
-    url = f"{HISTORICAL_CANDLE_URL}/{'/'.join(path_parts)}"
+    import asyncio
+    import upstox_client
+    from upstox_client.rest import ApiException
 
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    def _fetch():
+        configuration = upstox_client.Configuration()
+        configuration.access_token = token
+        api = upstox_client.HistoryV3Api(upstox_client.ApiClient(configuration))
+        if from_date:
+            return api.get_historical_candle_data1(instrument_key, unit, interval, to_date, from_date)
+        return api.get_historical_candle_data(instrument_key, unit, interval, to_date)
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        # The SDK's generated client is synchronous (blocking HTTP) — offload
+        # to a thread so it doesn't block the event loop, same effect as the
+        # old httpx.AsyncClient call but through the SDK's own request path.
+        response = await asyncio.to_thread(_fetch)
+    except ApiException as e:
+        log.warning("Upstox historical-candle request failed for %s: %s", instrument_key, e)
+        return []
     except Exception as e:
         log.warning("Upstox historical-candle request failed for %s: %s", instrument_key, e)
         return []
 
-    candles = (data.get("data") or {}).get("candles") or []
+    candles = (response.data.candles if response and response.data else None) or []
     out: list[dict[str, Any]] = []
     for c in candles:
         # Response row shape: [timestamp, open, high, low, close, volume, open_interest]
@@ -302,35 +313,44 @@ async def get_ltp_rest(instrument_key: str) -> float | None:
     than the WS path (a real HTTP round trip) but still far better than no
     price at all for stop/target enforcement. Returns None on any failure
     (missing token, bad response, unresolvable key) — never fabricates a price.
+
+    Uses the official SDK's MarketQuoteV3Api.get_ltp — confirmed live to
+    return the identical shape the hand-rolled version parsed (data keyed
+    by a normalized symbol string, e.g. "NSE_EQ:RELIANCE", each row
+    carrying last_price).
     """
     token = await get_data_token()
     if token is None:
         log.warning("get_ltp_rest: no valid Upstox token — cannot fetch LTP for %s", instrument_key)
         return None
 
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"instrument_key": instrument_key}
+    import asyncio
+    import upstox_client
+    from upstox_client.rest import ApiException
+
+    def _fetch():
+        configuration = upstox_client.Configuration()
+        configuration.access_token = token
+        api = upstox_client.MarketQuoteV3Api(upstox_client.ApiClient(configuration))
+        return api.get_ltp(instrument_key=instrument_key)
+
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(LTP_URL, headers=headers, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        response = await asyncio.to_thread(_fetch)
     except Exception as e:
         log.warning("get_ltp_rest: request failed for %s: %s", instrument_key, e)
         return None
 
-    quotes = (data.get("data") or {})
+    quotes = response.data if response else None
     if not quotes:
         return None
-    # Response is keyed by a normalized symbol string (e.g. "NSE_EQ:RELIANCE"),
-    # not the instrument_key we sent — there's exactly one entry per request
-    # since we only asked for one key, so just take the first value.
+    # There's exactly one entry per request since we only asked for one key.
     row = next(iter(quotes.values()), None)
     if not row:
         return None
     try:
-        return float(row["last_price"])
-    except (KeyError, TypeError, ValueError):
+        last_price = row.get("last_price") if isinstance(row, dict) else getattr(row, "last_price", None)
+        return float(last_price)
+    except (TypeError, ValueError):
         return None
 
 
