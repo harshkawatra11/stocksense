@@ -136,6 +136,84 @@ async def place_sandbox_order(ticker: str, action: str, quantity: int, price: fl
     return {"status": "PLACED", "order_id": order_id}
 
 
+async def place_live_order(ticker: str, action: str, quantity: int, price: float) -> dict:
+    """
+    Structural twin of place_sandbox_order() for REAL money — same LIMIT-
+    only order, same guardrails, only Configuration(sandbox=False) and a
+    real order-capable token differ. Exists so the code path is complete
+    and end-to-end testable (against sandbox, with EXECUTION_MODE left at
+    "sandbox") — but it CANNOT place a real order today, checked in this
+    order, each one sufficient on its own to refuse:
+
+      1. settings.EXECUTION_MODE must literally be "live".
+      2. UPSTOX_LIVE_ORDER_TOKEN must be set.
+      3. The kill switch must not be tripped.
+      4. intelligence.trading_mode.get_trading_mode()'s expectancy gate
+         (60 executed trades, 28 days, 50 resolved outcomes) must report
+         mode == "LIVE" — this is the same non-negotiable gate documented
+         in CLAUDE.md; nothing in this function weakens or bypasses it.
+
+    Returns the same {"status": "PLACED"|"FAILED", ...} shape as
+    place_sandbox_order() — never raises.
+    """
+    if settings.EXECUTION_MODE != "live":
+        return {"status": "FAILED", "detail": f"EXECUTION_MODE is {settings.EXECUTION_MODE!r}, not 'live'"}
+    if not settings.UPSTOX_LIVE_ORDER_TOKEN:
+        return {"status": "FAILED", "detail": "UPSTOX_LIVE_ORDER_TOKEN not set"}
+
+    from intelligence.kill_switch import is_tripped
+    tripped, kill_reason = await is_tripped()
+    if tripped:
+        return {"status": "FAILED", "detail": f"kill switch is tripped: {kill_reason}"}
+
+    import asyncpg
+    from intelligence.trading_mode import get_trading_mode
+    conn = await asyncpg.connect(settings.DATABASE_DSN)
+    try:
+        mode = await get_trading_mode(conn)
+    finally:
+        await conn.close()
+    if mode["mode"] != "LIVE":
+        return {"status": "FAILED", "detail": f"trading_mode gate not passed: {mode['reason']}"}
+
+    if action not in ("BUY", "SELL"):
+        return {"status": "FAILED", "detail": f"invalid action {action!r} — must be BUY or SELL"}
+    if quantity < 1:
+        return {"status": "FAILED", "detail": f"invalid quantity {quantity}"}
+
+    instrument_key = await resolve_instrument_key(ticker)
+    if instrument_key is None:
+        return {"status": "FAILED", "detail": f"no Upstox instrument_key for {ticker} (missing ISIN)"}
+
+    import upstox_client
+
+    def _place():
+        configuration = upstox_client.Configuration(sandbox=False)
+        configuration.access_token = settings.UPSTOX_LIVE_ORDER_TOKEN
+        api = upstox_client.OrderApi(upstox_client.ApiClient(configuration))
+        body = upstox_client.PlaceOrderRequest(
+            quantity=quantity, product="D", validity="DAY", price=round(price, 2),
+            instrument_token=instrument_key, order_type="LIMIT", transaction_type=action,
+            disclosed_quantity=0, trigger_price=0, is_amo=False,
+        )
+        return api.place_order(body, api_version="2.0")
+
+    try:
+        response = await asyncio.to_thread(_place)
+    except Exception as e:
+        detail = getattr(e, "body", None) or str(e)
+        log.error("LIVE order failed for %s: %s", ticker, detail)
+        return {"status": "FAILED", "detail": str(detail)[:300]}
+
+    order_id = response.data.order_id if response and response.data else None
+    if not order_id:
+        return {"status": "FAILED", "detail": f"no order_id in response: {response}"}
+
+    log.warning("LIVE ORDER PLACED (real money): %s %s x%d @ ~%.2f -> order_id=%s",
+                action, ticker, quantity, price, order_id)
+    return {"status": "PLACED", "order_id": order_id}
+
+
 async def get_order_status(order_id: str) -> dict:
     """
     Fetch the current exchange-side status of a sandbox order via

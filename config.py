@@ -232,6 +232,27 @@ class Settings:
         return os.getenv("LIVE_CONFIRMATION_ENABLED", "false").lower() in ("1", "true", "yes")
 
     @property
+    def EXECUTION_MODE(self) -> str:
+        """"paper" | "sandbox" | "live" — makes the existing implicit modes
+        explicit. Setting this to "live" does NOT by itself unlock real-money
+        orders: place_live_order() (data/pipeline/upstox_orders.py) still
+        hard-checks intelligence.trading_mode.get_trading_mode()'s expectancy
+        gate (60 executed trades, 28 days, 50 resolved outcomes) and the kill
+        switch before ever calling the real order API — this setting only
+        selects which code path CAN run if that gate has separately been
+        earned. Default "sandbox" (current behavior, unchanged)."""
+        return os.getenv("EXECUTION_MODE", "sandbox").lower()
+
+    @property
+    def UPSTOX_LIVE_ORDER_TOKEN(self) -> str:
+        """Real-money order-capable access token — deliberately separate from
+        UPSTOX_ANALYTICS_TOKEN (data-only) and UPSTOX_SANDBOX_TOKEN (fake
+        money). Empty until the user deliberately generates and sets one;
+        place_live_order() refuses to run without it regardless of
+        EXECUTION_MODE or the expectancy gate."""
+        return os.getenv("UPSTOX_LIVE_ORDER_TOKEN", "")
+
+    @property
     def MAX_SANDBOX_ORDER_VALUE(self) -> float:
         """Sanity ceiling (₹, quantity * price) enforced in place_sandbox_order()
         before any order is sent to Upstox sandbox. This is fake money and a
