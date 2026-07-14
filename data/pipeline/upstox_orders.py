@@ -22,6 +22,7 @@ confirmation-gated execution design discussed with the user.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -35,7 +36,13 @@ log = logging.getLogger(__name__)
 # (the latter does not resolve at all — confirmed via DNS lookup, "Non-existent
 # domain" — an earlier version of this file had it wrong and every sandbox
 # call was silently failing with a network error, not an auth error).
-SANDBOX_ORDER_URL = "https://api-sandbox.upstox.com/v2/order/place"
+# place_sandbox_order now goes through the official SDK's
+# Configuration(sandbox=True), which resolves to this same host internally.
+# get_order_status and get_available_funds stay on direct REST calls — per
+# the SDK's own Configuration.sandbox_urls allowlist, sandbox only serves
+# order place/modify/cancel; order/details and funds-and-margin are real,
+# confirmed gaps in Upstox's sandbox (not something the SDK can route
+# around), so those two endpoints keep the original hand-rolled calls.
 SANDBOX_ORDER_DETAILS_URL = "https://api-sandbox.upstox.com/v2/order/details"
 SANDBOX_FUNDS_URL = "https://api-sandbox.upstox.com/v2/user/get-funds-and-margin"
 
@@ -86,40 +93,39 @@ async def place_sandbox_order(ticker: str, action: str, quantity: int, price: fl
     if instrument_key is None:
         return {"status": "FAILED", "detail": f"no Upstox instrument_key for {ticker} (missing ISIN)"}
 
-    payload = {
-        "quantity": quantity,
-        "product": "D",           # delivery — matches StockSense's swing-trade holding style
-        "validity": "DAY",
-        "price": round(price, 2),
-        "instrument_token": instrument_key,
-        "order_type": "LIMIT",    # never MARKET — see module docstring
-        "transaction_type": action,
-        "disclosed_quantity": 0,
-        "trigger_price": 0,
-        "is_amo": False,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.UPSTOX_SANDBOX_TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+    import upstox_client
+
+    def _place():
+        configuration = upstox_client.Configuration(sandbox=True)
+        configuration.access_token = settings.UPSTOX_SANDBOX_TOKEN
+        api = upstox_client.OrderApi(upstox_client.ApiClient(configuration))
+        body = upstox_client.PlaceOrderRequest(
+            quantity=quantity,
+            product="D",           # delivery — matches StockSense's swing-trade holding style
+            validity="DAY",
+            price=round(price, 2),
+            instrument_token=instrument_key,
+            order_type="LIMIT",    # never MARKET — see module docstring
+            transaction_type=action,
+            disclosed_quantity=0,
+            trigger_price=0,
+            is_amo=False,
+        )
+        return api.place_order(body, api_version="2.0")
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(SANDBOX_ORDER_URL, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as e:
-        detail = e.response.text[:300] if e.response is not None else str(e)
-        log.warning("Upstox sandbox order failed for %s: %s", ticker, detail)
-        return {"status": "FAILED", "detail": f"HTTP {e.response.status_code if e.response else '?'}: {detail}"}
+        # SDK's generated client is synchronous — offload to a thread so it
+        # doesn't block the event loop, same as the httpx.AsyncClient call
+        # this replaces.
+        response = await asyncio.to_thread(_place)
     except Exception as e:
-        log.warning("Upstox sandbox order request failed for %s: %s", ticker, e)
-        return {"status": "FAILED", "detail": str(e)}
+        detail = getattr(e, "body", None) or str(e)
+        log.warning("Upstox sandbox order failed for %s: %s", ticker, detail)
+        return {"status": "FAILED", "detail": str(detail)[:300]}
 
-    order_id = (data.get("data") or {}).get("order_id")
+    order_id = response.data.order_id if response and response.data else None
     if not order_id:
-        return {"status": "FAILED", "detail": f"no order_id in response: {data}"}
+        return {"status": "FAILED", "detail": f"no order_id in response: {response}"}
 
     log.info("Sandbox order placed: %s %s x%d @ ~%.2f -> order_id=%s", action, ticker, quantity, price, order_id)
     return {"status": "PLACED", "order_id": order_id}
@@ -147,6 +153,13 @@ async def get_order_status(order_id: str) -> dict:
     same never-raise contract as place_sandbox_order() so a polling loop
     can't be taken down by one bad response.
     """
+    # NOT migrated to the SDK: Upstox's sandbox only supports order
+    # place/modify/cancel (confirmed straight from the installed SDK's own
+    # Configuration.sandbox_urls allowlist — order/details isn't in it, and
+    # a live SDK call against it returns "This API is not available in
+    # sandbox mode"). Same constraint already documented for
+    # get_available_funds below. Stays on the direct REST call, which
+    # sandbox does genuinely serve.
     if not sandbox_configured():
         return {"status": "UNKNOWN", "detail": "UPSTOX_SANDBOX_TOKEN not set"}
 
