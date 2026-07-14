@@ -47,3 +47,8 @@ backtest/checkpoints/
 .claude/worktrees/
 frontend/dist
 frontend/node_modules
+
+# Personal Upstox Agent Skill (npx skills add) — installed for interactive
+# Claude Code use only, unrelated to the app. May carry order-capable
+# credentials in its own config.json — never commit.
+.agents/
