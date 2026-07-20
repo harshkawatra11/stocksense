@@ -121,11 +121,30 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
     if own_conn:
         conn = await asyncpg.connect(settings.DATABASE_DSN)
     try:
-        params = await get_params(conn)
-        max_position_pct = params["max_position_pct"]
+        # SANDBOX_MAX_POSITION_PCT, not brain_params' max_position_pct — that
+        # value is adaptive/tuned for the PAPER ledger's much larger capital
+        # and multi-position diversification. Reusing it here on a tiny real
+        # account silently capped every trade at a fixed small budget
+        # regardless of signal quality (e.g. ₹210 on ₹1,000 funds), which is
+        # why proposals were always cheap stocks — not a model bias, a
+        # sizing bug. See config.py's docstring for the full story.
+        max_position_pct = settings.SANDBOX_MAX_POSITION_PCT
         budget = available_funds * max_position_pct
 
         held = await get_portfolio_tickers(conn)
+        # Distinct tickers currently net-long via sandbox approval — the cap
+        # on genuinely concurrent positions. Previously unlimited (found live
+        # 2026-07-20 alongside the budget-sizing bug above).
+        open_sandbox_tickers = await conn.fetchval(
+            """
+            SELECT COUNT(DISTINCT ticker) FROM (
+                SELECT ticker, SUM(CASE WHEN action='BUY' THEN quantity ELSE -quantity END) AS net_qty
+                FROM pending_trade_confirmations
+                WHERE status = 'APPROVED' AND execution_status IS DISTINCT FROM 'FAILED'
+                GROUP BY ticker
+            ) t WHERE net_qty > 0
+            """
+        )
         # Not passing only_affordable=True: that flag filters on s.affordable,
         # a column pre-computed from the static CASH_AVAILABLE ledger (see
         # signal_pipeline.annotate_affordability) — using it here as a
@@ -140,6 +159,12 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
         remaining_budget = budget
         for s in candidates:
             ticker = s["ticker"]
+            if open_sandbox_tickers >= settings.SANDBOX_MAX_OPEN_POSITIONS:
+                skipped.append({
+                    "ticker": ticker,
+                    "why": f"sandbox position cap reached ({open_sandbox_tickers}/{settings.SANDBOX_MAX_OPEN_POSITIONS})",
+                })
+                continue
             if ticker in held:
                 skipped.append({"ticker": ticker, "why": "already holding"})
                 continue
@@ -182,6 +207,7 @@ async def queue_fresh_signals(conn=None, limit: int = 10) -> dict:
             # batch — decrement so later candidates in the batch don't
             # oversize against funds already earmarked by earlier ones.
             remaining_budget -= qty * price
+            open_sandbox_tickers += 1
             log.info("Queued for confirmation: %s x%d @ ₹%.2f (confirmation_id=%d)",
                       ticker, qty, price, row["id"])
 

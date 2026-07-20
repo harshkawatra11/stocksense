@@ -265,6 +265,39 @@ class Settings:
         return float(os.getenv("MAX_SANDBOX_ORDER_VALUE", "50000"))
 
     @property
+    def SANDBOX_MAX_POSITION_PCT(self) -> float:
+        """Fraction of sandbox funds committed to a single trade — deliberately
+        SEPARATE from brain_params' max_position_pct (~21%, adaptive, tuned for
+        the ₹100,000 PAPER ledger's ~5-8-position diversification). Reusing
+        that value here was a real bug (found live 2026-07-20): on a ₹1,000
+        real account it capped every trade's budget at ~₹210, silently
+        excluding every stock priced above that regardless of signal
+        quality — the observed "only ever getting sub-₹50 stocks" symptom
+        was a sizing bug, not a model bias.
+
+        Default 0.40 (not 0.21, and NOT 1.00 — the user explicitly does not
+        want everything concentrated into one position either): on ₹1,000
+        that's a ~₹400 per-trade budget, wide enough to afford real
+        mid-priced stocks while still leaving room for 2 concurrent
+        positions (queue_fresh_signals already decrements remaining_budget
+        per candidate within a batch, and check_position_limit-style
+        capping should gate total concurrent count — see the sandbox
+        position-cap TODO). As real funds grow, this stays a genuine
+        percentage, so the same logic scales up without redeploying."""
+        return float(os.getenv("SANDBOX_MAX_POSITION_PCT", "0.40"))
+
+    @property
+    def SANDBOX_MAX_OPEN_POSITIONS(self) -> int:
+        """Hard cap on concurrent sandbox-held tickers (net position > 0).
+        Previously unlimited — nothing stopped queue_fresh_signals from
+        proposing a new position every single cycle regardless of how many
+        were already open. At SANDBOX_MAX_POSITION_PCT=0.40 this caps total
+        deployed sandbox exposure at roughly 2-3x the per-trade budget, a
+        genuinely diversified handful of real positions rather than either
+        one all-in trade or an unbounded pile of tiny ones."""
+        return int(os.getenv("SANDBOX_MAX_OPEN_POSITIONS", "3"))
+
+    @property
     def UPSTOX_FUNDS_CACHE_SECONDS(self) -> int:
         """How long a fetched Upstox available-funds figure may be reused
         within a single queue_fresh_signals() batch (intelligence/
