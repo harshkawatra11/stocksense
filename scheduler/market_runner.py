@@ -347,7 +347,18 @@ async def task_position_review() -> str:
     conf_note = (f"; SELL confirmations: {len(conf['queued'])} queued, {len(conf['skipped'])} skipped"
                  if "reason" not in conf else "")
 
-    return f"{len(reviews)} reviewed; {len(exit_summary['sold'])} auto-exited{conf_note}"
+    # Sandbox-NATIVE exit check — independent of the PAPER-derived `reviews`
+    # above. Found live 2026-07-21: queue_exit_confirmations only fires off
+    # PAPER-position EXIT verdicts, so a sandbox position with no (or a
+    # since-closed) PAPER twin was never evaluated against its own
+    # target/stop — 6 positions sat open 8 days with zero SELL proposals,
+    # silently maxing out SANDBOX_MAX_OPEN_POSITIONS. This checks every
+    # sandbox-held ticker directly, regardless of PAPER ledger state.
+    from intelligence.sandbox_exit_monitor import check_sandbox_exits
+    sandbox_exits = await check_sandbox_exits()
+    sandbox_note = f"; sandbox exits: {len(sandbox_exits['queued'])} queued (checked {sandbox_exits['checked']})"
+
+    return f"{len(reviews)} reviewed; {len(exit_summary['sold'])} auto-exited{conf_note}{sandbox_note}"
 
 
 @instrumented("eod_review")
