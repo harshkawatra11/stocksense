@@ -13,7 +13,7 @@ Fifteen steps, strictly ordered. Each has defined inputs, defined outputs, and d
  6  Rebuild features      │
  7  Relabel regimes     ──┘
  8  Train candidates    ──┐
- 9  Walk-forward test     │  MODEL       gated zone
+ 9  Evaluate (adversarial)│  MODEL       gated zone
 10  GATE                ──┘
 11  Shortlist           ──┐
 12  Investigate           │  OUTPUT      degrade-visibly zone
@@ -140,33 +140,39 @@ Trains the regime classifier and each per-regime specialist. Every candidate is 
 
 ---
 
-## Step 9 — Walk-forward backtest
+## Step 9 — Evaluate
 
-**In:** candidate models, held-out data. **Out:** validation metrics.
+**In:** candidate models, held-out data, episode library. **Out:** scorecard, gate verdicts.
 
-Evaluates every candidate on data it has never seen, using purged and embargoed walk-forward validation, net of realistic transaction costs, stratified by regime, and measured for calibration as well as accuracy. Stress scenarios are replayed.
+The Evaluator ([10-evaluation.md](10-evaluation.md)) runs its suite against every candidate: purged and embargoed walk-forward validation, net of realistic transaction costs, stratified by regime, measured for calibration as well as accuracy, and compared against the baseline gauntlet.
 
-The full specification of what "properly validated" means lives in [06-retraining-rigor.md](06-retraining-rigor.md), and it is the most important document in this set.
+**Nightly runs a subset; the full suite runs on cadence.** The complete evaluation — every episode, every era, Monte Carlo, the full stress battery — is hours of compute and does not belong in every night's window. Nightly runs the fast, decisive checks: walk-forward on recent folds, cost-adjusted comparison against the incumbent, calibration, regime stratification, and the **Baseline 8 ablation** (LightGBM-only), which is cheap and answers the most important question about whether the LLM layers are earning their place.
 
-**On failure — DEGRADE, and reject.** An unvalidatable candidate is not promotable. Keep the incumbent.
+The full suite runs weekly, on demand from the Control Room, and always before any promotion that would move a model down the production staircase toward real capital.
+
+**A candidate that has only passed the nightly subset is marked as such.** Partial evaluation never counts as full evaluation, and the scorecard states which it was.
+
+**On failure — DEGRADE, and reject.** An unevaluatable candidate is not promotable. Keep the incumbent.
 
 ---
 
 ## Step 10 — GATE
 
-**In:** candidate metrics, incumbent metrics. **Out:** promotion decision, registry update.
+**In:** evaluator verdicts, incumbent metrics. **Out:** promotion decision, registry update.
 
-The decision point the entire thesis rests on.
+The decision point the entire thesis rests on. The Gate does not invent criteria — it **executes the verdict the Evaluator produced** ([10-evaluation.md](10-evaluation.md)). Criteria live in one place; the mechanism lives here.
 
 ```
-        candidate metrics vs live model metrics
+        evaluator verdicts vs live model
                         │
         ┌───────────────┴────────────────┐
-        │  ALL of:                        │
+        │  ALL hard gates PASS:           │
         │   • beats incumbent net of costs│
         │   • no regime regression        │
         │   • calibration within tolerance│
-        │   • passes stress replays       │
+        │   • passes stress battery       │
+        │   • beats Baseline 8 ablation   │
+        │   • statistically significant   │
         │   • reproducibility manifest OK │
         └───────────────┬────────────────┘
                         │

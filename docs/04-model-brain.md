@@ -45,6 +45,12 @@ The layers are strictly ordered and strictly separated. Each has a defined input
 
 The reason for three layers rather than one: they are good at genuinely different things. Statistics over thousands of instruments is a tree-model job and a terrible LLM job. Reading a resignation announcement and understanding its implication is an LLM job and an impossible tree-model job. Deciding what a human needs to hear at 9am is a different LLM job again, and the most expensive one.
 
+### Layers 2 and 3 must prove they earn their place
+
+That argument is plausible, and plausible is not sufficient. **Baseline 8 in the evaluation gauntlet is Layer 1 alone, with no LLM layers at all** ([10-evaluation.md](10-evaluation.md)), and it runs on every evaluation.
+
+If the full stack cannot beat LightGBM-only on net-of-cost performance, then Layers 2 and 3 are expensive decoration and the honest conclusion is to ship the simpler system. This is the single most uncomfortable number the evaluator produces, which is exactly why it is reported prominently rather than buried.
+
 ---
 
 ## Layer 1 — Quant Engine
@@ -60,6 +66,8 @@ The reasoning, stated once so it does not have to be relitigated:
 **Debuggability under solo operation.** The user is the only engineer. At 6am, facing a prediction that looks wrong, the required capability is answering *why* — which feature drove it, is that feature computed correctly, does the split make sense. Feature importance and SHAP values give that directly. A transformer gives an attention map and a shrug.
 
 **Retraining budget.** The full model set must train, validate, and gate every night on a laptop, inside a window that leaves room for everything else. LightGBM does this in minutes on CPU. Nightly neural retraining on a 4GB GPU would dominate the entire night and deliver less.
+
+**And the claim is testable.** Baseline 9 in the evaluation gauntlet ([10-evaluation.md](10-evaluation.md)) is a LightGBM+XGBoost ensemble, so "trees are enough" is a hypothesis the evaluator checks rather than an assumption the architecture protects. If a different model family demonstrably beats it through the same gates, the reasoning above stops applying.
 
 **RL is rejected for a specific reason, not a vague one.** Reinforcement learning is the obvious-sounding fit for "learns from trade outcomes," and it is a trap here. RL needs enormous interaction data, is notoriously unstable to train, and — decisively — is extremely difficult to validate safely. This system's entire credibility rests on a gate that can prove a candidate is better than the incumbent ([06-retraining-rigor.md](06-retraining-rigor.md)). A model class that resists that proof is disqualified regardless of ceiling.
 
@@ -107,9 +115,15 @@ Regime is assigned at **both** instrument and market level. A stock can be trend
 
 Boundaries are inherently fuzzy. The classifier outputs class probabilities, and a low-confidence regime assignment is itself a signal: an instrument the router cannot confidently place is an instrument whose prediction deserves less trust. Regime confidence is carried forward into the shortlist and into grading.
 
+### Horizon
+
+Every model is trained and evaluated at **one declared horizon and one declared resolution** ([03-feature-engineering.md](03-feature-engineering.md)). Horizon is a parameter of the model, not a property of the system: daily-resolution models train across the full 2000→ history, intraday models from 2022→, and both are first-class.
+
+Multiple horizons mean multiple models with separate registry entries, never one model with a blurred target.
+
 ### Outputs
 
-Per instrument, per day:
+Per instrument, per bar:
 
 | Output | Meaning |
 |---|---|

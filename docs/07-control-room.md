@@ -23,7 +23,8 @@ Two hard rules shape the whole UI:
 ├──────────┬────────────────────────────────────────────────┤
 │ Today    │                                                  │
 │ Pipeline │                                                  │
-│ Models   │              (active screen)                     │
+│ Models   │                                                  │
+│ Evaluate │              (active screen)                     │
 │ Trades   │                                                  │
 │ Data     │                                                  │
 │ Logs     │                                                  │
@@ -110,6 +111,29 @@ One click to restore any archived version, with confirmation showing what is bei
 ### Shadow tracking
 
 Models in shadow, their accumulated graded track record, and their progress toward the trial-period threshold that would make them user-facing.
+
+---
+
+## 3b. Evaluation
+
+Where the adversarial evaluator's findings live ([10-evaluation.md](10-evaluation.md)). Distinct from Models, which shows what was promoted; this shows *why the evaluator did or did not allow it*.
+
+- **Quant IQ scorecard** — the seven capabilities, scored, with the composite clearly marked as descriptive rather than decisive.
+- **Hard gate panel** — each gate PASS/FAIL, with the failing gate's detail one click away. A failing gate is a veto, and the UI shows it as a block rather than a low score.
+- **Baseline gauntlet** — performance against all ten opponents. **Baseline 7 (the user's own manual strategy) and Baseline 8 (LightGBM without the LLM layers) are pinned to the top**, because they answer the two questions most worth being uncomfortable about: is this worth using at all, and are Layers 2 and 3 earning their cost.
+- **Regime and era breakdown** — scores per historical era and per market condition, so *when the brain is stupid* is visible at a glance rather than buried in an average.
+- **Stress battery results** — slippage multipliers, latency injection, parameter perturbation, best/worst-trade removal, with pass/fail and the degradation curve.
+- **Monte Carlo distribution** — the outcome range and drawdown probabilities, shown instead of a single flattering equity curve.
+- **Episode browser** — individual episodes with the frozen information snapshot, the model's answer, and the revealed outcome. This is the screen for asking *"what did it actually see, and what did it conclude?"*
+- **Fidelity tier indicator** — which simulator tier produced these results, and what that tier can and cannot claim. Never omitted.
+- **Evaluation-attempt counter** — how many candidates have now been tested against the current holdout. A rising count means results should be discounted, and the UI says so rather than leaving the user to remember.
+- **Run controls** — trigger the nightly subset or the full suite on demand.
+
+### Promotion staircase
+
+Where each model version sits — backtest, paper, live shadow, small capital, scaled — and the performance measured at each tread.
+
+The **stage-to-stage decay** is displayed explicitly, because it is the primary diagnostic: a candidate at Sharpe 2.1 / 1.4 / 0.6 across backtest, paper, and shadow is telling you exactly where the backtest was optimistic.
 
 ---
 

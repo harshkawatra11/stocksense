@@ -1,8 +1,51 @@
 # 02 — Data Layer
 
+## Three sources, one store
+
+StockSense ingests from three sources. They are complementary, not redundant, and each is authoritative for something the others cannot provide.
+
+| Source | Authoritative for | Reach |
+|---|---|---|
+| **Upstox API** | The operational spine — live data, F&O, and the **user's own orders and positions** (no other source has these) | Daily from Jan 2000, intraday from Jan 2022 |
+| **NSE archives** | **Delivery quantity and delivery percentage**, bulk/block deals, official corporate actions, point-in-time universe composition | Bhavcopy archives predate Upstox's window |
+| **yfinance** | Independent cross-check and gap-fill | Long daily history, convenient access |
+
+The reason for three rather than one: **delivery percentage does not exist in the Upstox API**, and it is one of the more informative features available on Indian equities — it separates positional accumulation from intraday churn, which price and volume alone cannot distinguish. NSE archives are the only practical source. yfinance earns its place as an independent voice for reconciliation: a single source cannot tell you when it is wrong.
+
+### Source precedence and reconciliation
+
+When sources disagree — and they will — precedence decides, and disagreement beyond tolerance quarantines rather than silently picking a winner.
+
+```
+For a given instrument-date field:
+
+  1. NSE archives      ← authoritative for delivery, corporate actions,
+                          official settlement prices
+  2. Upstox            ← authoritative for OHLCV, F&O, and anything
+                          the live system will also read
+  3. yfinance          ← fallback only; never overrides 1 or 2
+
+  Cross-check: compare all available sources
+     ├─ agreement within tolerance  →  accept, record provenance
+     └─ disagreement beyond tolerance  →  QUARANTINE, surface in Control Room
+```
+
+Rules that make this trustworthy rather than merely layered:
+
+- **Provenance is recorded per field**, not per row. A row whose close came from Upstox and whose delivery percentage came from NSE archives says exactly that. Silent blending of sources is how untraceable data corruption begins.
+- **yfinance never overrides a primary source.** It is a validator and a gap-filler. It carries known survivorship bias and documented quality issues, and treating it as authoritative would import both.
+- **Disagreement is signal.** A close that differs by more than a rounding tolerance across sources usually means an unapplied corporate action, a symbol collision, or a stale universe entry — all of which are real problems worth catching, not noise worth averaging away.
+- **Reconciliation results are logged**, so a persistent per-source bias becomes visible rather than being quietly absorbed each night.
+
+### The point-in-time obligation
+
+NSE archives are also what make honest historical evaluation possible. The evaluator must reconstruct the universe *as it existed* on a past date, including instruments that have since delisted ([10-evaluation.md](10-evaluation.md)). A universe assembled from today's listings would silently exclude every company that failed — the definition of survivorship bias, and one of the most effective ways to make a backtest look brilliant and mean nothing.
+
+---
+
 ## Upstox integration
 
-All broker and market data comes from Upstox via the [official Python SDK](https://github.com/upstox/upstox-python). Ingestion is the only component permitted to call it ([01-architecture.md](01-architecture.md)); everything downstream reads the local store.
+Broker and live market data comes from Upstox via the [official Python SDK](https://github.com/upstox/upstox-python). Ingestion is the only component permitted to call it ([01-architecture.md](01-architecture.md)); everything downstream reads the local store.
 
 ### The three API surfaces
 
@@ -41,9 +84,11 @@ This was an open question in the original planning; it is now settled by the [Up
 | Days, weeks, months | **January 2000** |
 | Minutes, hours | **January 2022** |
 
-Twenty-six years of daily history is enough to cover the dot-com aftermath, the 2008 global financial crisis, demonetisation, GST implementation, the COVID crash and recovery, and the post-COVID rate cycle. **No NSE bhavcopy backfill is required for daily data.** The earlier plan to scrape exchange archives is cancelled, not deferred.
+Twenty-six years of daily history covers the dot-com aftermath, the 2008 global financial crisis, demonetisation, GST implementation, the COVID crash and recovery, and the post-COVID rate cycle. **NSE archives are not needed to backfill daily OHLCV** — Upstox covers it. Archives are ingested for what Upstox does not provide: delivery data, official corporate actions, point-in-time universe composition, and reach before 2000.
 
-The honest remaining gap is **pre-2022 intraday**. Minute and hour candles do not exist before January 2022 through this API, which means intraday-resolution regime research cannot reach the 2008 or COVID crashes. Daily-resolution regime research can. This is a known limitation recorded in [09-open-questions.md](09-open-questions.md), not a task on a backlog — v1 trains on daily-resolution features, so it does not currently bite.
+The honest remaining gap is **pre-2022 intraday**. Minute and hour candles do not exist before January 2022 through this API, which means intraday-resolution work cannot reach the 2008 or COVID crashes — those eras are available at daily resolution only.
+
+Because the system is **horizon-agnostic** ([03-feature-engineering.md](03-feature-engineering.md)), this shapes what can be *claimed* rather than what can be *built*. Daily-horizon models train across the full 2000→ history; intraday-horizon models train from 2022→ and are evaluated at a correspondingly lower fidelity tier ([10-evaluation.md](10-evaluation.md)). Every evaluation report states which resolution it ran at, so a conclusion is never quoted with more historical depth than it actually had.
 
 Note also that V2 and V3 differ substantially in depth (V2 caps daily at roughly one year). **Ingestion must target V3.** An implementation that silently uses V2 would train the models on a fraction of the intended history while appearing to work.
 
@@ -127,6 +172,14 @@ Open, high, low, close, volume, per instrument, per interval, per timestamp. Dai
 
 **Adjusted and unadjusted closes are stored separately.** Training features must use corporate-action-adjusted prices, because an unadjusted 1:5 split looks exactly like an 80% crash to a momentum feature. Displaying a price to the user, by contrast, should show what actually printed. Conflating these two is a classic and quiet source of garbage training data.
 
+### `delivery` — settlement-side activity
+
+Per instrument, per day, from NSE archives: deliverable quantity, delivery percentage, and total traded quantity. Bulk and block deal records where present.
+
+This entity exists because delivery percentage answers a question volume cannot: **how much of today's trading was people actually taking ownership, versus intraday churn that netted out by the close?** A 5% up-move on high volume and 20% delivery is a different event from the same move on the same volume at 70% delivery — the first is traders, the second is accumulation.
+
+Unavailable through the Upstox API, which is a principal reason NSE archives are ingested at all.
+
 ### `fno_snapshots` — derivatives
 
 Per underlying, per expiry, per day: futures price and volume, open interest and OI change, option chain data, put/call ratio, implied volatility, and futures basis. Feeds the F&O feature category in [03-feature-engineering.md](03-feature-engineering.md).
@@ -179,5 +232,8 @@ Ingestion is followed by validation, and validation has the authority to fail th
 | Corporate action application | Every action with an ex-date on or before today reflected in adjusted prices |
 | F&O linkage | Every derivative snapshot resolves to a known underlying |
 | Duplicate detection | Re-running ingestion for a date produced no duplicate rows |
+| **Cross-source agreement** | Sources disagree beyond tolerance on a shared field — usually an unapplied corporate action, a symbol collision, or a stale universe entry |
+| **Provenance completeness** | Every field carries a recorded source; no field of unknown origin enters the store |
+| **Delivery sanity** | Deliverable quantity never exceeds traded quantity |
 
 Anything that fails is quarantined and surfaced in the Control Room rather than silently dropped. The governing principle: **it is always better to skip a night loudly than to train on corrupted data quietly.** A missed night costs one brief. A night trained on bad data costs however long it takes to notice.

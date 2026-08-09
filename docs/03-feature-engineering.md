@@ -11,16 +11,29 @@ That row is literally what gets passed to `model.fit()`. Everything the model ca
 ## The output contract
 
 ```
-one row = (instrument_id, date, feature_schema_version, …N numeric columns)
+one row = (instrument_id, timestamp, resolution, feature_schema_version,
+           source_provenance, …N numeric columns)
 ```
 
-Three properties are non-negotiable.
+Four properties are non-negotiable.
 
 **Fixed schema.** Every row for a given schema version has the same columns in the same order. Models are trained against a schema, and inference must present an identical shape.
 
 **Versioned.** Adding, removing, or redefining a feature bumps `feature_schema_version`. The model registry ([02-data-layer.md](02-data-layer.md)) records which version each model was trained against, so a model from three months ago remains reproducible against the feature definitions it actually saw — not against today's, which would silently change its meaning.
 
 **Deterministic.** Recomputing features for 2019-03-14 must produce identical values today and next year. No wall-clock dependence, no randomness, no "days since today."
+
+**Provenance-carrying.** Each row records which source supplied its underlying data, per field group ([02-data-layer.md](02-data-layer.md)). When a model behaves strangely on a subset of history, the first question is whether that subset came from a different source — and that question must be answerable from the data rather than reconstructed by guesswork.
+
+### Horizon-agnostic by design
+
+**The system is not built around a fixed horizon.** Horizon is a parameter that flows through the entire stack — features, labels, models, simulator, and evaluator all receive it rather than assuming it.
+
+This is why the row key carries `resolution` alongside `timestamp`: the same feature definitions compute against daily bars or minute bars, and a model is always trained and evaluated at one declared resolution.
+
+The practical consequence, given the data ([02-data-layer.md](02-data-layer.md)): daily-resolution features reach back to 2000 and cover every major regime; intraday-resolution features begin in 2022. Both are first-class. What differs is the historical depth available to each, and therefore the confidence attachable to conclusions drawn at each — a distinction the evaluator enforces through fidelity tiers ([10-evaluation.md](10-evaluation.md)) rather than one the feature engine needs to know about.
+
+Windows are expressed in **bars, not calendar days**, so a "20-period momentum" means twenty bars at whatever resolution is running. Anything genuinely calendar-bound — days to expiry, days since an announcement — stays in calendar units and is labeled as such.
 
 ### Point-in-time correctness
 
@@ -98,7 +111,11 @@ The volatility features do double duty: they are predictive inputs and they are 
 | Divergence | Price making new highs while volume does not — the classic exhaustion tell |
 | Spikes | Volume outliers measured in standard deviations of its own recent distribution |
 | Turnover | Traded value, and liquidity rank within the universe |
-| Delivery | Delivery percentage and its trend, where available — separates positional accumulation from intraday churn |
+| **Delivery** | Delivery percentage; its trend and its deviation from the instrument's own norm; delivery-weighted volume; divergence between rising price and falling delivery |
+
+Delivery data comes from NSE archives and is **not available through the Upstox API** ([02-data-layer.md](02-data-layer.md)) — it is one of the principal reasons archives are ingested. It earns its place because it answers a question raw volume cannot: how much of today's activity was ownership changing hands versus intraday churn that netted out by the close. A breakout on heavy volume and 18% delivery is a materially different event from the identical move at 65% delivery, and price-and-volume features alone cannot separate them.
+
+Delivery is a **daily-resolution concept**; it is null at intraday resolutions rather than interpolated.
 
 Liquidity features have a second role beyond prediction: they gate tradeability. A signal on an instrument that trades ₹40 lakh a day is not actionable regardless of how confident the model is, and the shortlister uses these features to enforce that ([04-model-brain.md](04-model-brain.md)).
 
@@ -200,9 +217,11 @@ Features are the input; labels are what the model is trained to predict. They li
 | Adverse excursion | Worst drawdown experienced before the horizon closed — supports risk-aware evaluation |
 | Favorable excursion | Best gain available within the horizon |
 
-The last two matter more than they first appear. A prediction that was "correct" at the horizon but drew down 6% along the way is not the same as one that never went against the position, and evaluating only the endpoint hides that difference entirely.
+The last two matter more than they first appear. A prediction that was "correct" at the horizon but drew down 6% along the way is not the same as one that never went against the position, and evaluating only the endpoint hides that difference entirely. They are also what makes risk-aware evaluation possible downstream ([10-evaluation.md](10-evaluation.md)) — a strategy is not judged solely on where it ended.
 
-**The horizon is configurable, not hardcoded**, and it is recorded per prediction in the `predictions` table so that grading always compares like with like.
+**Horizon is a parameter of the label, not a property of the system.** It is expressed in bars at the row's declared resolution, and it is recorded on every prediction ([02-data-layer.md](02-data-layer.md)) so grading always compares like with like.
+
+A single model is trained against exactly one horizon. Multiple horizons mean multiple models, each with its own registry entry, each evaluated separately — never one model with a blurred target. Predictions made at different horizons are never pooled for calibration measurement, because a 3-bar forecast and a 30-bar forecast are different claims about the world.
 
 ## Recomputation and cost
 

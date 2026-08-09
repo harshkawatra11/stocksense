@@ -14,6 +14,17 @@ The governing principle:
 
 Every night produces a *candidate*. Every candidate must earn its place. Most should fail.
 
+### Division of ownership with `10-evaluation.md`
+
+These two documents are close relatives and their boundary must be exact, or criteria will drift apart in two places and quietly disagree.
+
+| Owns | Document |
+|---|---|
+| **What "better" means** — scorecard, hard gates, baselines, episodes, the simulator | [10-evaluation.md](10-evaluation.md) |
+| **The mechanism** — how candidates are trained, validated, promoted, versioned, and rolled back | This document |
+
+So: `10` decides the verdict; `06` describes the machinery that produces candidates and acts on verdicts. The validation techniques below (walk-forward, cost-awareness, calibration, drift, stress) are specified here because they are properties of *how retraining must work*; the thresholds and pass/fail authority sit with the evaluator.
+
 ---
 
 ## 1. Purged, embargoed walk-forward validation
@@ -135,7 +146,7 @@ Before promotion, candidates are replayed against a curated library of difficult
 
 Stress replays are evaluated as **loss-limitation, not profit-generation**. The question is not "did it make money in March 2020" — it is "did it fail gracefully, or did it produce confident nonsense?" A model that goes quiet and low-confidence during a crash is behaving correctly. A model that maintains 85% confidence through a collapse is dangerous and must not promote.
 
-Note the honest limitation: stress replays run at **daily resolution** for pre-2022 periods, because intraday history does not exist before January 2022 ([02-data-layer.md](02-data-layer.md)). Since v1 trains on daily features, this does not currently constrain the work.
+Note the honest limitation: stress replays run at **daily resolution** for pre-2022 periods, because intraday history does not exist before January 2022 ([02-data-layer.md](02-data-layer.md)). A daily-horizon model can therefore be stress-replayed against 2008 and COVID; an intraday-horizon model cannot, and its stress coverage is limited to post-2022 turbulence. The evaluator records which applies, so a model's crisis robustness is never claimed beyond the data that established it ([10-evaluation.md](10-evaluation.md)).
 
 ---
 
@@ -223,6 +234,8 @@ Requirements:
 
 Every criterion must pass. There is no weighted score and no partial credit — weighting invites a marginal candidate to compensate for a real regression with a cosmetic gain.
 
+The criteria are **owned and evaluated by [10-evaluation.md](10-evaluation.md)**; reproduced here as the mechanism's contract:
+
 ```
 PROMOTE the candidate only if ALL hold:
 
@@ -230,12 +243,16 @@ PROMOTE the candidate only if ALL hold:
   ☐  No regime shows regression beyond tolerance
   ☐  Calibration within tolerance and not worse than incumbent
   ☐  Walk-forward performance stable across windows
-  ☐  Stress replays show graceful degradation, not confident failure
+  ☐  Stress battery shows graceful degradation, not confident failure
+  ☐  Beats Baseline 8 (LightGBM-only ablation)
+  ☐  Statistically significant over enough independent observations
   ☐  Reproducibility manifest complete and valid
   ☐  Regime classifier confusion matrix within tolerance
 
 ANY failure  →  REJECT · keep incumbent · log the specific reason
 ```
+
+Passing this gate promotes a candidate to **shadow**, which is the first tread of the production staircase ([01-architecture.md](01-architecture.md)) — not to real capital, and not to the user.
 
 And the cultural point that makes all of it work:
 

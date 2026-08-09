@@ -24,15 +24,24 @@ It studies the market and its own mistakes every night, and hands the user a res
 | [07-control-room.md](docs/07-control-room.md) | Electron UI specification |
 | [08-operations.md](docs/08-operations.md) | Scheduling, secrets, logs, runbooks |
 | [09-open-questions.md](docs/09-open-questions.md) | Unresolved items with defaults and resolution criteria |
+| [10-evaluation.md](docs/10-evaluation.md) | The adversarial evaluation system — simulator, episodes, baselines, hard gates |
 
 ## The shape of it, briefly
 
 ```
-Upstox  →  ingest · validate · reconstruct trades
+Upstox + NSE archives + yfinance
+              ↓
+        ingest · reconcile · validate · reconstruct trades
               ↓
         grade predictions (Track A) · grade decisions (Track B)
               ↓
-        features · regimes · train candidates · walk-forward test
+        features · regimes · train candidates
+              ↓
+              ┌─────────────────────────┐
+              │  ADVERSARIAL EVALUATOR   │  tries to prove it wrong
+              │  simulator · episodes ·  │
+              │  baselines · hard gates  │
+              └─────────────────────────┘
               ↓
                   ┌──────────┐
                   │   GATE   │   promote only if it genuinely wins
@@ -43,8 +52,14 @@ Upstox  →  ingest · validate · reconstruct trades
                             →  Telegram
 ```
 
-Two learning tracks, kept strictly separate: the model learns from the market's outcomes; the user gets coached on their own decisions. Neither is allowed to contaminate the other.
+**Two learning tracks, kept strictly separate.** The model learns from the market's outcomes; the user gets coached on their own decisions. Neither is allowed to contaminate the other.
 
-## What it does not do (v1)
+**Nothing reaches real money without earning it:**
 
-No automated order execution — Upstox Algo Trading access exists but is gated off behind a measurable condition. No intraday latency trading. No cloud hosting. No second paid LLM account.
+```
+Backtest → Paper → Live shadow → Small capital → Scaled
+```
+
+## What it does not do
+
+No automated order execution — Upstox Algo Trading access exists but is gated off behind a measurable condition. No latency-competitive execution (intraday *horizons* are supported; racing to the exchange is not). No cloud hosting. No second paid LLM account.

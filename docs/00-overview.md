@@ -12,7 +12,9 @@ The one-sentence definition:
 
 ## What StockSense is not
 
-It is not an intraday latency bot. It does not compete on speed, does not react tick-by-tick, and does not attempt to win the race to the exchange. This is a deliberate scoping decision and it shapes every technology choice in this documentation set: a nightly batch cadence tolerates slow cloud inference, multi-minute model training, and hours of unattended investigation. A real-time system would tolerate none of those, and would demand infrastructure this project explicitly refuses to build.
+It is not a latency-competitive trading system. It does not race other participants to the exchange, and it never will — that is a different discipline requiring co-location and infrastructure this project explicitly refuses to build. The nightly batch cadence is what makes the rest possible: slow cloud inference, multi-minute training, hours of unattended investigation.
+
+**This is a statement about latency, not about horizon.** The system is horizon-agnostic by design ([03-feature-engineering.md](03-feature-engineering.md)) — features, labels, models, simulator, and evaluator all take horizon as a parameter. Daily-horizon models train across the full history back to 2000; intraday-horizon models train from 2022 forward, where intraday data begins. Both are first-class. What StockSense will not do is compete on execution speed.
 
 It is also not an alert app. An alert app tells you a stock crossed a threshold. StockSense tells you what it predicted, what actually happened, whether its reasoning held, what you did about it, and whether your decision was sound — and then changes itself based on the answer.
 
@@ -69,6 +71,26 @@ A useful consequence of keeping them separate is that the system can say things 
 
 That last one matters most. **Profitability and decision quality are not the same thing**, and a system that cannot tell them apart cannot coach.
 
+## The evaluation standard
+
+A learning claim that cannot be falsified is marketing. So the system is built alongside an **adversarial evaluator** whose job is to try to prove the brain wrong ([10-evaluation.md](10-evaluation.md)).
+
+The question it exists to answer is not *"does StockSense know finance?"* — any language model can produce competent-sounding market commentary. It is:
+
+> Placed into a historically accurate market, under the information constraints that actually existed at that moment and with realistic execution costs applied, does StockSense beat strong quantitative baselines — and does it stay good when the regime changes?
+
+The evaluator is a **peer system, not a subsection of the brain**. It owns the historical simulator, the episode library, the held-out eras, and the hard gates. The brain cannot read them. And its gates are vetoes rather than weights: a candidate with spectacular P&L and failing risk behavior does not deploy.
+
+The consequence for how anything reaches real money:
+
+```
+Quant Brain → Strategy → Backtester → Adversarial Validator
+                                              ↓
+              Production ← Risk Gate ← Live Shadow ← Paper Market
+```
+
+rather than `LLM → BUY → real money`.
+
 ## Single-user consequences
 
 The same person is the developer, the QA tester, and the trader. This is not a footnote — it changes the architecture in two opposite directions at once.
@@ -106,7 +128,7 @@ These are decisions, not omissions. Each is listed so a future reader does not m
 
 | Non-goal | Reason |
 |---|---|
-| Sub-second / intraday-latency trading | Different system, different infrastructure. Explicitly out of scope. |
+| Latency-competitive execution | Racing to the exchange is a different discipline with different infrastructure. Intraday *horizons* are supported; intraday *speed competition* is not. |
 | Automated order execution | Upstox Algo Trading access exists and is **gated off by default**. v1 produces recommendations; the user decides. See [02-data-layer.md](02-data-layer.md) for the concrete condition that would enable it. |
 | Deep learning / transformers / reinforcement learning | Data volume favors gradient-boosted trees; RL is hard to validate safely and hard to debug alone at 6am. See [04-model-brain.md](04-model-brain.md). |
 | Cloud hosting / always-on server | Everything runs on the user's machine. No VPS, no hosting bill, no remote ops burden. |
@@ -135,3 +157,4 @@ Three things reach the network every night: the Upstox API (market and account d
 | [07-control-room.md](07-control-room.md) | Electron UI specification |
 | [08-operations.md](08-operations.md) | Scheduling, secrets, logs, runbooks |
 | [09-open-questions.md](09-open-questions.md) | Unresolved items with defaults and resolution criteria |
+| [10-evaluation.md](10-evaluation.md) | The adversarial evaluation system — simulator, episodes, baselines, hard gates |

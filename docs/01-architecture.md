@@ -30,8 +30,8 @@
         ▼                ▼           ▼               ▼              ▼
    ┌─────────┐    ┌───────────┐ ┌──────────┐  ┌───────────┐  ┌──────────┐
    │ UPSTOX  │    │  OLLAMA    │ │  CLAUDE   │  │ TELEGRAM  │  │  NEWS     │
-   │ API     │    │  CLOUD     │ │  CODE CLI │  │ BOT API   │  │  SOURCES  │
-   │         │    │            │ │           │  │           │  │           │
+   │ NSE ARCH│    │  CLOUD     │ │  CODE CLI │  │ BOT API   │  │  SOURCES  │
+   │ YFINANCE│    │            │ │           │  │           │  │           │
    │ data +  │    │ Layer 2    │ │ Layer 3   │  │ delivery  │  │ RSS/feeds │
    │ account │    │ investigate│ │ synthesize│  │           │  │           │
    └─────────┘    └───────────┘ └──────────┘  └───────────┘  └──────────┘
@@ -87,15 +87,16 @@ Each component below has one job, a defined input, and a defined output. Nothing
 
 | Component | Reads | Writes | Job |
 |---|---|---|---|
-| **Ingestion** | Upstox API | raw candles, F&O snapshots, order fills | The only component permitted to call Upstox. Fetch, normalize, append. |
-| **Validation** | raw ingested data | validation report, quarantine flags | Detect missing candles, stale/renamed/delisted symbols, unapplied corporate actions. |
+| **Ingestion** | Upstox API, NSE archives, yfinance | raw candles, F&O snapshots, delivery data, order fills | The only component permitted to call external data sources. Fetch, normalize, reconcile across sources, record provenance. |
+| **Validation** | raw ingested data | validation report, quarantine flags | Detect missing candles, stale/renamed/delisted symbols, unapplied corporate actions, cross-source disagreement. |
 | **Feature Engine** | candles, F&O, index data | versioned feature rows | Turn raw market data into the numeric rows models train on. |
 | **Trade Reconstruction** | order fills | trade ledger | Group raw fills into whole trades with scale-ins, scale-outs, re-entries. |
 | **Regime Labeling** | candles, volatility measures | regime labels | Assign trending / sideways / high-volatility per stock per day. |
 | **Prediction Grader** | predictions log, actual outcomes | graded predictions | Track A. Score yesterday's predictions on direction, magnitude, timing, calibration. |
 | **Decision Grader** | trade ledger, predictions log | decision grades | Track B. Score the user's entries and exits. Never touches training data. |
 | **Trainer** | feature rows, regime labels, graded outcomes | candidate models | Fit the regime classifier and per-regime specialists. |
-| **Gate** | candidate models, live model, backtest results | model registry, promotion decision | The only writer to the registry. Promote or reject, always with a logged reason. |
+| **Evaluator** | candidate models, held-out history, episode library | scorecard, gate verdicts | **Adversarial peer system.** Owns the simulator, episodes, baselines, and hard gates. Tries to falsify the brain ([10-evaluation.md](10-evaluation.md)). |
+| **Gate** | evaluator verdicts, live model | model registry, promotion decision | The only writer to the registry. Executes the promote/reject decision the evaluator's verdicts determine. |
 | **Shortlister** | live model, today's features | candidate shortlist | Run inference, rank, cut to the budget the Investigator can afford. |
 | **Investigator** | shortlist, news, F&O, trade history | structured verdicts | Layer 2. Calls Ollama Cloud. |
 | **Synthesizer** | shortlist + verdicts + grades | brief text | Layer 3. Calls Claude Code CLI. |
@@ -107,7 +108,9 @@ Layers 1–3 (Trainer/Shortlister, Investigator, Synthesizer) are specified in d
 ## Data flow
 
 ```
-UPSTOX ──► Ingestion ──► Validation ──► DuckDB store
+UPSTOX ──┐
+NSE ARCH ─┼─► Ingestion ──► Reconcile ──► Validation ──► DuckDB store
+YFINANCE ─┘
                                             │
               ┌─────────────────────────────┼─────────────────────────────┐
               ▼                             ▼                             ▼
@@ -125,7 +128,9 @@ UPSTOX ──► Ingestion ──► Validation ──► DuckDB store
                              ▼
                           Trainer
                              ▼
-                    Walk-forward backtest
+                     EVALUATOR (peer system)
+                     simulator · episodes ·
+                     baselines · hard gates
                              ▼
                           GATE ──► model registry
                              ▼
@@ -147,6 +152,8 @@ The application requires network access at four points. None of them are optiona
 | Dependency | Used for | When | On failure |
 |---|---|---|---|
 | **Upstox API** | Candles, F&O, account fills | Every night, step 1 | **Hard fail.** No data means no valid night. Abort the run, mark the cycle failed, surface in Control Room, retry per backoff policy. Never proceed on partial data. |
+| **NSE archives** | Delivery data, corporate actions, universe | Every night, step 1 | **Degrade.** Delivery features become null for the affected date rather than fabricated; the gap is recorded and backfilled on a later run. |
+| **yfinance** | Cross-source reconciliation | Every night, step 1 | **Degrade.** Reconciliation proceeds with fewer voices; affected fields are flagged as single-sourced. |
 | **Ollama Cloud** | Layer 2 investigation | Every night, step 12 | **Degrade.** Investigation is enrichment, not correctness. On quota exhaustion or outage, emit `inconclusive` verdicts for uninvestigated candidates, mark them clearly, and continue. The brief still ships, flagged as un-investigated. |
 | **Claude Code CLI** | Layer 3 synthesis | Every night, step 13 | **Degrade.** Fall back to a templated, non-LLM brief built directly from model output and verdicts. Less readable, still correct and still delivered. |
 | **Telegram Bot API** | Delivery | Every night, step 14 | **Degrade + retain.** Retry with backoff. If it still fails, the brief is stored and shown in the Control Room on next launch, marked undelivered. |
@@ -159,6 +166,55 @@ The rule behind this table: **the pipeline hard-fails only where proceeding woul
 If the laptop is asleep, powered off, or behind a captive portal when the schedule fires, that night's cycle does not run. There is no cloud fallback in v1; this is an accepted limitation of choosing a desktop architecture.
 
 The requirement is detection, not prevention. On next launch, the app compares the last successful job-run record against the expected schedule, and if a cycle was missed it says so prominently in the Control Room and offers a catch-up run. What must not happen is the app opening as if nothing were wrong while the user acts on a three-day-old brief.
+
+## The evaluator is a peer system
+
+The Evaluator is not a stage inside the brain. It is a **separate subsystem with its own data access path**, and the separation is structural rather than conventional.
+
+```
+┌──────────────────┐                    ┌──────────────────────┐
+│   QUANT BRAIN     │   proposes ─────►  │      EVALUATOR        │
+│                   │                    │                        │
+│  features         │  ◄──── falsifies   │  simulator             │
+│  regimes          │                    │  episode library       │
+│  training         │                    │  baselines             │
+│  inference        │                    │  hard gates            │
+│                   │                    │                        │
+│  CANNOT read      │                    │  OWNS held-out eras    │
+│  held-out data    │                    │  and ground truth      │
+└──────────────────┘                    └──────────────────────┘
+                            │
+                            ▼
+                     ┌─────────────┐
+                     │    GATE      │  executes the verdict
+                     └─────────────┘
+```
+
+Three rules give the separation teeth:
+
+**The evaluator owns ground truth.** Held-out eras, the episode library, and the final-validation set belong to the evaluator. The brain's training code has no read path to them. This is enforced by module boundaries, not by discipline.
+
+**No shared scoring code.** If the brain and the evaluator computed returns through the same function, a bug there would be invisible to both. Independent implementations mean a disagreement surfaces rather than cancels.
+
+**The evaluator can veto.** Its hard gates are not inputs to a weighted score — any one failing blocks promotion regardless of headline performance ([10-evaluation.md](10-evaluation.md)).
+
+### The production staircase
+
+Promotion is a sequence of checkpoints, each able to send a candidate backward:
+
+```
+Quant Brain → Strategy → Backtester → Adversarial Validator
+                                              ↓
+              Production ← Risk Gate ← Live Shadow ← Paper Market
+```
+
+The naive path this replaces, and exists to prevent:
+
+```
+LLM → BUY → real money
+```
+
+The **gap between consecutive stages is the primary diagnostic**. A candidate showing Sharpe 2.1 in backtest, 1.4 on paper, and 0.6 in shadow has not been unlucky — it has met reality, and the shape of the decay says where the backtest was optimistic.
 
 ## Interface boundary: one control surface
 

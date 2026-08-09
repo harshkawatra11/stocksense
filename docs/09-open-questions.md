@@ -14,23 +14,27 @@ Anything resolved is moved to the "Closed" section at the bottom with the eviden
 
 **What is not known.** The real number of candidates reachable per night at the intended prompt size, and how it varies across the session-reset cycle.
 
+**Direction settled.** The user has confirmed the **free tier is acceptable** and is not to be treated as a blocker. This is no longer a question about whether to pay; it is a measurement task.
+
 **Recommended default.** Begin at **5 candidates per night**, deliberately conservative. Record actual consumption and duration per candidate. Let the adaptive budget ([04-model-brain.md](04-model-brain.md)) size subsequent nights from measured history rather than the guess.
 
 **Resolution criterion.** Ten completed nights of recorded throughput. At that point the observed ceiling becomes a documented number and the conservative default is replaced.
 
-**If it resolves badly** — if even five candidates cannot complete reliably — the documented escalation order is: shrink the prompt, then use a smaller cloud model, then reduce to three candidates. Upgrading to a paid tier breaks a stated non-goal ([00-overview.md](00-overview.md)) and must be a deliberate decision recorded here, not a quiet drift.
+**If throughput proves tight** — the escalation order is: shrink the prompt, then use a smaller cloud model, then reduce the shortlist. Upgrading to a paid tier breaks a stated non-goal ([00-overview.md](00-overview.md)) and would need to be a deliberate, recorded decision rather than a quiet drift.
 
 ---
 
 ## OQ-2 — Pre-2022 intraday history
 
-**Question.** Does the absence of intraday data before January 2022 constrain the system?
+**Question.** How should the absence of intraday data before January 2022 be handled now that the system is horizon-agnostic?
 
-**What is known.** Upstox V3 provides daily and above from January 2000, minutes and hours from January 2022 ([02-data-layer.md](02-data-layer.md)). Stress replays covering 2008 and the COVID crash therefore run at daily resolution only ([06-retraining-rigor.md](06-retraining-rigor.md)).
+**What is known.** Upstox V3 provides daily and above from January 2000, minutes and hours from January 2022 ([02-data-layer.md](02-data-layer.md)). Since horizon is now a parameter rather than a fixed property, both daily and intraday models are first-class — but they have very different historical depth available to them.
 
-**Recommended default.** **Accept the limitation.** v1 trains on daily-resolution features and predicts over a daily-scale horizon, so the gap does not currently bind. Document it rather than working around it.
+**Recommended default.** **Asymmetric confidence, not asymmetric capability.** Build both; claim differently. A daily-horizon model can be stress-replayed against 2008 and COVID and may carry crisis-robustness claims. An intraday-horizon model cannot, and its evaluation reports must say so via the fidelity tier ([10-evaluation.md](10-evaluation.md)).
 
-**Resolution criterion.** Revisit only if the prediction horizon moves to intraday scale. At that point the question becomes whether a paid historical vendor is worth it — a decision with cost implications that should not be made preemptively.
+The practical consequence: **daily-horizon models are the ones that graduate to real capital first**, because they are the only ones the evaluator can test against genuine crisis regimes.
+
+**Resolution criterion.** Revisit if intraday-horizon models demonstrate sustained edge and the missing crisis coverage becomes the binding constraint on promoting them. At that point the question is whether a paid historical vendor is worth it — a cost decision that should not be made preemptively.
 
 ---
 
@@ -50,17 +54,17 @@ Anything resolved is moved to the "Closed" section at the bottom with the eviden
 
 ---
 
-## OQ-4 — Prediction horizon
+## OQ-4 — Which horizons carry edge
 
-**Question.** What forward horizon should the models actually predict?
+**Question.** Which of the supported horizons actually carry a tradeable edge?
 
-**What is known.** The horizon is configurable and recorded per prediction, so grading always compares like with like ([03-feature-engineering.md](03-feature-engineering.md)). Changing it breaks comparability across models ([08-operations.md](08-operations.md)).
+**What is settled.** Horizon is a **parameter**, not an architectural choice ([03-feature-engineering.md](03-feature-engineering.md)). The system supports many; each model declares one; each is evaluated separately. This is no longer a decision to make once — it is a search over a space.
 
-**What is not known.** Which horizon carries genuine edge. Too short and costs dominate the signal; too long and it stops being actionable for the user's style.
+**What is not known.** Where the edge actually lives. Too short and costs dominate the signal; too long and it stops matching how the user trades.
 
-**Recommended default.** Start with a **1-to-5-day horizon**, which matches the nightly cadence — a prediction made tonight should be resolvable within the working week.
+**Recommended default.** Begin the search at **1–5 bars at daily resolution**, matching the nightly cadence — a prediction made tonight resolves within the working week. Expand the search once the evaluation harness exists to compare horizons fairly.
 
-**Resolution criterion.** Compare net-of-cost edge across candidate horizons during initial backtesting, before the first live model is promoted. Pick on evidence, then leave it alone.
+**Resolution criterion.** Run the horizon sweep as a first-class evaluation ([10-evaluation.md](10-evaluation.md)): identical features, identical cost model, net-of-cost edge and calibration compared across horizons. This is a permanent capability, not a one-time answer — the horizon that carries edge may itself change with regime.
 
 ---
 
@@ -117,6 +121,54 @@ Anything resolved is moved to the "Closed" section at the bottom with the eviden
 **Recommended default.** **20 trading sessions**, roughly one month — long enough to accumulate meaningful graded predictions, short enough that improvements reach the user within a reasonable window.
 
 **Resolution criterion.** After several models have completed shadow trials, check whether shadow performance predicted live performance. If it did not, the trial is too short or measuring the wrong thing.
+
+---
+
+## OQ-9 — Cross-source reconciliation tolerance
+
+**Question.** How far can Upstox, NSE archives, and yfinance disagree before a field is quarantined?
+
+**What is known.** Precedence is settled ([02-data-layer.md](02-data-layer.md)): NSE archives are authoritative for delivery and corporate actions, Upstox for OHLCV and F&O, yfinance never overrides either. Provenance is recorded per field. Disagreement beyond tolerance quarantines rather than silently picking a winner.
+
+**What is not known.** The tolerance. Too tight and every night drowns in false quarantines from rounding and timing differences; too loose and genuine corruption — an unapplied split, a symbol collision — passes through as data.
+
+**Recommended default.** Start **tight and noisy**: a small relative tolerance on prices, exact match on volumes and delivery. Log every disagreement without acting on it for the first weeks, then set the threshold from the observed distribution of real disagreements.
+
+**Resolution criterion.** One month of logged reconciliation results. The tolerance is placed above the noise floor and below the smallest disagreement that turned out to be a real error.
+
+**Note.** The disagreement log is worth keeping permanently. A source that develops a systematic bias will show up there long before it shows up in model performance.
+
+---
+
+## OQ-10 — Episode library composition
+
+**Question.** How many episodes, and in what mix?
+
+**What is known.** Episodes are frozen information snapshots with revealed outcomes, spanning eight classes from open-ended to trap setups ([10-evaluation.md](10-evaluation.md)). Trap episodes are deliberately over-represented relative to natural frequency, because a randomly sampled library is dominated by unremarkable days that do not discriminate between a good brain and a mediocre one.
+
+**What is not known.** Total size, per-class proportions, and how much over-representation of hard cases is useful before the library stops resembling the market at all.
+
+**Recommended default.** Build **breadth before volume** — every class populated across every era, a few hundred episodes total, before scaling any single class into the thousands. A large library that is 90% ordinary days is a slow way to learn nothing.
+
+**Resolution criterion.** Measure discriminative power: an episode class where every candidate model scores identically is not testing anything and should be re-weighted or replaced.
+
+---
+
+## OQ-11 — Guarding against evaluator overfitting
+
+**Question.** How is the holdout protected from being consumed by repeated tuning?
+
+**What is known.** This is the deepest risk in the whole evaluation design ([10-evaluation.md](10-evaluation.md)). Every time a model is tuned and re-tested against the same holdout, some of that holdout leaks into the design process — not through code, but through the researcher's decisions. Enough iterations and the evaluation becomes a training set with extra steps.
+
+**Mitigations already specified.** A locked final-validation era used once per major version; evaluation-attempt counting with results discounted as the count rises; rotating episode subsets; and the paper/shadow stages as an external check on data that did not exist when the model was built.
+
+**What is not known.** How many attempts against one holdout is too many, and how steeply results should be discounted as the count climbs.
+
+**Recommended default.** Surface the attempt count prominently in the Control Room ([07-control-room.md](07-control-room.md)) and treat **any holdout with more than a few dozen attempts as compromised** — retire it and cut a fresh one from unused history.
+
+**Resolution criterion.** Compare holdout performance against subsequent paper/shadow performance across several models. A widening gap that correlates with attempt count is direct evidence of holdout decay, and it sets the real threshold.
+
+**Standing note.** This is the one open question that never fully closes. It is a discipline to be maintained, not a problem to be solved once.
 
 ---
 

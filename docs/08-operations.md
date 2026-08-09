@@ -104,10 +104,13 @@ There is no cloud component, which means there is no backup unless the user make
 | Asset | Rebuildable? | Priority |
 |---|---|---|
 | `stocksense.duckdb` | No — contains trade ledger, predictions, registry, heartbeat | **Critical** |
+| Episode library + holdout definitions | No — attempt history and locked eras cannot be reconstructed | **Critical** |
 | `parquet/` | Yes, by re-running backfill (slow, rate-limited) | High |
 | `models/` | Only if the manifest and data survive | High |
 | `briefs/` | No | Medium |
 | `config.json` | Trivially | Low |
+
+The episode library ranks alongside the database for a non-obvious reason: rebuilding the *episodes* is mechanical, but the **record of how many times each holdout has been tested** is not. Lose that and every subsequent evaluation silently loses its overfitting guard (OQ-11).
 
 The trade ledger and predictions log are irreplaceable — they are the accumulated record the entire learning claim rests on. A recommended practice is a periodic copy of the data directory to external or synced storage, taken while the app is closed so the DuckDB file is not mid-write.
 
@@ -136,11 +139,32 @@ Open the Data screen's validation results. Common causes: a corporate action not
 
 If the universe is stale, refresh it. If the corporate action is missing, ingest it and re-run validation. Quarantine is not an error state to dismiss — it is the system declining to train on data it cannot vouch for.
 
+### Cross-source disagreement quarantined a field
+
+Open the Data screen's validation results and check which sources disagreed and by how much ([02-data-layer.md](02-data-layer.md)).
+
+Usual causes, in order: an unapplied corporate action (the most common by far — one source has adjusted, another has not), a symbol collision after a rename, a stale universe entry, or yfinance data quality on a thinly traded name.
+
+Resolve the underlying cause and re-run validation. Do **not** widen the tolerance to make the warning go away — the tolerance is calibrated against logged history (OQ-9), and loosening it to silence a real discrepancy is how corrupt data enters the store.
+
 ### The gate rejected again
 
 **This is normal.** Per [06-retraining-rigor.md](06-retraining-rigor.md), rejection is the expected outcome and a gate that rarely rejects has stopped gating.
 
 Read the recorded reason on the Models screen. A rejection citing a specific regime regression or calibration drift is the system working. Investigate only if rejections change character — for instance, if every candidate suddenly fails on a metric that used to pass, which points at data rather than at the model.
+
+### The evaluation scorecard looks too good
+
+Treat this as a symptom, not a result. In backtesting, spectacular numbers are far more often a bug than an edge.
+
+Check in this order:
+
+1. **Fidelity tier** — did the edge appear only at T3 (modeled microstructure)? If it cannot be seen at T1 or T2, it is a property of the slippage model, not the market ([10-evaluation.md](10-evaluation.md)).
+2. **Leakage** — run the point-in-time correctness tests. Lookahead is the single most common cause of beautiful results.
+3. **Baseline 8** — does it beat LightGBM-only by an implausible margin? A large gap attributable to the LLM layers deserves suspicion before celebration.
+4. **Attempt count** — how many candidates have been tested against this holdout? A high count means the result is partly fitted to the evaluator (OQ-11).
+5. **Universe** — is the test running on today's instrument list rather than a point-in-time reconstruction? That is survivorship bias, and it flatters everything.
+6. **Costs** — confirm the full stack was applied, not just brokerage.
 
 ### Predictions look wrong
 
