@@ -1,0 +1,18 @@
+# data (regenerable via research/backfill.py)
+data_store/
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# secrets
+.env
+*.env.local
+
+# OS
+.DS_Store
+Thumbs.db
