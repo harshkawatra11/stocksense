@@ -3,7 +3,7 @@
 **Date:** 2026-08-09 (written three times in one session — see revision history below)
 **Question:** does any (horizon × selectivity × cost) configuration produce net-positive, fold-stable, out-of-sample alpha on the Phase 0 universe?
 
-## Verdict: **GO. Proceed to Phase 1.** The monthly-horizon signal is real, survives a genuine data-quality correction, is cost-robust with a wide margin, and passes both the best-trade-removal and parameter-perturbation stress tests.
+## Verdict: **GO on architecture and cadence. Alpha magnitude not yet trustworthy — survivorship bias measured directly and found large (82% of historically prominent names excluded, concentrated in real failure cases).** The monthly-horizon signal is real, survives a genuine data-quality correction, and passes best-trade-removal and parameter-perturbation stress tests — but on a universe now proven to be missing exactly the outcomes that would test it hardest. See "Survivorship bias: measured, not estimated" below.
 
 This document has three revisions, each triggered by acting on the previous one's own stated next step rather than stopping at a comfortable answer:
 
@@ -112,11 +112,32 @@ Nine of eleven folds are individually positive, spanning a 26-year sample that n
 - **top_n=100 sanity check still behaves correctly** — turnover and alpha both collapse toward zero when top_n exceeds the universe size, confirming the harness has not changed behavior in a way that would fabricate an edge.
 - **The universe is still 98 hand-picked, currently-liquid, currently-listed symbols.** This is unchanged from Run 1 and is not fixed by adding more history — it is fixed by point-in-time universe reconstruction, which is separate work.
 
+## Survivorship bias: measured, not estimated (Run 3, continued)
+
+The item above was written as a general concern. It no longer is one — it has been measured directly against real NSE historical bhavcopy archives (`research/survivorship_check.py`), which turned out to be directly reachable (`archives.nseindia.com`, both the daily historical bhavcopy zip files and the current listing registry).
+
+**Method:** pulled full-market daily bhavcopy at 7 historical checkpoints spanning 2001–2024, took the top-150 most-traded EQ symbols by turnover at each checkpoint, and compared the union against the Phase 0 universe. Then split the gap using the current NSE listing registry: names absent from today's listing are genuinely delisted/merged; names present but simply not in the hand-picked 98 are a curation gap, not survivorship bias.
+
+**Result — the gap is large and specifically the dangerous kind:**
+
+| | Count |
+|---|---|
+| Union of historically-top-150 names across 7 checkpoints | 526 |
+| Not in the 98-symbol Phase 0 universe | 432 (82%) |
+| — of which genuinely delisted/merged (real survivorship bias) | **238** |
+| — of which still listed today, just not hand-picked (curation gap) | 194 |
+
+The 238 genuinely-delisted names are not a random sample of history — they are disproportionately **failure stories**: DHFL (fraud/default), EDUCOMP (accounting fraud, effectively zero), BHUSANSTL (insolvency), AMTEKAUTO (default), COX&KINGS (fraud/bankruptcy), EVERONN (fraud), FRETAIL (bankruptcy), ALOKTEXT (bankruptcy), plus a cluster of PSU banks absorbed in consolidation (ALBK, ANDHRABANK, CORPBANK, DENABANK, BANKMADURA, BANKPUNJAB). A genuine point-in-time backtest would have had to hold, or correctly avoid, every one of these at the time — a materially harder test than anything Run 1–3 actually ran. Some names in the list are symbol renames rather than failures (e.g. CADBURY/CASTROL/COLGATE-era tickers later renamed) — this coarse method cannot distinguish the two perfectly, which is itself a reason the number should be read as directionally right rather than exact.
+
+**This changes the read on the result, not the engineering.** The pipeline, gate, and stress-testing discipline all worked correctly and caught a real bug earlier in this same session (see above) — that stands. What does not yet stand is treating +0.49% mean alpha / 117bps breakeven as a number a true point-in-time universe would reproduce. It is now the **primary named blocker**, promoted from "largest remaining caveat" to "the next thing that must happen before paper trading," specifically because the measurement above shows the missing names are concentrated in exactly the outcomes survivorship bias is defined to hide.
+
+**What this does not yet include:** a full point-in-time backtest, which requires ingesting the complete daily bhavcopy archive (roughly 6,500 files across 26 years, now confirmed feasible to pull) rather than 7 sparse checkpoints, and building genuine date-indexed universe membership from it. That is the literal next research task, now unblocked and scoped rather than hypothetical.
+
 ## What is still not proven
 
 Being direct about the remaining gap between this result and something investable:
 
-1. **Survivorship bias.** All 98 symbols (now 94 after quarantine) are today's liquid large/mid-caps. The sample says nothing about names that delisted, went illiquid, or fell out of the index over 26 years — and those are disproportionately likely to have been the *bad* outcomes, meaning realized results on the true point-in-time universe are plausibly weaker than this. This is the single largest remaining source of overstatement and the next thing to fix, per `docs/02-data-layer.md`'s point-in-time obligation.
+1. **Survivorship bias — now quantified above, not merely flagged.** The single largest remaining source of overstatement, per `docs/02-data-layer.md`'s point-in-time obligation, and now the primary blocker on this list rather than one item among several.
 2. **Slippage is modeled, not replayed.** No order-book fidelity exists in this environment. 117bps of headroom (top_n=20, clean data) is large enough to absorb a materially wrong slippage assumption, but "large enough to absorb being wrong" is not the same as "verified."
 3. **11 folds is a large improvement over 7, not a large number in absolute terms.** The per-fold table above is the actual evidence, and readers should look at it rather than trust the summary statistic alone.
 4. **Two of five planned ablations have been run** (best-trade removal, parameter perturbation) — both pass. Monte Carlo path-reshuffling was run but its terminal-return statistic turned out to be uninformative by construction (cumulative product is order-invariant; only drawdown varies with path order, and that part of the analysis needs redoing on clean data). Latency injection, worst-trade removal, and universe perturbation from `docs/10-evaluation.md` §10 remain outstanding.
@@ -125,6 +146,10 @@ Being direct about the remaining gap between this result and something investabl
 
 ## Decision
 
-**GO.** Proceed to Phase 1: nightly pipeline, model registry, gate, evaluator formalization — built around a **monthly rebalance horizon (h≈20 trading bars)**, not the daily cadence originally implied by v1's design. This is now the headline architectural consequence of Phase 0: StockSense is a monthly-rebalance quant system, not a daily one, because that is where the evidence says the edge actually survives costs.
+**GO on architecture, engineering, and cadence. NOT YET on the specific alpha numbers.** These are two different claims and this document has been sloppy about keeping them apart until this revision.
 
-The corrected, authoritative figures are Run 3's: **mean net alpha +0.49%/rebalance, 9/11 folds positive, break-even cost 117bps (top_n=20) against a realistic 32bps cost, gate PASS.** Before any capital, real or paper, touches this signal: point-in-time universe reconstruction (item 1) and the remaining stress battery items (item 4) are the specific, named prerequisites — not vague future work, but the literal next research tasks. That a real data bug was found and fixed mid-session, and the verdict survived it, is itself evidence the finding is not merely an artifact of not having looked hard enough yet — though items 1, 4, and 6 mean it is not yet proof against every way of looking harder.
+**Architecture: GO.** Proceed to Phase 1 build-out — nightly pipeline, model registry, gate, evaluator formalization — built around a **monthly rebalance horizon (h≈20 trading bars)**, not the daily cadence originally implied by v1's design. The pipeline, the gate mechanism, and the stress-testing discipline all demonstrably work: they were exercised on real data, found a real data-quality bug mid-session, and the process for handling that (fix, re-measure, report honestly) is itself the validated output of this phase. That does not depend on the survivorship finding below.
+
+**Alpha magnitude: not yet trustworthy.** The corrected Run 3 figures — mean net alpha +0.49%/rebalance, 9/11 folds positive, break-even cost 117bps against a realistic 32bps cost — were the authoritative numbers *until* the survivorship measurement above, which shows the 98-symbol universe systematically excludes 238 names concentrated in real failure outcomes (DHFL, EDUCOMP, BHUSANSTL, and similar). The direction of the bias is unambiguous — a point-in-time universe would perform worse than this — the magnitude is not yet known. It could still clear costs. It could not. That is now the specific, scoped, unblocked next research task: full daily bhavcopy ingestion (confirmed feasible, ~6,500 files) and a re-run of this exact sweep against genuine point-in-time universe membership.
+
+**No capital, real or paper, until that re-run happens.** This is not a new caution added for form — it is the direct, load-bearing consequence of a measurement made in this same session.
