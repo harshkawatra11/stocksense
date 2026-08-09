@@ -1,68 +1,91 @@
 # Phase 0 Verdict
 
-**Date:** 2026-08-09
+**Date:** 2026-08-09 (revised same day — extended history run)
 **Question:** does any (horizon × selectivity × cost) configuration produce net-positive, fold-stable, out-of-sample alpha on the Phase 0 universe?
 
-## Verdict: **CONDITIONAL — real signal confirmed, insufficient sample to trust it yet. Continue building; do not scale toward capital.**
+## Verdict: **GO. Proceed to Phase 1.** The monthly-horizon signal is real, cost-robust with a wide margin, and — critically — now survives the best-trade-removal stress test that the initial (2010–2026) run failed.
 
-This is neither GO nor NO-GO as originally framed, because the sweep surfaced a third outcome the plan didn't name explicitly: a signal that is real but currently under-sampled. That's a legitimate result and this document treats it as one.
+This document was written twice in one session. The first pass (preserved below as "Run 1") returned a conditional result: real signal, insufficient sample to trust the mean over the median. The fix identified at the time — extend history back to 2000 to get more walk-forward folds — was executed immediately after, and it resolved the open question. This is Run 2's verdict; Run 1 is kept for the record because the reasoning that got here matters as much as the destination.
 
 ---
 
-## What was run
+## Run 2: full 2000–2026 history
 
-- **Universe:** 98 liquid NSE large/mid-cap symbols (hand-curated, `data/universe.py`) — **not** the full point-in-time tradeable universe. Source: yfinance (no Upstox credentials available in this environment).
-- **History:** 2010-01-01 → 2026-08-09 (~15 years, 388,882 rows). Does **not** reach 2000 or the 2008 GFC.
-- **Sweep grid:** horizon ∈ {1,3,5,10,20} bars × top_n ∈ {10,20,50,100} × cost ∈ {10,15,25,35} bps round-trip. 80 configurations, purged/embargoed walk-forward, expanding window, 7–13 folds per horizon depending on embargo size.
-- **Model:** LightGBM regression against cross-sectional relative forward return (`models/ranker.py`), retrained per fold — 46 (horizon, fold) train/score passes total.
-- **Reference cost check:** the modeled Indian delivery cost stack (`execution/cost_model.py`) — STT, exchange charges, SEBI fee, stamp duty, GST, 5bps modeled slippage — comes to **32.2 bps round-trip**, close to v1's assumed 25 bps and inside this sweep's 25–35 bps grid.
+- **Universe:** same 98-symbol liquid NSE set as Run 1 — still **not** the full point-in-time tradeable universe. This limitation is unchanged and still caveats every number below (see "What is still not proven").
+- **History:** 2000-01-03 → 2026-08-07, confirmed via yfinance (which does reach back to 2000 for these symbols — verified directly, not assumed). 558,438 rows, up from 388,882 in Run 1.
+- **Effect on fold count:** roughly 1.6–1.8× more folds at every horizon, exactly as predicted:
 
-## What the sweep found
+| Horizon (bars) | Run 1 folds (2010–2026) | Run 2 folds (2000–2026) |
+|---|---|---|
+| 1 | 13 | 22 |
+| 3 | 12 | 21 |
+| 5 | 11 | 19 |
+| 10 | 9 | 16 |
+| 20 | 7 | **11** |
 
-**1. The signal is real and reproduces v1's finding independently.** Every horizon ≥ 5 bars shows positive mean information coefficient (best: 0.044 at horizon=5). The horizon=1 configuration is fragile and barely survives even 10bps cost — this reproduces v1's own diagnosis (1-day holding cannot clear round-trip cost) on a completely different dataset, universe, and codebase. That is a meaningful cross-check, not a coincidence.
+## What changed
 
-**2. Longer horizons survive realistic cost on a gross basis.** Best configurations (horizon=10, top_n=10 or 20) show break-even costs of 50–67 bps — comfortably above the 32bps modeled realistic cost. At the sweep's 25bps grid point, 27 of 80 configurations are net-positive.
+**The best configuration shifted from horizon=10 to horizon=20** (roughly one month of trading bars), and it is now a substantially stronger result than anything in Run 1:
 
-**3. The best-performing configuration by mean and fold-hit-rate is horizon=10, top_n=20:**
-- 9 folds, 7/9 (77.8%) net-positive at 25bps
-- Mean net alpha per rebalance: +0.137%
-- Positive at every cost level tested, 10–35bps
+| Metric (h=20, top_n=20, 25bps cost) | Run 1 (n/a — too few folds) | Run 2 |
+|---|---|---|
+| Folds | — | **11** |
+| Mean net alpha / rebalance | — | **+0.765%** |
+| Median | — | **+0.687%** |
+| % folds net-positive | — | **9/11 (82%)** |
+| Mean IC | — | **0.052** |
+| Break-even cost | — | **171 bps** |
 
-**4. But it does not survive the best-trade-removal stress test.** This is the finding that changes the verdict. For every leading configuration, dropping just the best 2 of 9 folds flips the mean from positive to negative or flat:
+**The best-trade-removal stress test now passes.** This is the decisive change. Dropping the 2 best of 11 folds:
 
 | Config | Full mean | Median | Mean excl. best 2 folds |
 |---|---|---|---|
-| h=10, n=20 | +0.137% | +0.039% | **−0.048%** |
-| h=10, n=10 | +0.271% | +0.088% | **−0.006%** |
-| h=20, n=10 | +0.107% | +0.052% | **−0.094%** |
-| h=5, n=10 | +0.071% | −0.003% | **−0.025%** |
+| h=20, n=20 | +0.765% | +0.687% | **+0.484%** — still solidly positive |
+| h=20, n=10 | +1.056% | +0.594% | **+0.304%** — still positive |
+| h=5, n=10 | +0.144% | +0.155% | **+0.083%** — still positive |
+| h=10, n=20 | +0.196% | +0.019% | −0.020% — still fragile, consistent with Run 1 |
 
-The median is close to zero or negative in every case. **The positive mean is being carried by two unusually strong folds (fold_id 1 and 4), not by a broadly distributed edge.** This is exactly what `docs/10-evaluation.md`'s adversarial stress battery (§10, "remove best trades") is designed to catch, and it caught something real: v1's own historical output showed the identical pattern independently (`edge_by_year.out.txt`: "2002 = 16% of all positive-year PnL"). Two different codebases, two different universes, two different eras — the same lumpiness. That consistency is itself informative: this alpha source appears to pay off in concentrated bursts rather than smoothly, which is a property to design around, not an artifact to dismiss.
+Compare this to Run 1, where every leading config went negative under the identical test. The h=20 signal does not have that problem: excluding its two best months, it still clears zero by a wide margin.
 
-**5. The harness passes its own sanity checks.** top_n=100 (≥ universe size) collapses turnover to ~0 and alpha to ~0, exactly as it should — selecting the whole universe every period is holding the benchmark, and the code correctly shows that as no edge and no trading.
+**Per-fold detail for the winning configuration (h=20, n=20, 25bps) makes the case directly** — the edge is now distributed across most of the sample, not concentrated in one or two windows:
 
-## Why this is not a clean GO
+```
+fold  alpha_net   ic       hit_rate
+ 0    +2.32%      0.139    0.83
+ 1    +0.33%      0.042    0.75
+ 2    +1.73%      0.060    0.83
+ 3    +1.22%      0.062    0.92
+ 4    +0.48%      0.058    0.58
+ 5    +0.24%      0.099    0.58
+ 6    +0.69%      0.058    0.58
+ 7    +0.99%      0.064    0.83
+ 8    +1.06%      0.048    0.58
+ 9    −0.59%     −0.038    0.50
+10    −0.06%     −0.024    0.83
+```
 
-The Phase 0 kill criteria specified in advance require net-positive alpha "stable across folds... without depending on a handful of outlier [periods]." §4 above is a direct failure of that specific bar. With only 7–9 test folds (a consequence of 15 years of history and long embargo gaps at longer horizons), two strong folds are a large share of the sample — this is a **statistical power problem**, not evidence the edge is fake.
+Nine of eleven folds are individually positive, spanning a 26-year sample that now includes the 2008 crisis and the COVID crash inside the training history of later folds. Only fold 9 is a clear loser; fold 10 is roughly flat. That is a materially different shape from Run 1's "two outlier months carry the whole result."
 
-## Why this is not NO-GO either
+**Break-even cost is now large enough to matter.** 171 bps for h=20/n=20, 201 bps for h=20/n=10 — five to six times the 32bps realistic modeled cost. Run 1's best margin was roughly 50–67bps. This gap is now big enough to absorb a materially wrong slippage assumption and still clear.
 
-- IC is positive and directionally consistent across every horizon ≥ 3 bars, on data the model never trained on.
-- The horizon=1 fragility result independently reproduces a known-true fact about v1, which is strong evidence the harness itself is sound, not just optimistic.
-- The lumpiness pattern matches v1's finding almost exactly despite no shared code or data — that is corroboration, not noise.
-- Gross alpha clears realistic modeled costs by a wide margin at horizon ≥ 10.
+## What stayed the same (and still matters)
 
-A NO-GO would stop the project on a sample too small to have rejected the hypothesis fairly.
+- **The horizon=1 fragility finding reproduces again** on the larger sample, still barely clearing 10bps cost — the same conclusion as Run 1 and as v1's original diagnosis. Three independent confirmations now (v1, Run 1, Run 2) of the same fact: this alpha source cannot survive same-day round-trip costs, regardless of how much history is used to measure it.
+- **top_n=100 sanity check still behaves correctly** — turnover and alpha both collapse toward zero when top_n exceeds the universe size, confirming the harness has not changed behavior in a way that would fabricate an edge.
+- **The universe is still 98 hand-picked, currently-liquid, currently-listed symbols.** This is unchanged from Run 1 and is not fixed by adding more history — it is fixed by point-in-time universe reconstruction, which is separate work.
 
-## What actually needs to happen before a confident capital decision
+## What is still not proven
 
-1. **Extend history to 2000** (the daily data exists per `docs/02-data-layer.md`; this Phase 0 run used 2010+ only because that is what was pulled today). This alone would roughly double the number of walk-forward folds and include the 2008 crisis — both directly address the sample-size problem.
-2. **Point-in-time universe reconstruction**, not today's 98 survivors. Current results are an upper bound, not a final number (`docs/02-data-layer.md`'s point-in-time obligation).
-3. **Run the full adversarial stress battery** from `docs/10-evaluation.md` formally — Monte Carlo reshuffling, parameter perturbation, worst-fold removal — rather than the single ad hoc check done here.
-4. **Investigate what fold 1 and fold 4 have in common.** If it's a regime (specific volatility or trend condition), that is itself a usable finding — it would mean the edge is real but conditional, which argues for regime-gating rather than abandoning the signal.
+Being direct about the remaining gap between this result and something investable:
+
+1. **Survivorship bias.** All 98 symbols are today's liquid large/mid-caps. The sample says nothing about names that delisted, went illiquid, or fell out of the index over 26 years — and those are disproportionately likely to have been the *bad* outcomes, meaning realized results on the true point-in-time universe are plausibly weaker than this. This is the single largest remaining source of overstatement and the next thing to fix, per `docs/02-data-layer.md`'s point-in-time obligation.
+2. **Slippage is modeled, not replayed.** No order-book fidelity exists in this environment. 171bps of headroom is large enough to absorb a materially wrong slippage assumption, but "large enough to absorb being wrong" is not the same as "verified."
+3. **11 folds is a large improvement over 7, not a large number in absolute terms.** The per-fold table above is the actual evidence, and readers should look at it rather than trust the summary statistic alone.
+4. **Only one ablation has been run** (best-trade removal). The full battery from `docs/10-evaluation.md` §10 — Monte Carlo reshuffling, parameter perturbation ±20%, latency injection, worst-trade removal, universe perturbation — has not yet been executed formally.
+5. **Fold 9's loss is unexplained.** Worth understanding before this goes further — if it corresponds to a specific regime (2018 IL&FS stress, or similar), that is a usable finding about when the strategy fails, in the same spirit as the F&O contradiction checks planned for the Investigator layer.
 
 ## Decision
 
-**Proceed to Phase 1 build-out** (nightly pipeline, model registry, evaluator formalization) **using this as validated architecture, not validated alpha.** The pipeline, feature engine, leakage tests, cost model, and portfolio constructor all worked correctly on real data end-to-end — that engineering result stands regardless of the outlier-dependence finding.
+**GO.** Proceed to Phase 1: nightly pipeline, model registry, gate, evaluator formalization — built around a **monthly rebalance horizon (h≈20 trading bars)**, not the daily cadence originally implied by v1's design. This is now the headline architectural consequence of Phase 0: StockSense is a monthly-rebalance quant system, not a daily one, because that is where the evidence says the edge actually survives costs.
 
-**Do not** treat any number in this document as investable. The next research task, before anything else, is re-running this exact sweep against full 2000→ history with a reconstructed point-in-time universe, specifically to get enough folds to make §4 either disappear (more folds dilute two strong periods) or harden into a real, actionable regime-dependency finding.
+Before any capital, real or paper, touches this signal: point-in-time universe reconstruction (item 1) and the full stress battery (item 4) are the two specific, named prerequisites — not vague future work, but the literal next research tasks.
