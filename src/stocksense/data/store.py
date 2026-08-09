@@ -47,6 +47,40 @@ CREATE TABLE IF NOT EXISTS predictions (
     model_version VARCHAR,
     PRIMARY KEY (run_id, symbol, as_of_date, horizon_bars)
 );
+
+-- docs/02-data-layer.md "model_registry": one row per trained model
+-- version. The Gate (stocksense.models.gate) is the only writer.
+CREATE TABLE IF NOT EXISTS model_registry (
+    model_id            VARCHAR NOT NULL PRIMARY KEY,
+    model_type          VARCHAR NOT NULL,   -- e.g. 'cross_sectional_ranker'
+    horizon_bars        INTEGER NOT NULL,
+    top_n                INTEGER,
+    feature_schema_version VARCHAR NOT NULL,
+    training_start       DATE,
+    training_end          DATE,
+    hyperparameters_json  VARCHAR,
+    random_seed           INTEGER,
+    created_at             TIMESTAMP NOT NULL,
+    metrics_json           VARCHAR,          -- aggregate + per-fold + per-regime, per docs/06
+    gate_decision           VARCHAR,          -- 'promote' | 'reject'
+    gate_reason              VARCHAR,
+    lifecycle_state           VARCHAR NOT NULL, -- candidate | shadow | live | archived | rolled_back
+    artifact_path              VARCHAR NOT NULL, -- path to the serialized model file
+    promoted_at                 TIMESTAMP,
+    rolled_back_at                TIMESTAMP
+);
+
+-- docs/02-data-layer.md "job_runs": the heartbeat. Always written, even
+-- on hard failure — this is how "did last night actually run?" gets
+-- answered (docs/08-operations.md).
+CREATE TABLE IF NOT EXISTS job_runs (
+    run_id        VARCHAR NOT NULL PRIMARY KEY,
+    job_name       VARCHAR NOT NULL,
+    started_at      TIMESTAMP NOT NULL,
+    finished_at      TIMESTAMP,
+    status            VARCHAR NOT NULL,  -- completed | failed | aborted | interrupted
+    detail_json        VARCHAR
+);
 """
 
 
@@ -121,6 +155,61 @@ class Store:
         )
         self.con.unregister("_uni")
         return len(df)
+
+    # ---- model registry: the Gate is the only writer (docs/01-architecture.md) ----
+
+    def insert_model_registry_row(self, row: dict) -> None:
+        cols = list(row.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        col_list = ", ".join(cols)
+        self.con.execute(
+            f"INSERT INTO model_registry ({col_list}) VALUES ({placeholders})",
+            [row[c] for c in cols],
+        )
+
+    def update_model_lifecycle(
+        self, model_id: str, lifecycle_state: str, promoted_at=None, rolled_back_at=None
+    ) -> None:
+        self.con.execute(
+            """
+            UPDATE model_registry
+            SET lifecycle_state = ?,
+                promoted_at = COALESCE(?, promoted_at),
+                rolled_back_at = COALESCE(?, rolled_back_at)
+            WHERE model_id = ?
+            """,
+            [lifecycle_state, promoted_at, rolled_back_at, model_id],
+        )
+
+    def get_live_model(self, model_type: str, horizon_bars: int) -> pd.DataFrame:
+        return self.con.execute(
+            """
+            SELECT * FROM model_registry
+            WHERE model_type = ? AND horizon_bars = ? AND lifecycle_state = 'live'
+            ORDER BY promoted_at DESC LIMIT 1
+            """,
+            [model_type, horizon_bars],
+        ).fetchdf()
+
+    def read_model_registry(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM model_registry ORDER BY created_at").fetchdf()
+
+    # ---- job heartbeat (docs/05-nightly-pipeline.md step 15, always runs) ----
+
+    def start_job_run(self, run_id: str, job_name: str, started_at) -> None:
+        self.con.execute(
+            "INSERT INTO job_runs (run_id, job_name, started_at, status) VALUES (?, ?, ?, 'running')",
+            [run_id, job_name, started_at],
+        )
+
+    def finish_job_run(self, run_id: str, status: str, finished_at, detail_json: str | None = None) -> None:
+        self.con.execute(
+            "UPDATE job_runs SET status = ?, finished_at = ?, detail_json = ? WHERE run_id = ?",
+            [status, finished_at, detail_json, run_id],
+        )
+
+    def read_job_runs(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM job_runs ORDER BY started_at DESC").fetchdf()
 
     def close(self) -> None:
         self.con.close()

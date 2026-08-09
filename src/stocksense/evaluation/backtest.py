@@ -58,6 +58,7 @@ class FoldResult:
     mean_turnover: float
     information_coefficient: float
     hit_rate: float
+    net_returns: list[float] = field(default_factory=list)  # per-rebalance realized net returns, for Monte Carlo
 
 
 def train_and_score_fold(
@@ -182,4 +183,5 @@ def simulate_portfolio(
         mean_turnover=float(np.mean(turnovers)),
         information_coefficient=ic,
         hit_rate=float((net_arr > 0).mean()),
+        net_returns=net_returns,
     )
