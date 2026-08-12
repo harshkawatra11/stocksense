@@ -1,5 +1,7 @@
 # 04 — The Model Brain
 
+> **Status: MOSTLY ASPIRATIONAL — see [STATUS.md](STATUS.md).** Layer 1 exists as a flat cross-sectional ranker, **not** the regime-gated specialist architecture below (no regime classifier, no per-regime models). Layers 2 (Ollama) and 3 (Claude) do not exist. The Baseline 8 ablation this doc requires before trusting the LLM layers has never been run — because those layers aren't built yet.
+
 ## Three layers, three different jobs
 
 ```

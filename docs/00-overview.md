@@ -1,5 +1,7 @@
 # 00 — Overview
 
+> **Status: PARTIAL — see [STATUS.md](STATUS.md).** The dual-track invariant here is sound and still the target. The reconcile/learning loop this document centers on has zero implementation. Horizon framing is correct and matches evidence (monthly, not daily).
+
 ## What StockSense is
 
 StockSense is a single-user, locally-run quantitative trading brain for the NSE, packaged as an Electron desktop application.

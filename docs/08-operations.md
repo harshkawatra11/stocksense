@@ -1,5 +1,7 @@
 # 08 — Operations
 
+> **Status: ASPIRATIONAL — see [STATUS.md](STATUS.md).** Describes operating a scheduled service. Nothing runs as a service; no scheduler, no secrets management beyond `.env`, no log rotation.
+
 ## Scheduling
 
 ### Who owns the schedule

@@ -1,5 +1,7 @@
 # 02 — Data Layer
 
+> **Status: PARTIAL, ONE CLAIM ACTIVELY WRONG — see [STATUS.md](STATUS.md).** Multi-source reconciliation with provenance: not built, only yfinance is wired. Point-in-time universe: **not met — the current #1 blocker**, see `research/phase0_verdict.md`'s survivorship section.
+
 ## Three sources, one store
 
 StockSense ingests from three sources. They are complementary, not redundant, and each is authoritative for something the others cannot provide.

@@ -1,5 +1,7 @@
 # 06 — Retraining Rigor
 
+> **Status: PARTIAL, WITH A FOUND METHODOLOGY BUG — see [STATUS.md](STATUS.md).** Purged/embargoed walk-forward, cost-aware backtesting, best-trade-removal and parameter-perturbation stress tests: built and run for real. An over-conservative embargo bug was found and fixed during audit (see `research/phase0_verdict.md`) — it had roughly halved fold count for no leakage-prevention benefit. Calibration tracking, drift detection, rollback CLI: not built.
+
 ## Why this document exists
 
 Every other component in StockSense fails loudly. Ingestion throws, validation quarantines, the CLI errors out — you notice.

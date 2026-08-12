@@ -1,5 +1,7 @@
 # 09 — Open Questions
 
+> **Status: PARTIALLY RESOLVED BY EVIDENCE — see [STATUS.md](STATUS.md).** OQ-1 (Ollama free tier) and historical-depth questions: resolved as documented. **OQ-4 (which horizon carries edge) has since been answered empirically — ~20 bars, monthly** — this file has not yet been edited to close it.
+
 Every item here is genuinely unresolved. Each carries a **recommended default** so implementation is never blocked, and a **resolution criterion** so it does not stay open by inertia.
 
 Anything resolved is moved to the "Closed" section at the bottom with the evidence that closed it, rather than deleted — a decision whose reasoning is lost tends to get relitigated.
@@ -56,15 +58,7 @@ The practical consequence: **daily-horizon models are the ones that graduate to 
 
 ## OQ-4 — Which horizons carry edge
 
-**Question.** Which of the supported horizons actually carry a tradeable edge?
-
-**What is settled.** Horizon is a **parameter**, not an architectural choice ([03-feature-engineering.md](03-feature-engineering.md)). The system supports many; each model declares one; each is evaluated separately. This is no longer a decision to make once — it is a search over a space.
-
-**What is not known.** Where the edge actually lives. Too short and costs dominate the signal; too long and it stops matching how the user trades.
-
-**Recommended default.** Begin the search at **1–5 bars at daily resolution**, matching the nightly cadence — a prediction made tonight resolves within the working week. Expand the search once the evaluation harness exists to compare horizons fairly.
-
-**Resolution criterion.** Run the horizon sweep as a first-class evaluation ([10-evaluation.md](10-evaluation.md)): identical features, identical cost model, net-of-cost edge and calibration compared across horizons. This is a permanent capability, not a one-time answer — the horizon that carries edge may itself change with regime.
+**Closed empirically — see the "Closed" section below.** Answer: ~20 trading bars (roughly monthly). Kept here only as a pointer since several other documents cross-link to this section by name.
 
 ---
 
@@ -173,6 +167,14 @@ The practical consequence: **daily-horizon models are the ones that graduate to 
 ---
 
 ## Closed
+
+### ✅ Which horizons carry edge (OQ-4) — closed 2026-08-09, empirically
+
+**Was:** Which of the supported horizons actually carries a tradeable, cost-surviving edge? The original recommendation defaulted to 1–5 bars at daily resolution, matching a nightly-cadence assumption that was itself later found wrong (see `docs/STATUS.md`).
+
+**Closed by:** A real walk-forward sweep (`research/phase0_sweep.py`) across horizon ∈ {1,3,5,10,20} bars, run three times over the course of Phase 0 as methodology was corrected. **1-day holding fails to clear realistic transaction costs in every version of this test** — confirmed independently four times now (v1's own historical output, and three re-runs in this codebase). **~20 trading bars (roughly monthly) is where net-of-cost alpha survives**, with break-even cost margins of 3–6× the realistic modeled cost.
+
+**Decision:** StockSense is a monthly-rebalance system, not a daily one. This is the single most consequential finding Phase 0 produced and it overturns an assumption baked into `docs/04` through `docs/08`. See `research/phase0_verdict.md` for the full evidence trail — note that the specific alpha magnitude at this horizon is still not fully trusted pending the survivorship-bias fix, but the *horizon* finding itself is independent of that open item and is not in question.
 
 ### ✅ Historical data depth — closed 2026-08-08
 

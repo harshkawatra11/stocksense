@@ -1,5 +1,7 @@
 # 03 — Feature Engineering
 
+> **Status: PARTIAL — see [STATUS.md](STATUS.md).** Price/candlestick/volume/market-context categories: built. F&O and news/events: explicitly out of scope (correctly marked below). Horizon-agnostic label design: built and matches evidence.
+
 ## What this component does
 
 A raw candle is not predictive. `open=830, high=852, low=828, close=849, volume=1.2M` tells a model almost nothing on its own, because it carries no context: is that volume high for this stock? Is that close near a level that mattered? Is the sector doing the same thing?

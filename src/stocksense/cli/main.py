@@ -20,6 +20,7 @@ import pandas as pd
 import structlog
 import typer
 
+from stocksense.core.calendar import trading_days_index
 from stocksense.core.config import get_settings
 from stocksense.data.store import Store
 from stocksense.data.validate import quarantine_symbols
@@ -76,7 +77,7 @@ def train_candidate(
     store = Store(settings.duckdb_path)
 
     candles, feats, fcols, labeled = _load_features_and_labels(horizon)
-    trading_dates = pd.DatetimeIndex(sorted(feats["date"].unique()))
+    trading_dates = trading_days_index(feats["date"])
     test_window = max(21, horizon * 12)
     folds = make_folds(trading_dates, horizon_bars=horizon, test_window_bars=test_window)
     log.info("folds_built", horizon=horizon, n_folds=len(folds))

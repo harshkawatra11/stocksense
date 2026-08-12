@@ -1,5 +1,7 @@
 # 10 — Quant Brain Evaluation
 
+> **Status: PARTIAL, ONE MISSING PIECE IS THE PRODUCT ITSELF — see [STATUS.md](STATUS.md).** Walk-forward, best-trade-removal, parameter perturbation: built and run for real. Monte Carlo: attempted, found methodologically flawed (needs redoing, drawdown-focused). Episode library, 10-baseline gauntlet (1 exists), Quant IQ scorecard, regime stratification, reasoning evaluation: not built. **The immutable prediction ledger — arguably this document's most important artifact — does not exist; the `predictions` table is never written to.**
+
 ## The standard
 
 The wrong question is *"does StockSense know finance?"* Any language model can produce competent-sounding market commentary, and competent-sounding commentary is worth nothing.

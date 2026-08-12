@@ -1,65 +1,39 @@
 # StockSense
 
-A single-user, locally-run quantitative trading brain for the NSE, packaged as an Electron desktop application.
+A quantitative research project for the NSE: does a cross-sectional, monthly-rebalance signal survive realistic transaction costs, out of sample, on real data?
 
-It studies the market and its own mistakes every night, and hands the user a researched plan every morning.
-
-**Status: documentation phase.** No implementation code has been written. The documentation set is the contract implementation will be built against.
+**Current answer: probably, on architecture and cadence — not yet confirmed on magnitude.** See [research/phase0_verdict.md](research/phase0_verdict.md) for the full evidence trail, including a real data bug found and fixed mid-research, and a measured (not estimated) survivorship-bias gap that is the current blocking issue.
 
 ## Start here
 
-**[docs/00-overview.md](docs/00-overview.md)** — what this is, what it is not, and why.
+1. **[research/phase0_verdict.md](research/phase0_verdict.md)** — what the evidence actually shows, revised three times as it was tested.
+2. **[docs/STATUS.md](docs/STATUS.md)** — what the `docs/` architecture set describes (aspirational, written before code existed) versus what's actually built. Read this before trusting any individual doc.
 
-## Documentation set
+## What's actually built
 
-| Document | Covers |
-|---|---|
-| [00-overview.md](docs/00-overview.md) | Thesis, dual-track learning invariant, scope, non-goals |
-| [01-architecture.md](docs/01-architecture.md) | Two-process split, component contracts, network dependencies |
-| [02-data-layer.md](docs/02-data-layer.md) | Upstox surfaces, historical depth, DuckDB store, entities |
-| [03-feature-engineering.md](docs/03-feature-engineering.md) | Full feature taxonomy and the output contract |
-| [04-model-brain.md](docs/04-model-brain.md) | The three layers and their strict interfaces |
-| [05-nightly-pipeline.md](docs/05-nightly-pipeline.md) | The 15-step sequence and per-step failure behavior |
-| [06-retraining-rigor.md](docs/06-retraining-rigor.md) | Validation, gating, calibration, drift, rollback |
-| [07-control-room.md](docs/07-control-room.md) | Electron UI specification |
-| [08-operations.md](docs/08-operations.md) | Scheduling, secrets, logs, runbooks |
-| [09-open-questions.md](docs/09-open-questions.md) | Unresolved items with defaults and resolution criteria |
-| [10-evaluation.md](docs/10-evaluation.md) | The adversarial evaluation system — simulator, episodes, baselines, hard gates |
-
-## The shape of it, briefly
+A Python research pipeline, not the product `docs/` describes:
 
 ```
-Upstox + NSE archives + yfinance
-              ↓
-        ingest · reconcile · validate · reconstruct trades
-              ↓
-        grade predictions (Track A) · grade decisions (Track B)
-              ↓
-        features · regimes · train candidates
-              ↓
-              ┌─────────────────────────┐
-              │  ADVERSARIAL EVALUATOR   │  tries to prove it wrong
-              │  simulator · episodes ·  │
-              │  baselines · hard gates  │
-              └─────────────────────────┘
-              ↓
-                  ┌──────────┐
-                  │   GATE   │   promote only if it genuinely wins
-                  └──────────┘
-              ↓
-        LightGBM shortlist  →  Ollama Cloud investigates
-                            →  Claude synthesizes
-                            →  Telegram
+src/stocksense/
+  core/        config, trading calendar, typed domain objects
+  data/        yfinance ingestion, DuckDB store, adjustment-anomaly validation
+  features/    leak-tested feature engine (price/volume/candlestick/context)
+  labels/      cross-sectional relative forward return, horizon-parameterized
+  models/      LightGBM cross-sectional ranker + versioned model registry
+  portfolio/   target-weight construction, no-trade band, turnover budget
+  execution/   Indian equity cost model
+  evaluation/  purged walk-forward validation + promote/reject gate
+  cli/         train-candidate / predict / registry commands
 ```
 
-**Two learning tracks, kept strictly separate.** The model learns from the market's outcomes; the user gets coached on their own decisions. Neither is allowed to contaminate the other.
+Run via `stocksense.cli.main` (train, evaluate, gate, register, and score a real 20-name monthly portfolio against live NSE data). No scheduler, no UI, no LLM layer, no Telegram — those are documented in `docs/` as the intended product but do not exist yet, on purpose: building them before knowing whether the underlying signal survives costs would be building on an unproven foundation.
 
-**Nothing reaches real money without earning it:**
+## What's proven so far
 
-```
-Backtest → Paper → Live shadow → Small capital → Scaled
-```
+- A real, cost-surviving cross-sectional edge at a **monthly** rebalance horizon (not daily — daily was tried and demonstrably fails on costs, independently confirmed four times across two codebases).
+- A genuine data-quality bug (a yfinance adjustment-factor discontinuity) found by adversarial stress testing, fixed, and the result re-verified on clean data.
+- A measured survivorship-bias gap (82% of historically prominent NSE names absent from the current 98-symbol universe, concentrated in real failure cases) that is the specific, named blocker before any further validation is trustworthy.
 
-## What it does not do
+## What isn't built yet
 
-No automated order execution — Upstox Algo Trading access exists but is gated off behind a measurable condition. No latency-competitive execution (intraday *horizons* are supported; racing to the exchange is not). No cloud hosting. No second paid LLM account.
+The reconcile/learning loop that is this project's actual thesis — an immutable prediction ledger, grading, calibration tracking — has **zero implementation**. What exists today is a rigorous backtest, not a system that learns from its own mistakes in production. See `docs/STATUS.md` for the full built-vs-aspirational breakdown.

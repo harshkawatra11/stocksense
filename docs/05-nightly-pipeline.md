@@ -1,5 +1,7 @@
 # 05 — The Nightly Pipeline
 
+> **Status: ASPIRATIONAL — see [STATUS.md](STATUS.md).** No scheduling, no automatic execution, no Telegram delivery. What exists: CLI commands (`train-candidate`, `predict`, `registry`) a human runs on demand.
+
 ## The sequence
 
 Fifteen steps, strictly ordered. Each has defined inputs, defined outputs, and defined failure behavior.

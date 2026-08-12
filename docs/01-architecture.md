@@ -1,5 +1,7 @@
 # 01 — Architecture
 
+> **Status: ASPIRATIONAL — see [STATUS.md](STATUS.md).** Describes an Electron + Python two-process system with a separate evaluator service. Built: a single-process Python CLI. No Electron, no IPC, no separate evaluator process.
+
 ## Top-level view
 
 ```

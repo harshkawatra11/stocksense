@@ -1,5 +1,7 @@
 # 07 — The Control Room
 
+> **Status: 0% BUILT — see [STATUS.md](STATUS.md).** Entirely aspirational. No UI of any kind exists yet.
+
 ## Why it is a control room, not a dashboard
 
 A dashboard displays. A control room operates.

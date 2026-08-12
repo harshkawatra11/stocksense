@@ -40,13 +40,3 @@ def bar_shift(index: pd.DatetimeIndex, date: pd.Timestamp, bars: int) -> pd.Time
     if target < 0 or target >= len(index):
         return None
     return index[target]
-
-
-def embargo_bars(horizon_bars: int, max_feature_lookback_bars: int) -> int:
-    """Minimum gap (in bars) required between a training window's end and a
-    test window's start, per docs/06-retraining-rigor.md ("purged, embargoed
-    walk-forward validation"): the gap must cover both the label horizon
-    (so no training label peeks into the test period) and the longest
-    feature lookback (so no test-period feature bleeds from training data).
-    """
-    return horizon_bars + max_feature_lookback_bars
