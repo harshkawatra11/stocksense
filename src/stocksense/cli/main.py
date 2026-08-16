@@ -47,6 +47,8 @@ from stocksense.optimizer.tax import compute_tax_liability
 from stocksense.rag.agent import ask as rag_ask
 from stocksense.rag.embed import embeddings_available
 from stocksense.rag.index import index_document, rebuild_fts_index
+from stocksense.data.nse_archive import fetch_range
+from stocksense.data.universe_pit import universe_as_of
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
 
@@ -340,6 +342,64 @@ def grade_cmd(horizon: int = typer.Option(20, help="Prediction horizon in tradin
     if result.n_graded:
         typer.echo(f"Direction correct: {result.n_correct_direction}/{result.n_graded} ({result.n_correct_direction / result.n_graded:.0%})")
         typer.echo(f"Mean absolute error: {result.mean_abs_error:.5f}")
+
+
+@app.command("backfill-nse-archive")
+def backfill_nse_archive_cmd(
+    start: str = typer.Option(..., help="Start date, YYYY-MM-DD"),
+    end: str = typer.Option(..., help="End date, YYYY-MM-DD"),
+    kind: str = typer.Option("cm", help="'cm' (equity), 'delivery', or 'fo'"),
+) -> None:
+    """Backfill NSE bhavcopy into the store, day by day, resumable
+    (content-hash cached -- interrupting and re-running replays quickly
+    through the already-cached prefix). A full 2001-2026 CM backfill is
+    ~6,500 trading days; at the polite 1 req/sec rate this is a multi-hour
+    job -- run it in a range you actually want, or split it across
+    sessions rather than doing it all in one sitting."""
+    from datetime import datetime as _dt
+
+    start_d = _dt.strptime(start, "%Y-%m-%d").date()
+    end_d = _dt.strptime(end, "%Y-%m-%d").date()
+
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+
+    results = fetch_range(start_d, end_d, kind=kind)
+    n_ok, n_holiday = 0, 0
+    for d, df in results:
+        if df is None:
+            n_holiday += 1
+            continue
+        if kind == "cm":
+            store.write_bhavcopy_eq(df)
+        elif kind == "delivery":
+            store.write_bhavcopy_delivery(df)
+        elif kind == "fo":
+            store.write_bhavcopy_fo(df)
+        n_ok += 1
+
+    store.close()
+    typer.echo(f"Backfilled {n_ok} trading day(s) of '{kind}' data ({n_holiday} holidays/weekends skipped).")
+
+
+@app.command("universe-as-of")
+def universe_as_of_cmd(as_of: str = typer.Option(..., help="Date, YYYY-MM-DD")) -> None:
+    """Point-in-time tradeable universe as of a given date, from ingested
+    bhavcopy data (requires `backfill-nse-archive --kind cm` covering
+    that date's trailing lookback window first)."""
+    from datetime import datetime as _dt
+
+    d = _dt.strptime(as_of, "%Y-%m-%d").date()
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    symbols = universe_as_of(store, d)
+    store.close()
+
+    if not symbols:
+        typer.echo(f"No symbols found for {as_of} -- has bhavcopy data been backfilled for this date range?")
+        raise typer.Exit(code=1)
+    typer.echo(f"{len(symbols)} symbols tradeable as of {as_of}:")
+    typer.echo(", ".join(symbols))
 
 
 @app.command("index-corpus")
