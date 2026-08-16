@@ -68,11 +68,19 @@ def train_candidate(
     horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
     top_n: int = typer.Option(20, help="Portfolio size (top-N by rank)"),
     cost_bps: float = typer.Option(25.0, help="Round-trip cost assumption for gate evaluation, bps"),
-    min_pct_folds_positive: float = typer.Option(0.6),
 ) -> None:
     """Walk-forward evaluate a candidate, run it through the gate, train
     the final full-history artifact, and register the outcome — win or
-    lose — in the model registry."""
+    lose — in the model registry.
+
+    Gate criteria are NOT configurable from this command on purpose: the
+    production path always uses the pre-registered defaults in
+    GateCriteria (research/gate_criteria_preregistration.md). Allowing
+    ad-hoc overrides here would recreate the exact evaluator-overfitting
+    failure that pre-registration exists to prevent — someone could keep
+    loosening criteria from the command line until a candidate passes.
+    Experiment with alternative criteria in a research script, never here.
+    """
     settings = get_settings()
     store = Store(settings.duckdb_path)
 
@@ -104,7 +112,7 @@ def train_candidate(
 
     verdict = evaluate_gate(
         fold_results,
-        criteria=GateCriteria(min_pct_folds_positive=min_pct_folds_positive),
+        criteria=GateCriteria(),  # pre-registered defaults, always — see docstring above
         incumbent_mean_alpha_net=incumbent_alpha,
     )
 
