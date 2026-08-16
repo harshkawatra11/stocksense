@@ -38,9 +38,11 @@ All four are kept in full. The reasoning that survives contact with adversarial 
 
 The corrected embargo pulls the mean down (more folds means more of the ordinary, less-spectacular periods are counted, not just the strong ones a smaller sample happened to sample). This is the expected and correct direction for a bias fix to move a number — it is not a sign anything is newly wrong.
 
-### Pre-registered gate evaluation — PASS
+### Pre-registered gate evaluation — h=20 PASSES, h=10 PASSES, h=1 FAILS
 
-Evaluated exactly as `gate_criteria_preregistration.md` specifies, with **no threshold adjustment**:
+Evaluated exactly as `gate_criteria_preregistration.md` specifies, with **no threshold adjustment**, across all three horizons that have been the focus of prior runs:
+
+**h=20, top_n=20, 25bps (the Run 1–3 headline configuration):**
 
 | Criterion | Threshold | Run 4 result | Pass? |
 |---|---|---|---|
@@ -49,7 +51,28 @@ Evaluated exactly as `gate_criteria_preregistration.md` specifies, with **no thr
 | `hit_rate_significance_alpha` | one-sided exact binomial p ≤ 0.10 | p = 0.0085 (17/22 positive) | ✅ |
 | `best_fold_drop_fraction` | mean after dropping best 15% (3 of 22 folds) still > 0 | +0.313% | ✅ |
 
-**All four criteria pass.** Because these thresholds were committed before this run, this is evidence rather than a foregone conclusion — the honest counterfactual (a FAIL) was a real possibility going in, and the pre-registration document says explicitly what would have happened if it occurred: stop and re-research the signal, not adjust the thresholds.
+**All four criteria pass.**
+
+**h=10, top_n=10, 25bps (also passes, and on a larger sample):**
+
+| Criterion | Threshold | Run 4 result | Pass? |
+|---|---|---|---|
+| `min_folds_required` | ≥ 10 | 43 | ✅ |
+| `min_mean_alpha_net` | > 0.0 | +0.447% | ✅ |
+| `hit_rate_significance_alpha` | one-sided exact binomial p ≤ 0.10 | p = 0.000085 (34/43 positive) | ✅ |
+
+Notably *more* statistically decisive than h=20 (43 folds vs. 22, p two orders of magnitude smaller) — the corrected embargo makes h=10 a genuinely competitive configuration, not just a fallback.
+
+**h=1, top_n=20, 25bps (same-day) — FAILS:**
+
+| Criterion | Threshold | Run 4 result | Pass? |
+|---|---|---|---|
+| `min_folds_required` | ≥ 10 | 191 | ✅ |
+| `min_mean_alpha_net` | > 0.0 | gross alpha ≈ +0.0044% (net alpha is **negative** after 25bps cost) | ❌ |
+
+Gross alpha at h=1 is ~0.44bps per rebalance — indistinguishable from zero at this sample size, and roughly 17× smaller than the 7.3bps break-even cost. This is not a "thin but real" result; it is the harness correctly reporting the absence of a same-day signal in daily-bar features. **This is the decisive evidence that a future intraday track cannot simply reuse this pipeline at h=1** — see below.
+
+Because the h=20 and h=10 thresholds were committed before this run, their PASS is evidence rather than a foregone conclusion — the honest counterfactual (a FAIL) was a real possibility going in, and the pre-registration document says explicitly what would have happened if it occurred: stop and re-research the signal, not adjust the thresholds. The h=1 FAIL confirms the gate is not rubber-stamping everything it's given.
 
 ### Survivorship bound (Phase 2B): the edge survives realistic delisting rates
 
