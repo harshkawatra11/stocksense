@@ -220,6 +220,59 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     error          VARCHAR,
     cost_estimate  DOUBLE
 );
+
+-- docs/19-foreman.md: the self-building harness's goal queue. source
+-- distinguishes goals the user asked for from ones the Foreman proposed
+-- to itself, so the ledger can answer "did I ask for this."
+CREATE TABLE IF NOT EXISTS goals (
+    goal_id          VARCHAR NOT NULL PRIMARY KEY,
+    source           VARCHAR NOT NULL,  -- user | self_assess | adversary | maintenance
+    prompt           VARCHAR NOT NULL,
+    status           VARCHAR NOT NULL,  -- queued|planning|executing|verifying|blocked|done|abandoned
+    priority         INTEGER NOT NULL DEFAULT 5,
+    created_at       TIMESTAMP NOT NULL,
+    completed_at     TIMESTAMP,
+    parent_goal_id   VARCHAR,
+    result_summary   VARCHAR
+);
+
+-- One row per tool invocation within a goal. This is what makes "what
+-- did the Foreman actually do" answerable from the database rather than
+-- reconstructed from scrollback -- the same principle as job_runs.
+CREATE TABLE IF NOT EXISTS build_ledger (
+    entry_id         VARCHAR NOT NULL PRIMARY KEY,
+    goal_id          VARCHAR NOT NULL,
+    task_name        VARCHAR NOT NULL,
+    tool             VARCHAR NOT NULL,
+    action           VARCHAR NOT NULL,   -- read | write | exec | network
+    diff_summary     VARCHAR,
+    files_touched    VARCHAR,            -- JSON list
+    verdict          VARCHAR,            -- ok | failed | blocked_protected | adversary_rejected
+    ci_run_url       VARCHAR,
+    attempts         INTEGER NOT NULL DEFAULT 1,
+    tokens_estimate  DOUBLE,
+    created_at       TIMESTAMP NOT NULL
+);
+
+-- Every attempt to write a protected path, whether blocked (the normal
+-- case) or -- if this table is ever inconsistent with reality -- not.
+-- The point of this table is that a pattern of the agent repeatedly
+-- reaching for evaluation/gate.py is VISIBLE, not silent.
+CREATE TABLE IF NOT EXISTS protected_violations (
+    violation_id     VARCHAR NOT NULL PRIMARY KEY,
+    goal_id          VARCHAR NOT NULL,
+    path             VARCHAR NOT NULL,
+    attempted_at     TIMESTAMP NOT NULL,
+    action_taken     VARCHAR NOT NULL  -- blocked_routed_to_pr
+);
+
+-- Daily spend/activity cap enforcement.
+CREATE TABLE IF NOT EXISTS budget (
+    period_date      DATE NOT NULL PRIMARY KEY,
+    invocations      INTEGER NOT NULL DEFAULT 0,
+    tokens_estimate  DOUBLE NOT NULL DEFAULT 0,
+    goals_completed  INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # AUDIT: predictions was created but never written to (CRITICAL-1). These
@@ -520,6 +573,67 @@ class Store:
         self.con.execute(
             f"INSERT INTO agent_runs ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
             [row[c] for c in cols],
+        )
+
+    # ---- Foreman: goals, ledger, protected-path violations, budget ----
+
+    def insert_goal(self, row: dict) -> None:
+        cols = list(row.keys())
+        self.con.execute(
+            f"INSERT INTO goals ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row[c] for c in cols],
+        )
+
+    def update_goal_status(self, goal_id: str, status: str, completed_at=None, result_summary: str | None = None) -> None:
+        self.con.execute(
+            "UPDATE goals SET status = ?, completed_at = COALESCE(?, completed_at), "
+            "result_summary = COALESCE(?, result_summary) WHERE goal_id = ?",
+            [status, completed_at, result_summary, goal_id],
+        )
+
+    def read_goals(self, status: str | None = None) -> pd.DataFrame:
+        if status:
+            return self.con.execute("SELECT * FROM goals WHERE status = ? ORDER BY priority, created_at", [status]).fetchdf()
+        return self.con.execute("SELECT * FROM goals ORDER BY created_at DESC").fetchdf()
+
+    def insert_ledger_entry(self, row: dict) -> None:
+        cols = list(row.keys())
+        self.con.execute(
+            f"INSERT INTO build_ledger ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row[c] for c in cols],
+        )
+
+    def read_ledger(self, goal_id: str | None = None) -> pd.DataFrame:
+        if goal_id:
+            return self.con.execute("SELECT * FROM build_ledger WHERE goal_id = ? ORDER BY created_at", [goal_id]).fetchdf()
+        return self.con.execute("SELECT * FROM build_ledger ORDER BY created_at DESC").fetchdf()
+
+    def insert_protected_violation(self, row: dict) -> None:
+        cols = list(row.keys())
+        self.con.execute(
+            f"INSERT INTO protected_violations ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row[c] for c in cols],
+        )
+
+    def read_protected_violations(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM protected_violations ORDER BY attempted_at DESC").fetchdf()
+
+    def get_or_create_budget(self, period_date) -> dict:
+        row = self.con.execute("SELECT * FROM budget WHERE period_date = ?", [period_date]).fetchdf()
+        if row.empty:
+            self.con.execute(
+                "INSERT INTO budget (period_date, invocations, tokens_estimate, goals_completed) VALUES (?, 0, 0, 0)",
+                [period_date],
+            )
+            return {"period_date": period_date, "invocations": 0, "tokens_estimate": 0.0, "goals_completed": 0}
+        return row.iloc[0].to_dict()
+
+    def increment_budget(self, period_date, invocations: int = 0, tokens_estimate: float = 0.0, goals_completed: int = 0) -> None:
+        self.get_or_create_budget(period_date)
+        self.con.execute(
+            "UPDATE budget SET invocations = invocations + ?, tokens_estimate = tokens_estimate + ?, "
+            "goals_completed = goals_completed + ? WHERE period_date = ?",
+            [invocations, tokens_estimate, goals_completed, period_date],
         )
 
     def close(self) -> None:
