@@ -361,12 +361,16 @@ def backfill_nse_archive_cmd(
     end: str = typer.Option(..., help="End date, YYYY-MM-DD"),
     kind: str = typer.Option("cm", help="'cm' (equity), 'delivery', or 'fo'"),
 ) -> None:
-    """Backfill NSE bhavcopy into the store, day by day, resumable
-    (content-hash cached -- interrupting and re-running replays quickly
-    through the already-cached prefix). A full 2001-2026 CM backfill is
-    ~6,500 trading days; at the polite 1 req/sec rate this is a multi-hour
-    job -- run it in a range you actually want, or split it across
-    sessions rather than doing it all in one sitting."""
+    """Backfill NSE bhavcopy into the store, day by day, genuinely
+    resumable: each day is written to the database as soon as it's
+    fetched (fetch_range is a generator, consumed lazily here), not
+    batched until the whole range finishes -- interrupting this command
+    at any point keeps every day already fetched both on disk (content-
+    hash cached) and in the database, and re-running the same range
+    replays quickly through the cached prefix and continues writing from
+    there. A full 2001-2026 CM backfill is ~6,500 trading days; at the
+    polite 1 req/sec rate this is a multi-hour job -- safe to stop and
+    resume across sessions."""
     from datetime import datetime as _dt
 
     start_d = _dt.strptime(start, "%Y-%m-%d").date()

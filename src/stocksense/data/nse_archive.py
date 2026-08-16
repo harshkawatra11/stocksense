@@ -25,6 +25,7 @@ import time
 import zipfile
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Iterator
 
 import pandas as pd
 import requests
@@ -224,15 +225,25 @@ def _fetch_fo_udiff(d: date) -> pd.DataFrame | None:
 
 # ---- range fetch, resumable ----
 
-def fetch_range(start: date, end: date, kind: str) -> list[tuple[date, pd.DataFrame | None]]:
+def fetch_range(start: date, end: date, kind: str) -> Iterator[tuple[date, pd.DataFrame | None]]:
     """Fetches every calendar day from start to end (inclusive) for the
     given `kind` ('cm', 'delivery', 'fo'). A None entry means that date
-    was a holiday (404) -- expected, not an error. Resumable by
-    construction: _cached_or_fetch never re-downloads a date already on
-    disk, so re-running fetch_range after an interruption just replays
-    quickly through the already-cached prefix."""
+    was a holiday (404) -- expected, not an error.
+
+    A GENERATOR, not a list-returning function -- this is what makes a
+    caller's progress genuinely resumable, not just re-download-avoiding.
+    A caller that writes each (date, df) to the database AS IT ARRIVES
+    (rather than collecting the full return value first) can be killed
+    at any point and keep every day already yielded: _cached_or_fetch's
+    on-disk cache means a re-run never re-downloads those days, and
+    nothing is lost from the database either, because it was already
+    written before the process died. A version of this function that
+    only returned after the entire range completed would defeat that --
+    an interrupted run would have fetched everything to disk but written
+    NOTHING to the database, which is exactly the gap this generator
+    form closes.
+    """
     fetcher = {"cm": fetch_cm_bhavcopy, "delivery": fetch_delivery, "fo": fetch_fo_bhavcopy}[kind]
-    results = []
     d = start
     while d <= end:
         if d.weekday() < 5:  # skip weekends without even attempting a request
@@ -241,6 +252,5 @@ def fetch_range(start: date, end: date, kind: str) -> list[tuple[date, pd.DataFr
             except FetchError as e:
                 log.warning("nse_archive_fetch_failed", kind=kind, date=str(d), error=str(e))
                 df = None
-            results.append((d, df))
+            yield (d, df)
         d += timedelta(days=1)
-    return results

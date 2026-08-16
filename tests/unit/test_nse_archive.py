@@ -180,7 +180,7 @@ def test_fetch_fo_bhavcopy_legacy_extracts_open_interest(mock_get, cache_dir) ->
 def test_fetch_range_skips_weekends_without_requesting(mock_get, cache_dir) -> None:
     mock_get.return_value = _mock_response(404)  # every weekday attempt is a "holiday"
     # 2024-01-06 (Sat) to 2024-01-07 (Sun) -- a pure weekend range
-    results = fetch_range(date(2024, 1, 6), date(2024, 1, 7), kind="cm")
+    results = list(fetch_range(date(2024, 1, 6), date(2024, 1, 7), kind="cm"))
     assert results == []
     mock_get.assert_not_called()
 
@@ -190,6 +190,25 @@ def test_fetch_range_treats_network_error_as_none_not_a_crash(mock_get, cache_di
     import requests
 
     mock_get.side_effect = requests.exceptions.ConnectionError("connection reset")
-    results = fetch_range(date(2024, 1, 15), date(2024, 1, 15), kind="cm")
+    results = list(fetch_range(date(2024, 1, 15), date(2024, 1, 15), kind="cm"))
     assert len(results) == 1
     assert results[0] == (date(2024, 1, 15), None)
+
+
+@patch("stocksense.data.nse_archive.requests.get")
+def test_fetch_range_is_a_generator_yielding_incrementally(mock_get, cache_dir) -> None:
+    """The load-bearing property behind resumability: fetch_range must
+    yield each day as it's fetched, not accumulate everything and return
+    once at the end -- a caller that writes to the database inside the
+    loop can be killed mid-range and keep every day already yielded,
+    which a list-returning version would not allow (a kill before the
+    return statement loses everything, even days already fetched)."""
+    import inspect
+
+    assert inspect.isgeneratorfunction(fetch_range)
+
+    mock_get.return_value = _mock_response(404)
+    gen = fetch_range(date(2024, 1, 15), date(2024, 1, 19), kind="cm")
+    first = next(gen)  # must be able to pull one result without exhausting the whole range
+    assert first[0] == date(2024, 1, 15)
+    assert mock_get.call_count == 1  # only the first day was actually fetched so far
