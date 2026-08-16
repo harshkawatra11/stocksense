@@ -69,6 +69,12 @@ class AgentRequest:
     max_turns: int = 1
     timeout_s: int = DEFAULT_TIMEOUT_S
     model: str | None = None
+    # low|medium|high|xhigh|max, per `claude --effort`. Cost/latency
+    # control independent of model choice -- e.g. Opus at "low" effort
+    # for a cheap architectural decision, Sonnet at "medium" for actual
+    # code generation. Neither model nor effort is set by default here;
+    # callers (planner.py, codegen.py, assess.py) choose deliberately.
+    effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,8 @@ def invoke(req: AgentRequest, store=None, job_run_id: str | None = None) -> Agen
             cmd += ["--setting-sources", str(SKILLS_DIR)]
         if req.model:
             cmd += ["--model", req.model]
+        if req.effort:
+            cmd += ["--effort", req.effort]
 
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=req.timeout_s,
@@ -215,7 +223,7 @@ def invoke(req: AgentRequest, store=None, job_run_id: str | None = None) -> Agen
                     "job_run_id": job_run_id,
                     "skill_name": req.skill,
                     "prompt_hash": prompt_hash,
-                    "input_json": redact_secrets(json.dumps(req.facts, default=str)),
+                    "input_json": redact_secrets(json.dumps({"facts": req.facts, "effort": req.effort}, default=str)),
                     "output_text": redact_secrets(output_text),
                     "model": req.model,
                     "started_at": started_at,
