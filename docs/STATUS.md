@@ -54,6 +54,16 @@ Fixed:
 
 7 new tests (`test_agent_model_effort.py`, `test_foreman_codegen.py`, plus 2 added to `test_foreman_planner.py`) assert the flags actually reach the subprocess command line, and that a `write_patch` step with literal `content` skips codegen entirely (only `spec`-only steps trigger the extra call) — 198 tests passing, up from 188.
 
+## CRITICAL-1 closed: the reconcile loop (2026-08-16, same day)
+
+**`predictions` is finally written to.** `stocksense/harness/loops.py` adds `record_predictions` (scores today's live/shadow model, freezes one row per symbol with a `feature_snapshot_hash` so a later reviewer can confirm nothing was recomputed with hindsight) and `grade_matured_predictions` (once a prediction's horizon has actually elapsed in the candle data, grades it against realized relative forward return computed with the **exact same function training uses** — `labels.forward_return` — so grading and training can never silently disagree about what "correct" means).
+
+`build_reconcile_graph` wraps both as a two-node `harness.Graph` (grade before record), idempotency-keyed by calendar date — running `stocksense reconcile` twice in one day is a no-op the second time, the property `docs/05-nightly-pipeline.md` requires of every step. This is the harness's own graph/runner infrastructure (built idle in the earlier Foreman phase) doing real work for the first time.
+
+CLI: `stocksense record-predictions`, `stocksense grade`, `stocksense reconcile` (the graph-wired version of both, recommended). 9 new tests on real synthetic data with a genuinely trained LightGBM model (not mocked) — 207 tests passing, up from 198.
+
+**What this does not yet do:** grading does not feed back into the gate — a graded prediction's outcome doesn't currently influence whether a model stays live or gets rolled back. That's the natural next extension, not built here. Confidence/calibration tracking (Brier score, reliability curves per `docs/06`) also remains unbuilt; `predictions.confidence` is written as `NULL` for now since the LightGBM regressor doesn't yet produce a calibrated interval.
+
 ## The two contradictions that matter most
 
 **1. Daily cadence → monthly cadence.** The docs (`04`, `05`, `06`) are written around a nightly retrain / daily-horizon prediction cycle. Phase 0 measured this directly: a 1-day holding horizon cannot clear realistic transaction costs, confirmed independently four times (v1's own historical output, and three re-runs in this codebase on different data). The horizon that survives costs is **~20 trading bars (roughly monthly)**. Every daily-cadence detail in `04`–`08` should be read as *the wrong cadence*, not an implementation detail to fill in later.
