@@ -1,0 +1,106 @@
+"""Point-in-time universe tests. Survivorship bias is invisible by
+construction -- a broken point-in-time filter and a correct one look
+identical on a single date, differing only across many dates checked
+against history. These tests are written to catch exactly that: a
+symbol delisted partway through the sample must appear in an early
+universe and disappear from a later one, and a symbol that only becomes
+liquid AFTER a given date must never appear in that date's universe no
+matter how liquid it later becomes."""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pandas as pd
+import pytest
+
+from stocksense.data.store import Store
+from stocksense.data.universe_pit import universe_as_of, universe_membership_table
+
+
+@pytest.fixture()
+def tmp_store(tmp_path):
+    store = Store(tmp_path / "test.duckdb")
+    yield store
+    store.close()
+
+
+def _bhavcopy_row(symbol, d, close=100.0, turnover=10_000_000.0, series="EQ"):
+    return {
+        "symbol": symbol, "series": series, "date": d, "open": close, "high": close,
+        "low": close, "close": close, "prev_close": close, "volume": 100000.0,
+        "turnover_inr": turnover, "era": "legacy" if d < date(2024, 7, 8) else "udiff",
+    }
+
+
+def test_delisted_symbol_present_in_early_universe_absent_from_late_universe(tmp_store) -> None:
+    rows = []
+    # DELISTEDCO: liquid throughout 2010-2014, then simply stops trading
+    for month in range(1, 13):
+        rows.append(_bhavcopy_row("DELISTEDCO", date(2010, month, 15)))
+    # STILLLISTED: liquid throughout, including 2020
+    for year in (2010, 2020):
+        rows.append(_bhavcopy_row("STILLLISTED", date(year, 1, 15)))
+
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    universe_2010 = universe_as_of(tmp_store, date(2010, 1, 20), lookback_days=60)
+    universe_2020 = universe_as_of(tmp_store, date(2020, 1, 20), lookback_days=60)
+
+    assert "DELISTEDCO" in universe_2010
+    assert "DELISTEDCO" not in universe_2020  # no data in 2020 -> correctly excluded
+    assert "STILLLISTED" in universe_2010
+    assert "STILLLISTED" in universe_2020
+
+
+def test_universe_as_of_excludes_future_liquidity(tmp_store) -> None:
+    """The property that matters most: a symbol that becomes liquid
+    only AFTER the query date must never appear, no matter how liquid
+    it eventually becomes -- this is the literal definition of
+    survivorship bias, tested directly rather than trusted."""
+    rows = []
+    # FUTURECO: only starts trading (and only becomes liquid) after 2015
+    for month in range(1, 13):
+        rows.append(_bhavcopy_row("FUTURECO", date(2015, month, 15), turnover=50_000_000.0))
+
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    universe_2010 = universe_as_of(tmp_store, date(2010, 6, 15), lookback_days=60)
+    assert "FUTURECO" not in universe_2010  # doesn't exist yet as of 2010 -- must not appear
+
+    universe_2015 = universe_as_of(tmp_store, date(2015, 12, 20), lookback_days=60)
+    assert "FUTURECO" in universe_2015  # now liquid, now correctly included
+
+
+def test_low_turnover_symbol_excluded(tmp_store) -> None:
+    rows = [_bhavcopy_row("THINLYTRADED", date(2020, 1, 15), turnover=100_000.0)]  # below default 5M threshold
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    universe = universe_as_of(tmp_store, date(2020, 1, 20), min_turnover_inr=5_000_000.0, lookback_days=60)
+    assert "THINLYTRADED" not in universe
+
+
+def test_penny_stock_excluded_by_price_floor(tmp_store) -> None:
+    rows = [_bhavcopy_row("PENNYCO", date(2020, 1, 15), close=2.0, turnover=10_000_000.0)]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    universe = universe_as_of(tmp_store, date(2020, 1, 20), min_price_inr=5.0, lookback_days=60)
+    assert "PENNYCO" not in universe
+
+
+def test_non_eq_series_excluded(tmp_store) -> None:
+    rows = [_bhavcopy_row("BONDCO", date(2020, 1, 15), turnover=10_000_000.0, series="GB")]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    universe = universe_as_of(tmp_store, date(2020, 1, 20), lookback_days=60, series="EQ")
+    assert "BONDCO" not in universe
+
+
+def test_universe_membership_table_builds_across_multiple_dates(tmp_store) -> None:
+    rows = [_bhavcopy_row("A", date(2020, 1, d)) for d in (5, 10, 15)]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    table = universe_membership_table(tmp_store, [date(2020, 1, 20)], lookback_days=60)
+    assert len(table) == 1
+    assert table.iloc[0]["symbol"] == "A"
+    assert bool(table.iloc[0]["is_tradeable"]) is True
