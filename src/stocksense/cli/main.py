@@ -37,9 +37,16 @@ from stocksense.statements.parsers import detect_parser
 from stocksense.statements.parsers.base import file_hash
 from stocksense.statements.positions import reconstruct_positions
 from stocksense.statements.report import generate_kundli
+from stocksense.foreman.adversary import red_team, has_blocking_finding
+from stocksense.foreman.assess import propose_goals
+from stocksense.foreman.budget import check_budget
+from stocksense.foreman.executor import execute_goal, record_goal_result
+
+foreman_app = typer.Typer(help="The Foreman: self-building harness")
 
 log = structlog.get_logger(__name__)
 app = typer.Typer(help="StockSense nightly pipeline CLI")
+app.add_typer(foreman_app, name="foreman")
 
 MODEL_TYPE = "cross_sectional_ranker"
 
@@ -290,6 +297,112 @@ def kundli(broker: Optional[str] = typer.Option(None, help="Filter to one broker
     if result["agent_status"] != "ok":
         typer.echo(f"(agent status: {result['agent_status']})")
     typer.echo("\n" + result["narrative"])
+
+
+@foreman_app.command("run")
+def foreman_run(
+    goal: str = typer.Argument(..., help="Plain-language goal, e.g. 'add a determinism test for the new parser'"),
+    max_attempts: int = typer.Option(3, help="Max execution attempts before marking the goal blocked"),
+) -> None:
+    """Plan, execute, verify, and route (auto-merge or PR) a single goal.
+    On-demand: runs once for this goal and exits. Never touches
+    protected paths (evaluation/gate.py, walkforward.py, cost_model.py,
+    leakage/determinism/gate tests, preregistration files) -- those
+    always route to a human-reviewed PR regardless of how green
+    everything else is."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+
+    budget_status = check_budget(store)
+    if not budget_status.within_budget:
+        typer.echo(f"Blocked by daily budget: {budget_status.reason}")
+        store.close()
+        raise typer.Exit(code=1)
+
+    goal_id = None
+    outcome = execute_goal(goal, store, max_attempts=max_attempts)
+
+    if outcome.run_result is not None:
+        changed = [
+            v.get("data", {}).get("path")
+            for v in outcome.run_result.context.values()
+            if isinstance(v, dict) and v.get("tool") == "write_patch"
+        ]
+        changed = [c for c in changed if c]
+        if changed:
+            findings = red_team(changed)
+            if findings:
+                typer.echo("\n=== ADVERSARY FINDINGS ===")
+                for f in findings:
+                    typer.echo(f"  [{f.severity}] {f.check} in {f.file}: {f.detail}")
+                if has_blocking_finding(findings) and outcome.status == "merged":
+                    typer.echo("Blocking finding on an otherwise-merged result -- downgrading to blocked. Review required.")
+                    outcome = type(outcome)(outcome.goal_id, "blocked", "adversary found a blocking issue post-merge-check", outcome.branch, outcome.verification, outcome.run_result)
+
+    record_goal_result(store, outcome)
+    store.close()
+
+    typer.echo(f"\n=== FOREMAN: {outcome.status.upper()} ===")
+    typer.echo(f"goal_id: {outcome.goal_id}")
+    typer.echo(f"reason: {outcome.reason}")
+    if outcome.branch:
+        typer.echo(f"branch: {outcome.branch}")
+    if outcome.verification:
+        for g in outcome.verification.gates:
+            typer.echo(f"  [{'PASS' if g.passed else 'FAIL'}] {g.name}")
+
+
+@foreman_app.command("assess")
+def foreman_assess() -> None:
+    """Self-assessment only: read project state, propose ranked goals,
+    execute nothing. Use this to see what the Foreman WOULD work on."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    goals = propose_goals(store)
+    store.close()
+
+    if not goals:
+        typer.echo("No goals proposed (or the agent response could not be parsed).")
+        return
+
+    typer.echo("=== PROPOSED GOALS ===")
+    for g in sorted(goals, key=lambda x: x.get("priority", 99)):
+        typer.echo(f"\n[{g.get('priority', '?')}] {g.get('goal')}")
+        typer.echo(f"    reason: {g.get('reason', '(none given)')}")
+
+
+@foreman_app.command("status")
+def foreman_status() -> None:
+    """Recent goals, their outcomes, and today's budget usage."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    goals = store.read_goals()
+    from datetime import date
+    budget = store.get_or_create_budget(date.today())
+    store.close()
+
+    typer.echo(f"Today's budget: {budget['invocations']} invocations, {budget['goals_completed']} goals completed")
+    if goals.empty:
+        typer.echo("No goals recorded yet.")
+        return
+    typer.echo("\n=== RECENT GOALS ===")
+    for _, row in goals.head(20).iterrows():
+        typer.echo(f"  [{row['status']:>10}] {row['prompt'][:70]}")
+
+
+@foreman_app.command("ledger")
+def foreman_ledger(goal_id: Optional[str] = typer.Option(None, help="Filter to one goal")) -> None:
+    """The build ledger: every tool invocation the Foreman has made."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    ledger = store.read_ledger(goal_id=goal_id)
+    store.close()
+
+    if ledger.empty:
+        typer.echo("Ledger is empty.")
+        return
+    for _, row in ledger.iterrows():
+        typer.echo(f"  [{row['verdict']:>20}] {row['tool']:>15} — {row['task_name']}")
 
 
 if __name__ == "__main__":
