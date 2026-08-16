@@ -22,6 +22,7 @@ import structlog
 
 from stocksense.core.config import get_settings
 from stocksense.data.store import Store
+from stocksense.data.validate import quarantine_symbols
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
 from stocksense.evaluation.walkforward import make_folds
 from stocksense.features.engine import build_features, feature_columns
@@ -37,6 +38,14 @@ def main() -> None:
     candles = store.read_candles()
     store.close()
     log.info("loaded_candles", rows=len(candles), symbols=candles["symbol"].nunique())
+
+    # AUDIT FIX: this script was never updated with the adjustment-anomaly
+    # quarantine (data/validate.py) that cli/main.py received after the
+    # ADANIENT data bug was found. Re-running this sweep without it would
+    # silently resurrect the exact contamination Run 3 fixed.
+    candles, quarantined = quarantine_symbols(candles)
+    if quarantined:
+        log.warning("quarantined_symbols_with_adjustment_anomalies", symbols=quarantined)
 
     feats = build_features(candles)
     fcols = feature_columns(feats)

@@ -1,17 +1,88 @@
 # Phase 0 Verdict
 
-**Date:** 2026-08-09 (written three times in one session — see revision history below)
+**Date:** 2026-08-09, revised 2026-08-16 (Run 4 — see revision history below)
 **Question:** does any (horizon × selectivity × cost) configuration produce net-positive, fold-stable, out-of-sample alpha on the Phase 0 universe?
 
-## Verdict: **GO on architecture and cadence. Alpha magnitude not yet trustworthy — survivorship bias measured directly and found large (82% of historically prominent names excluded, concentrated in real failure cases).** The monthly-horizon signal is real, survives a genuine data-quality correction, and passes best-trade-removal and parameter-perturbation stress tests — but on a universe now proven to be missing exactly the outcomes that would test it hardest. See "Survivorship bias: measured, not estimated" below.
+## Verdict (Run 4, current): **GATE PASS on pre-registered criteria, at a corrected and lower magnitude than Run 3. Architecture: GO. Alpha: real but thin, and now quoted with a mandatory survivorship haircut band (measured, not estimated) rather than a point estimate.** Full detail in "Run 4" below; it supersedes every prior run's headline numbers.
 
-This document has three revisions, each triggered by acting on the previous one's own stated next step rather than stopping at a comfortable answer:
+This document has four revisions, each triggered by acting on the previous one's own stated next step rather than stopping at a comfortable answer:
 
 - **Run 1** (2010–2026, 98 symbols): conditional result — real signal, too few folds (7–9) to trust the mean over the median. Named its own fix: extend history to 2000.
 - **Run 2** (2000–2026, same 98 symbols): fix applied, folds rose to 11, best-trade-removal now passes, verdict moved to GO. Break-even cost 171bps.
-- **Run 3** (this revision): running the Monte Carlo and parameter-perturbation stress tests surfaced a **real data-quality bug** — a yfinance adjustment-factor discontinuity — that had inflated Run 2's best fold. Found, fixed, and the sweep re-run on corrected data. **The GO verdict survives, at a lower and more trustworthy magnitude.** This section is the authoritative one; Run 2's headline numbers are superseded and kept below only for the record of how the bug was found.
+- **Run 3**: Monte Carlo and parameter-perturbation stress tests surfaced a **real data-quality bug** — a yfinance adjustment-factor discontinuity — that had inflated Run 2's best fold. Found, fixed, sweep re-run on corrected data.
+- **Run 4** (this revision): an audit of the evaluation harness itself found the embargo was ~13× over-conservative (purging the full feature lookback instead of just the label horizon), halving the achievable fold count, and found the gate's own pass thresholds had been chosen after seeing the results they were judging. Both fixed — embargo corrected, gate criteria pre-registered in `research/gate_criteria_preregistration.md` *before* this re-run — and the sweep + a survivorship-bound Monte Carlo run on the corrected methodology. **This section is now authoritative.**
 
-All three are kept in full. The reasoning that survives contact with adversarial testing is the actual result, not the first number that looked good.
+All four are kept in full. The reasoning that survives contact with adversarial testing is the actual result, not the first number that looked good.
+
+---
+
+## Run 4: corrected embargo, pre-registered gate, survivorship bound
+
+### What changed in methodology (and why it matters more than any single number)
+
+1. **Embargo fix** (`evaluation/walkforward.py`): purge now covers only the label horizon plus a small serial-correlation buffer (10 bars), not the full 252-bar feature lookback. Rationale: a test-period feature legitimately depending on pre-test history is not leakage — that is how the model runs live. Leakage is future-into-past, not past-into-present. Effect: **h=20 folds rose from 11 to 22; h=1 folds rose from 22 to 191.**
+2. **Gate criteria pre-registered** (`research/gate_criteria_preregistration.md`, committed before this run) rather than chosen after seeing results: min 10 folds, mean net alpha > 0, one-sided exact binomial hit-rate p ≤ 0.10, mean after dropping the best 15% of folds still > 0, and strict improvement over the incumbent. These replace the old `min_pct_folds_positive=0.6` / `n_best_folds_to_drop=2`, which had been fitted to Run 2/3's own results.
+3. **Weight drift modeled** (`evaluation/backtest.py`): portfolio weights now carry forward drifted by realized returns each period rather than resetting to the target every rebalance, so turnover — and therefore cost — reflects what actually happens to a held position between rebalances.
+
+### Headline result: h=20, top_n=20, 25bps round-trip cost (winning configuration, unchanged from Run 3)
+
+| Metric | Run 3 (11 folds, over-embargoed) | **Run 4 (22 folds, corrected)** |
+|---|---|---|
+| Folds | 11 | **22** |
+| Mean net alpha / rebalance | +0.486% | **+0.394%** |
+| % folds net-positive | 9/11 (82%) | **17/22 (77%)** |
+| One-sided binomial p (hit rate vs. 50%) | not computed this way in Run 3 | **0.0085** |
+| Mean alpha after dropping best 15% of folds (3 folds) | +0.277% (fixed count of 2) | **+0.313%** (3 folds, per pre-registered fraction rule) |
+| Break-even cost | 117 bps | **101 bps** |
+| Mean IC | — | 0.032 |
+
+The corrected embargo pulls the mean down (more folds means more of the ordinary, less-spectacular periods are counted, not just the strong ones a smaller sample happened to sample). This is the expected and correct direction for a bias fix to move a number — it is not a sign anything is newly wrong.
+
+### Pre-registered gate evaluation — PASS
+
+Evaluated exactly as `gate_criteria_preregistration.md` specifies, with **no threshold adjustment**:
+
+| Criterion | Threshold | Run 4 result | Pass? |
+|---|---|---|---|
+| `min_folds_required` | ≥ 10 | 22 | ✅ |
+| `min_mean_alpha_net` | > 0.0 | +0.394% | ✅ |
+| `hit_rate_significance_alpha` | one-sided exact binomial p ≤ 0.10 | p = 0.0085 (17/22 positive) | ✅ |
+| `best_fold_drop_fraction` | mean after dropping best 15% (3 of 22 folds) still > 0 | +0.313% | ✅ |
+
+**All four criteria pass.** Because these thresholds were committed before this run, this is evidence rather than a foregone conclusion — the honest counterfactual (a FAIL) was a real possibility going in, and the pre-registration document says explicitly what would have happened if it occurred: stop and re-research the signal, not adjust the thresholds.
+
+### Survivorship bound (Phase 2B): the edge survives realistic delisting rates
+
+`research/survivorship_bound.py` injects synthetic delisting shocks (weighted toward weaker-scoring held names) into the corrected h=20/top_n=20 backtest across 22 folds, 200 Monte Carlo draws per shock rate:
+
+| Annual shock rate | Mean net alpha | p5 | % MC draws positive |
+|---|---|---|---|
+| 0% | +0.394% | +0.394% | 100% |
+| 1% | +0.333% | +0.281% | 100% |
+| 2% | +0.277% | +0.207% | 100% |
+| 3% | +0.210% | +0.113% | 100% |
+| 5% | +0.085% | −0.030% | 90.5% |
+| 8% | −0.094% | −0.243% | 15.5% |
+| 12% | −0.362% | −0.532% | 0% |
+| 25% | −1.320% | −1.571% | 0% |
+
+**Break-even annual delisting rate: ~6.4%.** Against the directly measured reality (`survivorship_check.py`: 238 genuinely delisted names out of a 526-name union of historically-top-150 traded symbols over 23 years — a crude hazard on the order of 1–3%/year for the liquid segment this strategy actually trades), the edge's break-even sits roughly 2–6× above the realistic delisting rate.
+
+**Resolution of the Phase 2C gate this document previously left open:** survivorship bias is a real, measured haircut (at a 3%/year assumed rate, alpha loses ~47% of its magnitude: +0.394% → +0.210%) but not fatal at realistic rates. Full point-in-time bhavcopy ingestion (Phase 2C) is downgraded from "blocking, must happen before capital" to "next research investment, but not gating." The p5 already crosses zero at a 5% shock rate, so the margin is real but thin — any forward-facing alpha figure should be quoted as a **haircut band (roughly +0.21% to +0.39% depending on assumed delisting rate), not a point estimate.**
+
+### The intraday cost-model correction
+
+An earlier argument against building an intraday track used **delivery** trade economics (STT 0.1% on both the buy and sell leg) to claim intraday couldn't survive costs. **This was wrong.** Indian intraday (MIS) trades attract STT of only 0.025%, charged on the sell leg only — intraday is *cheaper* per round-trip than delivery, not more expensive. This correction does not change the daily-bar h=1 finding below (that finding is about signal, not cost), but it does mean cost was never the right reason to avoid intraday, and removes intraday from the "gated behind economics" list in the development plan.
+
+### h=1 (same-day) still has no signal — now measured on 191 folds, not 22
+
+| Metric | Run 3 (22 folds) | **Run 4 (191 folds)** |
+|---|---|---|
+| Gross alpha | ~0.02% (imprecise) | **+0.0440% / rebalance** |
+| Break-even cost | — | **7.3 bps** |
+| Net alpha at 25bps realistic cost | negative | **negative** |
+
+Five independent confirmations now (v1, Run 1, Run 2, Run 3, Run 4) that same-day daily-bar features carry essentially no exploitable signal — not "signal that doesn't clear costs," but signal indistinguishable from noise (gross alpha ~4bps against a 7bps break-even). **This is the reason the intraday product requirement cannot reuse the daily research pipeline.** Daily OHLCV features computed once per day have nothing to say about a same-day round trip; intraday needs its own minute-resolution features (opening range, VWAP deviation, first-hour momentum, relative volume) and its own same-day label. That is scoped as its own track below, not blocked by this finding — the finding just rules out one specific shortcut (reusing the h=1 daily-bar model as-is).
 
 ---
 
@@ -144,12 +215,16 @@ Being direct about the remaining gap between this result and something investabl
 5. **Fold 9's loss is unexplained** (unaffected by the data-bug fix — it was already clean). Worth understanding before this goes further — if it corresponds to a specific regime (2018 IL&FS stress, or similar), that is a usable finding about when the strategy fails, in the same spirit as the F&O contradiction checks planned for the Investigator layer.
 6. **Only 4 of 98 symbols were checked and found bad by one detector** (adjustment-factor discontinuity). This detector catches one specific failure mode; it is not a general data-quality guarantee, and the same skepticism that found this bug should be applied again before capital is committed.
 
-## Decision
+## Decision (Run 4, current)
 
-**GO on architecture, engineering, and cadence. NOT YET on the specific alpha numbers.** These are two different claims and this document has been sloppy about keeping them apart until this revision.
+**GO on architecture, engineering, and cadence — reaffirmed under a corrected, pre-registered methodology, not just the original one.** **Alpha magnitude: real, thin, and now quantified as a haircut band rather than a single trustworthy number.**
 
-**Architecture: GO.** Proceed to Phase 1 build-out — nightly pipeline, model registry, gate, evaluator formalization — built around a **monthly rebalance horizon (h≈20 trading bars)**, not the daily cadence originally implied by v1's design. The pipeline, the gate mechanism, and the stress-testing discipline all demonstrably work: they were exercised on real data, found a real data-quality bug mid-session, and the process for handling that (fix, re-measure, report honestly) is itself the validated output of this phase. That does not depend on the survivorship finding below.
+**Architecture: GO.** The monthly pipeline (h≈20 trading bars), the gate mechanism, and the stress-testing discipline all held up under a harder test than Run 1–3 ran: the embargo was found to be miscalibrated and fixed, the gate criteria were pre-registered before this exact run and then evaluated against it without adjustment, and both passed. That is a stronger form of "GO" than any prior run produced, because this time the criteria could have failed and didn't.
 
-**Alpha magnitude: not yet trustworthy.** The corrected Run 3 figures — mean net alpha +0.49%/rebalance, 9/11 folds positive, break-even cost 117bps against a realistic 32bps cost — were the authoritative numbers *until* the survivorship measurement above, which shows the 98-symbol universe systematically excludes 238 names concentrated in real failure outcomes (DHFL, EDUCOMP, BHUSANSTL, and similar). The direction of the bias is unambiguous — a point-in-time universe would perform worse than this — the magnitude is not yet known. It could still clear costs. It could not. That is now the specific, scoped, unblocked next research task: full daily bhavcopy ingestion (confirmed feasible, ~6,500 files) and a re-run of this exact sweep against genuine point-in-time universe membership.
+**Alpha magnitude: real, gated, and haircut-adjusted — not yet a single trustworthy point estimate.** The pre-registered gate **PASSED** on 22 folds at h=20/top_n=20/25bps: mean net alpha +0.394%, hit rate significant at p=0.0085, robust to dropping the best 15% of folds (+0.313%), break-even 101bps against a realistic ~32bps cost. The survivorship-bound simulation shows this edge survives realistic annual delisting rates (measured at 1–3%/year; break-even at 6.4%) but should be quoted as a **band, roughly +0.21% to +0.39% depending on assumed delisting rate**, not a point estimate — and the p5 of that band touches zero at a 5% shock rate, so the margin, while real, is not large.
 
-**No capital, real or paper, until that re-run happens.** This is not a new caution added for form — it is the direct, load-bearing consequence of a measurement made in this same session.
+**Full point-in-time bhavcopy ingestion (Phase 2C) is downgraded from blocking to next-in-priority.** The survivorship bound resolves the gate this document previously left open: the edge does not require a perfect point-in-time universe to clear costs at realistic delisting rates. It remains the correct next investment to tighten the haircut band, just not a precondition for further work.
+
+**No capital, real or paper, on the monthly track until the reconcile loop (prediction ledger + grading + calibration) exists** — that is Phase 3 of the development plan and is unbuilt; a backtest, however well-audited, is not a live decision system.
+
+**Intraday track: now open, on its own foundation, not blocked by any of the above.** The user's hard product requirement (buy morning, exit same afternoon) cannot be served by this daily-bar research — h=1 gross alpha is ~4bps against a 7.3bps break-even, i.e. no signal, measured now on 191 folds. The earlier cost-based argument against intraday used the wrong cost model (delivery STT, not MIS) and is retracted; intraday is if anything cheaper per round-trip than delivery. The correct next step is a dedicated intraday research track: Upstox minute-bar ingestion (2022+), intraday-specific features, an MIS cost model, and a same-day label — built and validated with the same discipline (leakage tests, pre-registered gate, adversarial stress) that this track just demonstrated works.

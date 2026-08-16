@@ -21,6 +21,7 @@ import structlog
 
 from stocksense.core.config import get_settings
 from stocksense.data.store import Store
+from stocksense.data.validate import quarantine_symbols
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
 from stocksense.evaluation.walkforward import make_folds
 from stocksense.features.engine import build_features, feature_columns
@@ -40,6 +41,7 @@ def load_scored_folds(horizon: int, ranker_config: RankerConfig):
     store = Store(settings.duckdb_path)
     candles = store.read_candles()
     store.close()
+    candles, _ = quarantine_symbols(candles)  # AUDIT FIX: this script never got the ADANIENT-bug quarantine
 
     feats = build_features(candles)
     fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
