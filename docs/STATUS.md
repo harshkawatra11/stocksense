@@ -16,7 +16,31 @@ A second build phase started after Phase 0/1's monthly-horizon research conclude
 
 **A real bug was found and fixed during this build**, the same discipline that caught ADANIENT: `Store.write_trades`/`write_positions`/etc. used `INSERT ... SELECT *`, which binds by column **position**, not name. Once `statement_id` was appended to a DataFrame after parsing (out of DDL order), trade times silently landed in the trade_date column instead of erroring. Fixed by binding all `write_*` methods to explicit column lists; a regression test (`test_cli_statements.py`) guards it end-to-end.
 
-**Not yet built** (remaining plan phases, unstarted): the multi-source NSE/yfinance data spine and point-in-time universe (Phase 1B), the 14-skill suite (Phase 2 — only the agent bridge exists, no `skills/*.md` files yet), the RAG agent (Phase 3), the portfolio optimizer (Phase 4), the autonomous harness loops incl. the reconcile loop that finally writes `predictions` (Phase 5 — CRITICAL-1 from the original audit is therefore still open), the intraday research track (Phase 6), and any UI beyond the CLI (Phase 7).
+**Not yet built** (remaining plan phases at that point, unstarted): the multi-source NSE/yfinance data spine and point-in-time universe (Phase 1B), the 14-skill suite (Phase 2 — only the agent bridge exists, no `skills/*.md` files yet), the RAG agent (Phase 3), the portfolio optimizer (Phase 4), the autonomous harness loops incl. the reconcile loop that finally writes `predictions` (Phase 5 — CRITICAL-1 from the original audit is therefore still open), the intraday research track (Phase 6), and any UI beyond the CLI (Phase 7).
+
+## The Foreman: self-building harness (2026-08-16, same day, second build phase)
+
+The plan pivoted from "build the remaining phases by hand" to "build a harness that builds them" — see `C:\Users\harsh\.claude\plans\indexed-discovering-summit.md`. All prior phases (data spine, skills, RAG, optimizer, loops, intraday, the Electron desktop app) become the Foreman's **backlog** rather than a manual sequence.
+
+**Built and tested (188 tests passing, up from 103):**
+
+- **CI** — `.github/workflows/verify.yml`, the independent referee. Runs the full suite plus the leakage and determinism suites as separately-named steps on every push/PR, and checks `.env` never entered history. The Foreman may only self-merge on a **green remote** run (via `gh run list`), never its own local test pass.
+- **`foreman/policy.py`** — the single most important file in this build. A literal allowlist of protected paths (`evaluation/gate.py`, `walkforward.py`, `cost_model.py`, the leakage/determinism/gate tests, any preregistration doc, and the policy file and CI workflow themselves). Touching one is a routing decision — the goal branches to a human-reviewed PR and halts, never a silent write.
+- **`foreman/tools/`** — a closed, typed tool registry (`base.py`) so a hallucinated tool name fails fast in the executor. `code.py` (read/search/write/test/lint) and `git_tools.py` (branch/commit/push/PR/CI-check) are the first two groups; `write_patch` is the sole write path and checks `policy` before touching disk.
+- **`foreman/planner.py`** — Claude decomposes a goal into a plan, validated against the tool registry and converted into a `harness.Graph` (reusing the Phase 0 graph/runner rather than a second execution engine).
+- **`foreman/executor.py`** — runs the plan, routes on the verifier's verdict: protected path → PR always; unprotected + fully green including remote CI → auto-merge; anything else → `blocked` with a written reason, never retried past `max_attempts`.
+- **`foreman/verifier.py`** — the sequential gate chain (protected-paths → local tests → leakage → determinism → remote CI → pre-registered gate for research goals), ordered so expensive remote checks never run on a result that already failed something cheap.
+- **`foreman/adversary.py`** — a red-team pass that tries to falsify a result before it's accepted: assertionless tests, swallowed exceptions, tautological assertions, and (for research goals) seed-sensitivity of the headline number. A blocking finding downgrades an otherwise-merged result.
+- **`foreman/assess.py`** — reads real signals (test count, which backlog markers exist, recent goal outcomes, protected-violation count) and asks Claude to propose ranked goals with reasons — the self-assessment that makes this "build itself" rather than execute a fixed list.
+- **`foreman/budget.py`** — daily invocation cap + a cooperative kill switch. Cadence is on-demand per the user's choice; scheduling is future work, not built now.
+- CLI: `stocksense foreman run "<goal>"`, `foreman assess`, `foreman status`, `foreman ledger`.
+
+**Bugs found and fixed by this build's own tests, all real, none cosmetic:**
+1. `policy._normalize` used `str.lstrip("./")`, which strips arbitrary leading `.`/`/` *characters*, not a literal prefix — silently ate the dot off `.github/workflows/...` and made the CI-workflow protection pattern never match. The one test written specifically to guard the CI workflow's own protection caught it before anything shipped.
+2. `foreman/tools/__init__.py` only re-exported `base`, so importing `stocksense.foreman.tools` without also importing `.code`/`.git_tools` left the registry empty — a planner-only test file failed six ways until the package `__init__` was made to import every tool module explicitly for its registration side effects.
+3. `adversary.check_assertionless_tests` checked for the literal substring `"pytest.raises"` inside `ast.dump()` output, which renders attribute access as nested `Attribute(...)` nodes, not dotted text — so it never matched and every legitimate `pytest.raises`-based test was misflagged as assertionless. Fixed with `ast.unparse` to get real source text. Notable because this bug was *in the module whose entire purpose is catching bugs like this*.
+
+**Not yet built:** the loop scheduler (on-demand only for now), a real invocation of `foreman run` against a live goal (only exercised in this session via mocked git/network calls — no real branch, commit, push, or PR has been created yet), and the backlog items themselves (Electron app, reconcile loop, data spine, skills, RAG, optimizer, intraday track) — those are queued as the Foreman's first real work, not done.
 
 ## The two contradictions that matter most
 
