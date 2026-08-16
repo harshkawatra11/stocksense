@@ -98,6 +98,16 @@ Also fixed: `pyyaml` was only present transitively (via `huggingface_hub`/`trans
 
 282 tests passing, up from 244.
 
+## RAG agent (2026-08-16, same day, fifth backlog item)
+
+`stocksense/rag/` — hybrid retrieval over docs/research/skills, verified working end-to-end. `index.py` (paragraph-aware chunking, content-hashed idempotent writes into the already-migrated `rag_documents`/`rag_chunks` tables), `embed.py` (optional Ollama embedding layer, fails soft), `retrieve.py` (BM25 via DuckDB `fts` + optional vector via `vss`, fused by reciprocal rank fusion), `agent.py` (`ask()` — retrieve, then narrate with mandatory citations, same compute/narrate discipline as everywhere else).
+
+**FTS-only degraded mode is real, not aspirational** — verified directly in this environment, which has Ollama installed and running but only `qwen2.5:3b` pulled (a chat model, not embedding-capable). `embeddings_available()` correctly reports `False`, and `stocksense index-corpus` / `stocksense ask` both work end-to-end on FTS alone: indexing all 21 docs/research/skills files and asking "what is the pre-registered gate criteria for h=20?" correctly surfaced `research/phase0_verdict.md` and `skills/backtest-rigor/SKILL.md` as the top matches.
+
+**A real performance bug found while testing this end-to-end**, not caught by unit tests alone: each `embed_text` call costs a genuine ~2s Ollama round trip *even to determine "unavailable"* (Ollama itself takes that long to respond "model not found," it isn't a fast connection-refused). The original design called `embed_text` once per chunk with no caching, so indexing the corpus's 21 files timed out past 120s. Fixed with an `embed_chunks: bool` parameter on `index_document` — `stocksense index-corpus` now checks `embeddings_available()` **once** before the loop and skips the call entirely for every chunk when it's already known to be unavailable. Also fixed along the way: an `index.py` refactor had accidentally renamed its embedder import in a way that broke test monkeypatching silently — the affected test still passed, but was secretly exercising FTS alone instead of the fusion path it claimed to test. Caught by tracing through *why* it passed, not by the test failing.
+
+CLI: `stocksense index-corpus`, `stocksense ask "<question>"`. 15 new tests (chunking, idempotent re-indexing, FTS retrieval, hybrid fusion with a stubbed embedder, citation-bearing answers) — 302 tests passing, up from 282.
+
 ## The two contradictions that matter most
 
 **1. Daily cadence → monthly cadence.** The docs (`04`, `05`, `06`) are written around a nightly retrain / daily-horizon prediction cycle. Phase 0 measured this directly: a 1-day holding horizon cannot clear realistic transaction costs, confirmed independently four times (v1's own historical output, and three re-runs in this codebase on different data). The horizon that survives costs is **~20 trading bars (roughly monthly)**. Every daily-cadence detail in `04`–`08` should be read as *the wrong cadence*, not an implementation detail to fill in later.

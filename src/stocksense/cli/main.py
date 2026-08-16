@@ -22,7 +22,7 @@ import structlog
 import typer
 
 from stocksense.core.calendar import trading_days_index
-from stocksense.core.config import get_settings
+from stocksense.core.config import REPO_ROOT, get_settings
 from stocksense.data.store import Store
 from stocksense.data.validate import quarantine_symbols
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
@@ -44,6 +44,9 @@ from stocksense.foreman.executor import execute_goal, record_goal_result
 from stocksense.harness.loops import build_reconcile_graph, grade_matured_predictions, record_predictions
 from stocksense.harness.runner import run_graph
 from stocksense.optimizer.tax import compute_tax_liability
+from stocksense.rag.agent import ask as rag_ask
+from stocksense.rag.embed import embeddings_available
+from stocksense.rag.index import index_document, rebuild_fts_index
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
 
@@ -337,6 +340,56 @@ def grade_cmd(horizon: int = typer.Option(20, help="Prediction horizon in tradin
     if result.n_graded:
         typer.echo(f"Direction correct: {result.n_correct_direction}/{result.n_graded} ({result.n_correct_direction / result.n_graded:.0%})")
         typer.echo(f"Mean absolute error: {result.mean_abs_error:.5f}")
+
+
+@app.command("index-corpus")
+def index_corpus_cmd() -> None:
+    """Index docs/, research/, and skills/ into the RAG corpus. Safe to
+    re-run any time -- content-hashed, so unchanged files are a no-op
+    and only genuinely changed ones get re-chunked."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+
+    # Check embedding availability ONCE, not once per chunk -- each
+    # attempt costs a real ~2s Ollama round trip even to determine
+    # "unavailable," which turns indexing dozens of files into minutes
+    # for no benefit if the answer is the same for every one of them.
+    embed_ok = embeddings_available()
+    typer.echo(f"Embeddings {'available' if embed_ok else 'unavailable (FTS-only mode)'}.")
+
+    n_indexed = 0
+    n_skipped = 0
+    for pattern, source_type in [("docs/*.md", "docs"), ("research/*.md", "research"), ("skills/*/SKILL.md", "skill")]:
+        for path in sorted(REPO_ROOT.glob(pattern)):
+            content = path.read_text(encoding="utf-8", errors="replace")
+            result = index_document(
+                store, source_type, str(path.relative_to(REPO_ROOT)).replace("\\", "/"), path.stem, content,
+                embed_chunks=embed_ok,
+            )
+            if result["reindexed"]:
+                n_indexed += 1
+            else:
+                n_skipped += 1
+
+    rebuild_fts_index(store)
+    store.close()
+    typer.echo(f"Indexed {n_indexed} document(s), {n_skipped} unchanged (skipped).")
+
+
+@app.command("ask")
+def ask_cmd(question: str = typer.Argument(..., help="Question to ask the RAG agent")) -> None:
+    """Query the RAG corpus. Answers only from indexed content, with
+    citations -- run `index-corpus` first if the corpus is empty."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    result = rag_ask(question, store)
+    store.close()
+
+    typer.echo(f"\n{result['answer']}\n")
+    if result["citations"]:
+        typer.echo("Sources:")
+        for c in result["citations"]:
+            typer.echo(f"  [{c['index']}] {c['title']} ({c['source_ref']})")
 
 
 @app.command("tax-summary")
