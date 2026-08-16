@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from stocksense.execution.cost_model import (
     apply_turnover_cost,
+    compute_charges,
     indian_delivery_cost_bps,
     realistic_round_trip_bps,
 )
@@ -33,3 +34,60 @@ def test_turnover_cost_scales_linearly() -> None:
 
 def test_zero_turnover_zero_cost() -> None:
     assert apply_turnover_cost(0.0, 25.0) == 0.0
+
+
+# ---- compute_charges: hand-computed against a Rs100,000 position,
+# matching research/phase0_verdict.md's intraday-cost-correction table ----
+
+def test_intraday_round_trip_matches_hand_computation() -> None:
+    buy = compute_charges("equity_intraday", "buy", quantity=1000, price=100.0)
+    sell = compute_charges("equity_intraday", "sell", quantity=1000, price=100.0)
+    # hand-computed: brokerage 20+20=40, STT 0.025%*100000=25 (sell only),
+    # exchange 0.00307%*100000*2=6.14, SEBI 10/cr*100000*2=0.20,
+    # stamp 0.003%*100000=3 (buy only), GST 18%*(40+6.14+0.20)=8.3448
+    assert abs(buy.brokerage + sell.brokerage - 40.0) < 0.01
+    assert abs(buy.stt + sell.stt - 25.0) < 0.01
+    assert abs(buy.stamp_duty + sell.stamp_duty - 3.0) < 0.01
+    total = buy.total_charges + sell.total_charges
+    assert abs(total - 82.68) < 0.05
+
+
+def test_delivery_round_trip_matches_hand_computation() -> None:
+    buy = compute_charges("equity_delivery", "buy", quantity=1000, price=100.0)
+    sell = compute_charges("equity_delivery", "sell", quantity=1000, price=100.0)
+    # hand-computed: brokerage 0, STT 0.1%*100000*2=200 (both legs),
+    # stamp 0.015%*100000=15 (buy only)
+    assert buy.brokerage == 0.0 and sell.brokerage == 0.0
+    assert abs(buy.stt + sell.stt - 200.0) < 0.01
+    assert abs(buy.stamp_duty + sell.stamp_duty - 15.0) < 0.01
+    total = buy.total_charges + sell.total_charges
+    assert abs(total - 222.48) < 0.05
+
+
+def test_intraday_cheaper_than_delivery() -> None:
+    """The retracted claim this project got wrong once: intraday MIS STT
+    is 0.025% sell-side only, so intraday is CHEAPER than delivery's 0.1%
+    both-legs STT, not more expensive. See research/phase0_verdict.md."""
+    i_buy = compute_charges("equity_intraday", "buy", quantity=1000, price=100.0)
+    i_sell = compute_charges("equity_intraday", "sell", quantity=1000, price=100.0)
+    d_buy = compute_charges("equity_delivery", "buy", quantity=1000, price=100.0)
+    d_sell = compute_charges("equity_delivery", "sell", quantity=1000, price=100.0)
+    assert (i_buy.total_charges + i_sell.total_charges) < (d_buy.total_charges + d_sell.total_charges)
+
+
+def test_stt_only_on_sell_leg_for_intraday_and_fno() -> None:
+    for segment in ("equity_intraday", "fno_futures", "fno_options"):
+        buy = compute_charges(segment, "buy", quantity=100, price=1000.0)
+        assert buy.stt == 0.0, f"{segment} buy leg should have zero STT"
+
+
+def test_stamp_duty_only_on_buy_leg() -> None:
+    for segment in ("equity_delivery", "equity_intraday"):
+        sell = compute_charges(segment, "sell", quantity=100, price=1000.0)
+        assert sell.stamp_duty == 0.0, f"{segment} sell leg should have zero stamp duty"
+
+
+def test_unknown_segment_raises() -> None:
+    import pytest
+    with pytest.raises(ValueError):
+        compute_charges("bogus_segment", "buy", quantity=100, price=1000.0)

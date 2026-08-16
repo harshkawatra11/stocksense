@@ -88,6 +88,91 @@ def realistic_round_trip_bps(slippage_bps: float = 5.0) -> float:
     return buy_total + sell_total
 
 
+@dataclass(frozen=True)
+class Charges:
+    """Exact per-trade charge breakdown in rupees, not bps — this is
+    applied to real fills (docs/12-statement-forensics.md), so the caller
+    needs absolute amounts to compare against a statement's own totals."""
+
+    brokerage: float
+    stt: float
+    exchange_txn: float
+    sebi_fee: float
+    stamp_duty: float
+    gst: float
+
+    @property
+    def total_charges(self) -> float:
+        return self.brokerage + self.stt + self.exchange_txn + self.sebi_fee + self.stamp_duty + self.gst
+
+
+# Verified 2026-08-16 against Zerodha's published charge sheet (the
+# lowest-common-denominator discount broker rate; see
+# research/phase0_verdict.md's intraday-cost-correction section for the
+# ₹100,000-position worked example this table reproduces exactly).
+_EXCHANGE_TXN_RATE = {"NSE": 0.0000307, "BSE": 0.0000375}  # of trade value, both legs
+_SEBI_FEE_RATE = 10.0 / 1e7  # ₹10 per crore of trade value, both legs
+_GST_RATE = 0.18
+
+
+def compute_charges(
+    segment: str,       # 'equity_delivery' | 'equity_intraday' | 'fno_futures' | 'fno_options'
+    side: str,           # 'buy' | 'sell'
+    quantity: float,
+    price: float,
+    exchange: str = "NSE",
+    brokerage_flat: float = 20.0,   # ₹20/order flat, or 0.03% whichever lower (discount broker default)
+    brokerage_pct: float = 0.0003,
+) -> Charges:
+    """Exact Indian equity/F&O charge stack for one trade leg, in rupees.
+
+    STT is the load-bearing term this whole cost correction turns on:
+    - equity_delivery: 0.1% (10 bps) on BOTH buy and sell legs
+    - equity_intraday: 0.025% (2.5 bps), SELL LEG ONLY
+    - fno_futures: 0.0125% (1.25 bps), SELL LEG ONLY, on trade value
+    - fno_options: 0.0625% (6.25 bps), SELL LEG ONLY, on premium value
+
+    Stamp duty is charged on the BUY leg only, at 0.015% (delivery) or
+    0.003% (intraday/F&O) — this is a state-government levy, not brokerage.
+
+    GST is 18% on (brokerage + exchange transaction charge + SEBI fee),
+    not on STT or stamp duty (those are already government levies).
+    """
+    value = quantity * price
+
+    if segment == "equity_delivery":
+        brokerage = 0.0  # most discount brokers, incl. Upstox/Zerodha, charge zero for delivery
+    else:
+        brokerage = min(brokerage_flat, brokerage_pct * value)
+
+    if segment == "equity_delivery":
+        stt = 0.001 * value  # both legs
+    elif segment == "equity_intraday":
+        stt = 0.00025 * value if side == "sell" else 0.0
+    elif segment == "fno_futures":
+        stt = 0.000125 * value if side == "sell" else 0.0
+    elif segment == "fno_options":
+        stt = 0.000625 * value if side == "sell" else 0.0
+    else:
+        raise ValueError(f"unknown segment: {segment}")
+
+    exchange_txn = _EXCHANGE_TXN_RATE.get(exchange, _EXCHANGE_TXN_RATE["NSE"]) * value
+    sebi_fee = _SEBI_FEE_RATE * value
+
+    if side == "buy":
+        stamp_rate = 0.00015 if segment == "equity_delivery" else 0.00003
+        stamp_duty = stamp_rate * value
+    else:
+        stamp_duty = 0.0
+
+    gst = _GST_RATE * (brokerage + exchange_txn + sebi_fee)
+
+    return Charges(
+        brokerage=brokerage, stt=stt, exchange_txn=exchange_txn,
+        sebi_fee=sebi_fee, stamp_duty=stamp_duty, gst=gst,
+    )
+
+
 def apply_turnover_cost(turnover_fraction: float, round_trip_cost_bps: float) -> float:
     """Cost incurred, as a fraction of portfolio value, for rebalancing
     `turnover_fraction` of the book at `round_trip_cost_bps` round-trip.
