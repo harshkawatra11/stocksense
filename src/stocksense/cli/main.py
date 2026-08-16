@@ -43,6 +43,7 @@ from stocksense.foreman.budget import check_budget
 from stocksense.foreman.executor import execute_goal, record_goal_result
 from stocksense.harness.loops import build_reconcile_graph, grade_matured_predictions, record_predictions
 from stocksense.harness.runner import run_graph
+from stocksense.optimizer.tax import compute_tax_liability
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
 
@@ -336,6 +337,46 @@ def grade_cmd(horizon: int = typer.Option(20, help="Prediction horizon in tradin
     if result.n_graded:
         typer.echo(f"Direction correct: {result.n_correct_direction}/{result.n_graded} ({result.n_correct_direction / result.n_graded:.0%})")
         typer.echo(f"Mean absolute error: {result.mean_abs_error:.5f}")
+
+
+@app.command("tax-summary")
+def tax_summary_cmd(
+    fy_start: str = typer.Option(..., help="Financial year start date, e.g. 2024-04-01"),
+    fy_end: str = typer.Option(..., help="Financial year end date, e.g. 2025-03-31"),
+    ltcg_exemption_used: float = typer.Option(0.0, help="LTCG exemption already used elsewhere this FY (e.g. mutual funds)"),
+) -> None:
+    """Realized-gains tax summary for one financial year, from ingested
+    statement positions. Statutory rates only (STCG 20%, LTCG 12.5%
+    above Rs 1.25L exemption/FY, 4% cess) -- not tax advice, and does
+    not account for F&O business income or other income heads."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    trades = store.read_trades()
+    store.close()
+
+    if trades.empty:
+        typer.echo("No trades ingested yet. Run `statement-ingest <file>` first.")
+        raise typer.Exit(code=1)
+
+    positions = reconstruct_positions(trades)
+    fy_positions = positions[
+        (positions["close_date"].astype(str) >= fy_start) & (positions["close_date"].astype(str) <= fy_end)
+    ]
+    if fy_positions.empty:
+        typer.echo(f"No positions closed between {fy_start} and {fy_end}.")
+        raise typer.Exit(code=1)
+
+    summary = compute_tax_liability(fy_positions, ltcg_exemption_used_this_fy=ltcg_exemption_used)
+    typer.echo(f"\n=== TAX SUMMARY: {fy_start} to {fy_end} ===")
+    typer.echo(f"Total STCG (realized gains only): Rs {summary.total_stcg:,.2f}")
+    typer.echo(f"Total LTCG (realized gains only): Rs {summary.total_ltcg:,.2f}")
+    typer.echo(f"LTCG exemption used: Rs {summary.ltcg_exemption_used:,.2f}")
+    typer.echo(f"Taxable LTCG: Rs {summary.taxable_ltcg:,.2f}")
+    typer.echo(f"STCG tax (20%): Rs {summary.stcg_tax:,.2f}")
+    typer.echo(f"LTCG tax (12.5%): Rs {summary.ltcg_tax:,.2f}")
+    typer.echo(f"Cess (4%): Rs {summary.cess:,.2f}")
+    typer.echo(f"TOTAL TAX: Rs {summary.total_tax:,.2f}")
+    typer.echo("\n(Statutory rates only, not tax advice. Excludes F&O/intraday business income and other income heads.)")
 
 
 @app.command("reconcile")
