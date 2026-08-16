@@ -76,6 +76,28 @@ CLI: `stocksense tax-summary --fy-start ... --fy-end ...`, tested end-to-end aga
 
 **Not yet built:** `sip.py` (SIP allocation / broker comparison) — deferred, lower priority than the pieces above. 37 new tests (risk layer, rebalance, tax) — 244 tests passing, up from 207.
 
+## Skills suite, partial (2026-08-16, same day, fourth backlog item)
+
+`skills/` — 7 of 14 planned skills authored in-repo, all NSE-native, none installed from a third-party source (the research finding that killed bulk-installing external skill packs still holds — see the plan's skills-list audit). Every `SKILL.md` validated against a real test (`test_skills.py`): frontmatter present, name matches its folder, ≤500-line body budget, no `Bash`/`Write`/`Edit` in `allowed-tools` (none of these skills are executable capability, they're reference/reasoning material).
+
+Built, matching what's actually shipped:
+
+| Skill | Encodes |
+|---|---|
+| `nse-market-structure` | Segments, product types (CNC/MIS/NRML), session structure, settlement, circuit/surveillance |
+| `india-cost-model` | Exact STT/exchange/SEBI/stamp/GST arithmetic, the intraday-cheaper-than-delivery correction |
+| `statement-forensics` | FIFO reconstruction, the Kundli pipeline, counterfactual framing rules |
+| `behavioral-diagnostics` | The 13-dosha catalogue with formulas and severity-reading guidance |
+| `backtest-rigor` | Purge-vs-embargo, pre-registration discipline, the current gate criteria, the stress battery |
+| `data-quality-forensics` | The ADANIENT adjustment-factor lesson generalized, survivorship measurement, point-in-time discipline |
+| `claude-report-writing` | The compute/narrate split, operationalized — the safety-critical one |
+
+**Not yet built** (deferred because the features they'd cover don't exist yet — writing a skill for an unbuilt feature would be exactly the kind of aspirational-documentation drift `docs/STATUS.md` itself exists to prevent): `intraday-microstructure`, `fno-analysis`, `risk-measurement`, `portfolio-optimizer` (a *skill* narrating the now-built `optimizer/` module — should follow shortly), `sip-broker-compare`, `commodities-mcx`, `timeseries-econometrics`.
+
+Also fixed: `pyyaml` was only present transitively (via `huggingface_hub`/`transformers`/`jupytext`), not a declared dependency — `test_skills.py` would have passed locally and failed on a clean CI install. Added to `pyproject.toml` explicitly. Also updated `foreman/assess.py`'s own test to reflect reality: `skills_suite`, `optimizer`, and `reconcile_loop` markers now correctly report as *built* rather than *not built* — a nice confirmation that self-assessment's fact-gathering actually tracks real state.
+
+282 tests passing, up from 244.
+
 ## The two contradictions that matter most
 
 **1. Daily cadence → monthly cadence.** The docs (`04`, `05`, `06`) are written around a nightly retrain / daily-horizon prediction cycle. Phase 0 measured this directly: a 1-day holding horizon cannot clear realistic transaction costs, confirmed independently four times (v1's own historical output, and three re-runs in this codebase on different data). The horizon that survives costs is **~20 trading bars (roughly monthly)**. Every daily-cadence detail in `04`–`08` should be read as *the wrong cadence*, not an implementation detail to fill in later.

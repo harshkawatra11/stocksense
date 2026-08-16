@@ -28,9 +28,20 @@ def test_gather_signals_reflects_real_test_count() -> None:
 
 def test_gather_signals_reports_backlog_not_built() -> None:
     signals = gather_signals(_StubStore())
-    # none of these marker files exist yet at this point in the plan
+    # not yet built at this point in the plan
     assert "data_spine" in signals["backlog_not_built"]
-    assert "skills_suite" in signals["backlog_not_built"]
+    assert "rag_agent" in signals["backlog_not_built"]
+    assert "electron_desktop_app" in signals["backlog_not_built"]
+    assert "intraday_track" in signals["backlog_not_built"]
+
+
+def test_gather_signals_reports_backlog_built() -> None:
+    signals = gather_signals(_StubStore())
+    # genuinely built: harness/loops.py, skills/nse-market-structure/SKILL.md,
+    # optimizer/risk_layer.py all exist as of this point in the plan
+    assert "reconcile_loop" in signals["backlog_built"]
+    assert "skills_suite" in signals["backlog_built"]
+    assert "optimizer" in signals["backlog_built"]
 
 
 def test_gather_signals_counts_recent_goals_and_violations() -> None:
