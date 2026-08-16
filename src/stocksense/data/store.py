@@ -593,6 +593,15 @@ class Store:
     def read_diagnostics(self, run_id: str) -> pd.DataFrame:
         return self.con.execute("SELECT * FROM diagnostics WHERE run_id = ?", [run_id]).fetchdf()
 
+    def read_latest_diagnostics(self) -> pd.DataFrame:
+        """Diagnostics from the most recent Kundli run (by as_of), for
+        callers (the desktop dashboard) that want 'the current picture'
+        without already knowing a specific run_id."""
+        latest = self.con.execute("SELECT run_id FROM diagnostics ORDER BY as_of DESC LIMIT 1").fetchone()
+        if latest is None:
+            return pd.DataFrame()
+        return self.read_diagnostics(latest[0])
+
     def write_counterfactuals(self, df: pd.DataFrame) -> int:
         cols = ["run_id", "scenario_name", "actual_pnl", "scenario_pnl", "delta_pnl", "n_trades_affected", "detail_json"]
         self.con.register("_cf", df[cols])
@@ -619,6 +628,9 @@ class Store:
             f"INSERT INTO agent_runs ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
             [row[c] for c in cols],
         )
+
+    def read_agent_runs(self, limit: int = 50) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT ?", [limit]).fetchdf()
 
     # ---- Foreman: goals, ledger, protected-path violations, budget ----
 
