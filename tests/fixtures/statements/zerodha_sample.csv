@@ -1,0 +1,5 @@
+symbol,isin,trade_date,exchange,segment,series,trade_type,auction,quantity,price,trade_id,order_id,order_execution_time
+RELIANCE,INE002A01018,2024-01-15,NSE,EQ,EQ,buy,false,10,2500.50,T001,O001,09:20:15
+RELIANCE,INE002A01018,2024-01-15,NSE,EQ,EQ,sell,false,10,2510.00,T002,O002,14:45:30
+TCS,INE467B01029,2024-01-16,NSE,EQ,EQ,buy,false,5,3800.00,T003,O003,10:05:00
+TCS,INE467B01029,2024-01-16,NSE,EQ,EQ,sell,false,5,3780.00,T004,O004,15:15:00

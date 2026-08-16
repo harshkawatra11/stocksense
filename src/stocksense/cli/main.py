@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -32,6 +33,10 @@ from stocksense.labels.forward_return import add_forward_return_labels, add_rela
 from stocksense.models.ranker import CrossSectionalRanker, RankerConfig
 from stocksense.models.registry import register_candidate
 from stocksense.portfolio.construct import target_weights_top_n
+from stocksense.statements.parsers import detect_parser
+from stocksense.statements.parsers.base import file_hash
+from stocksense.statements.positions import reconstruct_positions
+from stocksense.statements.report import generate_kundli
 
 log = structlog.get_logger(__name__)
 app = typer.Typer(help="StockSense nightly pipeline CLI")
@@ -214,6 +219,77 @@ def registry() -> None:
         return
     cols = ["model_id", "horizon_bars", "top_n", "lifecycle_state", "gate_decision", "created_at"]
     typer.echo(df[cols].to_string(index=False))
+
+
+@app.command("statement-ingest")
+def statement_ingest(file: str = typer.Argument(..., help="Path to a broker tradebook CSV/XLSX export")) -> None:
+    """Parse a broker statement, normalize to canonical trades, and store
+    it. Content-hashed: re-ingesting the same file is a no-op."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    path = Path(file)
+    if not path.exists():
+        typer.echo(f"File not found: {file}")
+        raise typer.Exit(code=1)
+
+    h = file_hash(path)
+    existing = store.find_statement_by_hash(h)
+    if not existing.empty:
+        typer.echo(f"Already ingested (statement_id={existing.iloc[0]['statement_id']}), skipping.")
+        store.close()
+        return
+
+    parser = detect_parser(path)
+    if parser is None:
+        typer.echo(f"Could not detect broker format for {file}. Supported: zerodha, upstox.")
+        store.close()
+        raise typer.Exit(code=1)
+
+    trades = parser.parse(path)
+    statement_id = f"{parser.broker}-{h[:12]}"
+    store.insert_statement(
+        {
+            "statement_id": statement_id, "broker": parser.broker, "statement_type": "tradebook",
+            "file_path": str(path), "file_hash": h,
+            "period_start": trades["trade_date"].min() if len(trades) else None,
+            "period_end": trades["trade_date"].max() if len(trades) else None,
+            "ingested_at": datetime.now(timezone.utc), "row_count": len(trades), "parse_status": "ok",
+        }
+    )
+    trades["statement_id"] = statement_id
+    store.write_trades(trades)
+    store.close()
+    typer.echo(f"Ingested {len(trades)} trades from {parser.broker} statement (statement_id={statement_id}).")
+
+
+@app.command()
+def kundli(broker: Optional[str] = typer.Option(None, help="Filter to one broker's trades, or all if omitted")) -> None:
+    """Generate the Kundli report: behavioral diagnostics + counterfactuals
+    + narrated verdict, from all ingested statements."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    trades = store.read_trades(broker=broker)
+    if trades.empty:
+        typer.echo("No trades ingested yet. Run `statement-ingest <file>` first.")
+        store.close()
+        raise typer.Exit(code=1)
+
+    positions = reconstruct_positions(trades)
+    if positions.empty:
+        typer.echo("No completed (closed) positions found — all trades appear to still be open.")
+        store.close()
+        raise typer.Exit(code=1)
+
+    result = generate_kundli(positions, store=store)
+    store.close()
+
+    typer.echo(f"\n=== KUNDLI (run_id={result['run_id']}) ===")
+    typer.echo(f"Positions analyzed: {result['fact_sheet']['n_positions']}")
+    typer.echo(f"Net P&L: {result['fact_sheet']['total_net_pnl']:,.2f}")
+    typer.echo(f"Total charges: {result['fact_sheet']['total_charges']:,.2f}")
+    if result["agent_status"] != "ok":
+        typer.echo(f"(agent status: {result['agent_status']})")
+    typer.echo("\n" + result["narrative"])
 
 
 if __name__ == "__main__":
