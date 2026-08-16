@@ -64,6 +64,18 @@ CLI: `stocksense record-predictions`, `stocksense grade`, `stocksense reconcile`
 
 **What this does not yet do:** grading does not feed back into the gate — a graded prediction's outcome doesn't currently influence whether a model stays live or gets rolled back. That's the natural next extension, not built here. Confidence/calibration tracking (Brier score, reliability curves per `docs/06`) also remains unbuilt; `predictions.confidence` is written as `NULL` for now since the LightGBM regressor doesn't yet produce a calibrated interval.
 
+## Optimizer (2026-08-16, same day, third backlog item)
+
+`stocksense/optimizer/` — recommend-only, per the plan's explicit boundary (no order placement anywhere in this module).
+
+- **`risk_layer.py`** (closes audit finding MED-8): position caps and sector caps that actually hold after redistribution (not just reduce the offending weight while creating a new violation elsewhere — tested as a property, not an example), volatility-targeting scale factor, and a correlation-cluster diagnostic. Composes on top of `portfolio/construct.py`'s existing `target_weights_top_n` output rather than replacing it.
+- **`rebalance.py`** — turns a target-weight change into an itemized recommendation (exit/trim/hold/add/enter) with the actual rupee cost of that specific move attached, via `execution.cost_model.compute_charges`. `filter_cost_justified` is the enforcement point for the property the plan names explicitly: never recommend a trade whose cost exceeds its stated benefit.
+- **`tax.py`** — STCG (20%) / LTCG (12.5% above ₹1.25L/FY exemption, 4% cess) on realized gains from the Kundli's reconstructed positions, verified against the current FY 2026-27 framework (Budget 2026 kept it unchanged). The load-bearing correctness property, tested explicitly: **the LTCG exemption applies once across the whole financial year's total gain, not per position** — getting this wrong would understate tax owed for anyone holding more than one LTCG position in a year, which is the normal case. Also: `days_to_ltcg` countdown and `harvest_candidates` (loss-harvesting review on currently-open positions, taking current price as an explicit input since this module has no live market data access by design).
+
+CLI: `stocksense tax-summary --fy-start ... --fy-end ...`, tested end-to-end against a real ingested statement.
+
+**Not yet built:** `sip.py` (SIP allocation / broker comparison) — deferred, lower priority than the pieces above. 37 new tests (risk layer, rebalance, tax) — 244 tests passing, up from 207.
+
 ## The two contradictions that matter most
 
 **1. Daily cadence → monthly cadence.** The docs (`04`, `05`, `06`) are written around a nightly retrain / daily-horizon prediction cycle. Phase 0 measured this directly: a 1-day holding horizon cannot clear realistic transaction costs, confirmed independently four times (v1's own historical output, and three re-runs in this codebase on different data). The horizon that survives costs is **~20 trading bars (roughly monthly)**. Every daily-cadence detail in `04`–`08` should be read as *the wrong cadence*, not an implementation detail to fill in later.
