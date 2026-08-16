@@ -81,7 +81,160 @@ CREATE TABLE IF NOT EXISTS job_runs (
     status            VARCHAR NOT NULL,  -- completed | failed | aborted | interrupted
     detail_json        VARCHAR
 );
+
+-- docs/12-statement-forensics.md: raw uploaded broker statement files,
+-- content-hashed so re-uploading the same file is a no-op, not a
+-- duplicate ingestion.
+CREATE TABLE IF NOT EXISTS statements (
+    statement_id   VARCHAR NOT NULL PRIMARY KEY,
+    broker         VARCHAR NOT NULL,
+    statement_type VARCHAR NOT NULL,  -- tradebook | tax_pnl
+    file_path      VARCHAR NOT NULL,
+    file_hash      VARCHAR NOT NULL,
+    period_start   DATE,
+    period_end     DATE,
+    ingested_at    TIMESTAMP NOT NULL,
+    row_count      INTEGER,
+    parse_status   VARCHAR NOT NULL  -- ok | partial | failed
+);
+
+-- Canonical cross-broker trade schema. source_row_json preserves the raw
+-- parsed row so a parsing bug is always forensically recoverable, the
+-- same discipline that found the ADANIENT adjustment-factor bug.
+CREATE TABLE IF NOT EXISTS trades (
+    trade_id       VARCHAR NOT NULL PRIMARY KEY,
+    statement_id   VARCHAR NOT NULL,
+    broker         VARCHAR NOT NULL,
+    symbol         VARCHAR NOT NULL,
+    isin           VARCHAR,
+    segment        VARCHAR NOT NULL,  -- equity_delivery | equity_intraday | fno | currency | commodity
+    trade_date     DATE NOT NULL,
+    trade_time     VARCHAR,
+    side           VARCHAR NOT NULL,  -- buy | sell
+    quantity       DOUBLE NOT NULL,
+    price          DOUBLE NOT NULL,
+    value          DOUBLE NOT NULL,
+    order_id       VARCHAR,
+    exchange       VARCHAR,
+    product_type   VARCHAR,           -- MIS | CNC | NRML
+    source_row_json VARCHAR
+);
+
+-- Exact Indian charge breakdown per trade (stocksense.execution.cost_model.compute_charges).
+CREATE TABLE IF NOT EXISTS trade_charges (
+    trade_id       VARCHAR NOT NULL PRIMARY KEY,
+    brokerage      DOUBLE NOT NULL,
+    stt            DOUBLE NOT NULL,
+    exchange_txn   DOUBLE NOT NULL,
+    sebi_fee       DOUBLE NOT NULL,
+    stamp_duty     DOUBLE NOT NULL,
+    gst            DOUBLE NOT NULL,
+    total_charges  DOUBLE NOT NULL,
+    cost_bps       DOUBLE NOT NULL
+);
+
+-- FIFO-matched buy->sell round trips, the unit of behavioral analysis.
+CREATE TABLE IF NOT EXISTS positions (
+    position_id    VARCHAR NOT NULL PRIMARY KEY,
+    symbol         VARCHAR NOT NULL,
+    segment        VARCHAR NOT NULL,
+    open_date      DATE NOT NULL,
+    open_time      VARCHAR,
+    close_date     DATE NOT NULL,
+    close_time     VARCHAR,
+    quantity       DOUBLE NOT NULL,
+    entry_price    DOUBLE NOT NULL,
+    exit_price     DOUBLE NOT NULL,
+    gross_pnl      DOUBLE NOT NULL,
+    charges        DOUBLE NOT NULL,
+    net_pnl        DOUBLE NOT NULL,
+    holding_seconds INTEGER,
+    is_intraday    BOOLEAN NOT NULL,
+    mae            DOUBLE,  -- max adverse excursion, requires intraday candles
+    mfe            DOUBLE   -- max favorable excursion, requires intraday candles
+);
+
+-- One row per (run, metric, cohort). Severity thresholds are
+-- pre-registered in docs/12-statement-forensics.md before being run
+-- against real data, the same discipline that fixed the gate.
+CREATE TABLE IF NOT EXISTS diagnostics (
+    run_id         VARCHAR NOT NULL,
+    as_of          DATE NOT NULL,
+    metric_name    VARCHAR NOT NULL,
+    metric_value   DOUBLE,
+    metric_unit    VARCHAR,
+    severity       VARCHAR,  -- ok | notable | high | critical
+    cohort         VARCHAR NOT NULL DEFAULT 'all',
+    detail_json    VARCHAR,
+    PRIMARY KEY (run_id, metric_name, cohort)
+);
+
+-- "What if" replays of actual fills under modified rules. Arithmetic on
+-- history, explicitly not predictions.
+CREATE TABLE IF NOT EXISTS counterfactuals (
+    run_id            VARCHAR NOT NULL,
+    scenario_name     VARCHAR NOT NULL,
+    actual_pnl        DOUBLE NOT NULL,
+    scenario_pnl      DOUBLE NOT NULL,
+    delta_pnl         DOUBLE NOT NULL,
+    n_trades_affected INTEGER NOT NULL,
+    detail_json       VARCHAR,
+    PRIMARY KEY (run_id, scenario_name)
+);
+
+-- RAG corpus (docs/14-rag.md). embedding is nullable so FTS-only degraded
+-- mode (no Ollama) still works — see rag/index.py.
+CREATE TABLE IF NOT EXISTS rag_documents (
+    doc_id         VARCHAR NOT NULL PRIMARY KEY,
+    source_type    VARCHAR NOT NULL,
+    source_ref     VARCHAR,
+    title          VARCHAR,
+    content        VARCHAR NOT NULL,
+    content_hash   VARCHAR NOT NULL,
+    indexed_at     TIMESTAMP NOT NULL,
+    metadata_json  VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    chunk_id       VARCHAR NOT NULL PRIMARY KEY,
+    doc_id         VARCHAR NOT NULL,
+    chunk_index    INTEGER NOT NULL,
+    content        VARCHAR NOT NULL,
+    token_count    INTEGER,
+    embedding      FLOAT[768]
+);
+
+-- Every Claude CLI invocation, in and out. The audit trail that makes
+-- "the agent never invents a number" a checkable claim, not a promise.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    agent_run_id   VARCHAR NOT NULL PRIMARY KEY,
+    job_run_id     VARCHAR,
+    skill_name     VARCHAR,
+    prompt_hash    VARCHAR NOT NULL,
+    input_json     VARCHAR NOT NULL,
+    output_text    VARCHAR,
+    model          VARCHAR,
+    started_at     TIMESTAMP NOT NULL,
+    finished_at    TIMESTAMP,
+    status         VARCHAR NOT NULL,  -- ok | unverified_numbers | error | timeout
+    error          VARCHAR,
+    cost_estimate  DOUBLE
+);
 """
+
+# AUDIT: predictions was created but never written to (CRITICAL-1). These
+# columns are added defensively via _MIGRATIONS below rather than baked
+# into predictions' CREATE TABLE, so a database created before this
+# change migrates in place instead of needing to be rebuilt.
+_PREDICTIONS_MIGRATION_COLUMNS = {
+    "horizon_type": "VARCHAR",           # 'monthly' | 'intraday'
+    "predicted_return": "DOUBLE",
+    "confidence": "DOUBLE",
+    "feature_snapshot_hash": "VARCHAR",
+    "graded_at": "TIMESTAMP",
+    "actual_return": "DOUBLE",
+    "grade_json": "VARCHAR",
+}
 
 
 class Store:
@@ -97,6 +250,19 @@ class Store:
         self.path = path
         self.con = duckdb.connect(str(path))
         self.con.execute(SCHEMA)
+        self._migrate_predictions_columns()
+
+    def _migrate_predictions_columns(self) -> None:
+        """Defensive ALTER for columns added after predictions' original
+        CREATE TABLE, so a database created before this change gains them
+        in place instead of needing to be rebuilt (see
+        _PREDICTIONS_MIGRATION_COLUMNS above predictions' schema)."""
+        existing = {
+            row[1] for row in self.con.execute("PRAGMA table_info('predictions')").fetchall()
+        }
+        for col, col_type in _PREDICTIONS_MIGRATION_COLUMNS.items():
+            if col not in existing:
+                self.con.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
 
     def upsert_candles(self, df: pd.DataFrame) -> int:
         """Upsert OHLCV rows keyed on (symbol, date, source).
@@ -210,6 +376,151 @@ class Store:
 
     def read_job_runs(self) -> pd.DataFrame:
         return self.con.execute("SELECT * FROM job_runs ORDER BY started_at DESC").fetchdf()
+
+    # ---- predictions: the reconcile loop (CRITICAL-1) writes here ----
+
+    def write_predictions(self, df: pd.DataFrame) -> int:
+        cols = [
+            "run_id", "symbol", "as_of_date", "horizon_bars", "score", "rank", "model_version",
+            "horizon_type", "predicted_return", "confidence", "feature_snapshot_hash",
+        ]
+        missing = set(cols) - set(df.columns)
+        if missing:
+            raise ValueError(f"write_predictions missing columns: {missing}")
+        self.con.register("_pred", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO predictions ({", ".join(cols)})
+            SELECT {", ".join(cols)} FROM _pred
+            ON CONFLICT (run_id, symbol, as_of_date, horizon_bars) DO UPDATE SET
+                score = excluded.score, rank = excluded.rank, model_version = excluded.model_version,
+                horizon_type = excluded.horizon_type, predicted_return = excluded.predicted_return,
+                confidence = excluded.confidence, feature_snapshot_hash = excluded.feature_snapshot_hash
+            """
+        )
+        self.con.unregister("_pred")
+        return len(df)
+
+    def read_ungraded_predictions(self, as_of_before) -> pd.DataFrame:
+        """Predictions whose horizon has matured (as_of_date + horizon_bars
+        trading days <= as_of_before) but which have not been graded yet."""
+        return self.con.execute(
+            "SELECT * FROM predictions WHERE graded_at IS NULL AND as_of_date <= ? ORDER BY as_of_date",
+            [as_of_before],
+        ).fetchdf()
+
+    def grade_prediction(self, run_id: str, symbol: str, as_of_date, horizon_bars: int,
+                          actual_return: float, grade_json: str, graded_at) -> None:
+        self.con.execute(
+            """
+            UPDATE predictions SET actual_return = ?, grade_json = ?, graded_at = ?
+            WHERE run_id = ? AND symbol = ? AND as_of_date = ? AND horizon_bars = ?
+            """,
+            [actual_return, grade_json, graded_at, run_id, symbol, as_of_date, horizon_bars],
+        )
+
+    def read_predictions(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM predictions ORDER BY as_of_date, symbol").fetchdf()
+
+    # ---- statement forensics (docs/12) ----
+
+    def insert_statement(self, row: dict) -> None:
+        cols = list(row.keys())
+        self.con.execute(
+            f"INSERT INTO statements ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row[c] for c in cols],
+        )
+
+    def find_statement_by_hash(self, file_hash: str) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM statements WHERE file_hash = ?", [file_hash]).fetchdf()
+
+    def write_trades(self, df: pd.DataFrame) -> int:
+        # AUDIT FIX: "SELECT *" binds by column POSITION, not name — a
+        # DataFrame whose column order doesn't exactly match the trades
+        # DDL (e.g. statement_id appended after parsing rather than
+        # inserted in schema order) silently misaligns columns instead of
+        # erroring, which is how trade_time once landed in trade_date's
+        # slot. Select explicitly by name instead.
+        cols = [
+            "trade_id", "statement_id", "broker", "symbol", "isin", "segment",
+            "trade_date", "trade_time", "side", "quantity", "price", "value",
+            "order_id", "exchange", "product_type", "source_row_json",
+        ]
+        self.con.register("_trades", df[cols])
+        self.con.execute(f"INSERT INTO trades ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _trades")
+        self.con.unregister("_trades")
+        return len(df)
+
+    def read_trades(self, broker: str | None = None) -> pd.DataFrame:
+        if broker:
+            return self.con.execute("SELECT * FROM trades WHERE broker = ? ORDER BY trade_date, trade_time", [broker]).fetchdf()
+        return self.con.execute("SELECT * FROM trades ORDER BY trade_date, trade_time").fetchdf()
+
+    def write_trade_charges(self, df: pd.DataFrame) -> int:
+        # AUDIT FIX: bind by explicit column list, not "SELECT *" — see
+        # write_trades' comment for the exact failure mode this avoids.
+        cols = ["trade_id", "brokerage", "stt", "exchange_txn", "sebi_fee", "stamp_duty", "gst", "total_charges", "cost_bps"]
+        self.con.register("_charges", df[cols])
+        self.con.execute(f"INSERT INTO trade_charges ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _charges")
+        self.con.unregister("_charges")
+        return len(df)
+
+    def write_positions(self, df: pd.DataFrame) -> int:
+        cols = [
+            "position_id", "symbol", "segment", "open_date", "open_time", "close_date", "close_time",
+            "quantity", "entry_price", "exit_price", "gross_pnl", "charges", "net_pnl",
+            "holding_seconds", "is_intraday", "mae", "mfe",
+        ]
+        self.con.register("_positions", df[cols])
+        self.con.execute(f"INSERT INTO positions ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _positions")
+        self.con.unregister("_positions")
+        return len(df)
+
+    def read_positions(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM positions ORDER BY open_date, open_time").fetchdf()
+
+    def write_diagnostics(self, df: pd.DataFrame) -> int:
+        cols = ["run_id", "as_of", "metric_name", "metric_value", "metric_unit", "severity", "cohort", "detail_json"]
+        self.con.register("_diag", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO diagnostics ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _diag
+            ON CONFLICT (run_id, metric_name, cohort) DO UPDATE SET
+                metric_value = excluded.metric_value, severity = excluded.severity, detail_json = excluded.detail_json
+            """
+        )
+        self.con.unregister("_diag")
+        return len(df)
+
+    def read_diagnostics(self, run_id: str) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM diagnostics WHERE run_id = ?", [run_id]).fetchdf()
+
+    def write_counterfactuals(self, df: pd.DataFrame) -> int:
+        cols = ["run_id", "scenario_name", "actual_pnl", "scenario_pnl", "delta_pnl", "n_trades_affected", "detail_json"]
+        self.con.register("_cf", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO counterfactuals ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _cf
+            ON CONFLICT (run_id, scenario_name) DO UPDATE SET
+                actual_pnl = excluded.actual_pnl, scenario_pnl = excluded.scenario_pnl,
+                delta_pnl = excluded.delta_pnl, n_trades_affected = excluded.n_trades_affected,
+                detail_json = excluded.detail_json
+            """
+        )
+        self.con.unregister("_cf")
+        return len(df)
+
+    def read_counterfactuals(self, run_id: str) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM counterfactuals WHERE run_id = ?", [run_id]).fetchdf()
+
+    # ---- agent audit trail (docs/11) ----
+
+    def insert_agent_run(self, row: dict) -> None:
+        cols = list(row.keys())
+        self.con.execute(
+            f"INSERT INTO agent_runs ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row[c] for c in cols],
+        )
 
     def close(self) -> None:
         self.con.close()
