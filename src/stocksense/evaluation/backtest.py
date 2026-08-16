@@ -151,7 +151,21 @@ def simulate_portfolio(
         bench_returns.append(bench_ret)
         turnovers.append(turnover)
 
-        current_weights = target[target > 0]
+        # AUDIT FIX (MED-7): carry weights forward drifted by realized
+        # returns, not pristine target weights. A position that gained
+        # 50% while others were flat is no longer at its original weight
+        # by the next rebalance — using the undrifted target here silently
+        # understated true turnover (and therefore true cost) on every
+        # rebalance after the first, because the "current" weights the
+        # next period's no-trade-band and turnover-budget logic compared
+        # against were never what was actually held.
+        drifted_value = held * (1 + raw_actual)
+        total_value = float(drifted_value.sum())
+        if total_value > 0:
+            drifted_weights = drifted_value / total_value
+        else:
+            drifted_weights = held * 0.0
+        current_weights = drifted_weights[drifted_weights > 0]
 
     if not net_returns:
         return None
