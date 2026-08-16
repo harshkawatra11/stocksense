@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>StockSense</title>
+  <link rel="stylesheet" href="terminal.css" />
+</head>
+<body>
+  <div class="frame">
+    <header class="panel header">
+      <span id="clock">--:--:--</span>
+      <span class="sep">·</span>
+      <span id="db-status">connecting...</span>
+      <span class="sep">·</span>
+      <span id="latest-data">data: --</span>
+    </header>
+
+    <main class="body">
+      <section class="col left">
+        <div class="panel">
+          <div class="panel-title">P&amp;L SUMMARY</div>
+          <div id="summary" class="panel-content">loading...</div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">DOSHAS</div>
+          <div id="doshas" class="panel-content">loading...</div>
+        </div>
+      </section>
+
+      <section class="col right">
+        <div class="panel">
+          <div class="panel-title">HARNESS</div>
+          <div id="harness" class="panel-content">loading...</div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">MODEL REGISTRY</div>
+          <div id="registry" class="panel-content">loading...</div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">AGENT RUNS</div>
+          <div id="agent-runs" class="panel-content">loading...</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="panel footer">
+      <span class="cursor">&#9608;</span>
+      <span id="mode-indicator">RESEARCH &middot; dry-run &middot; no orders placed</span>
+    </footer>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

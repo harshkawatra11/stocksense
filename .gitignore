@@ -16,3 +16,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# desktop (Electron)
+desktop/node_modules/
+desktop/dist/

@@ -1,0 +1,30 @@
+{
+  "name": "stocksense-desktop",
+  "version": "0.1.0",
+  "description": "StockSense desktop control room -- a terminal-styled Electron shell over the local StockSense API.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.stocksense.desktop",
+    "productName": "StockSense",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

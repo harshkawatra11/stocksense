@@ -1,0 +1,140 @@
+/* Terminal aesthetic (docs/18-desktop-app.md), deliberately imitating a
+   real live-dashboard TUI in CSS rather than a real terminal -- the
+   look the user asked for, delivered as a genuine Electron desktop app
+   rather than a terminal window. Monospace throughout, ANSI-derived
+   palette, box-drawing borders, severity-mapped colours. */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #0b0e0f;
+  color: #d4d4d4;
+  font-family: "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.panel {
+  border: 1px solid #333;
+  background: #101314;
+}
+
+.panel-title {
+  color: #6fa8dc;
+  font-weight: bold;
+  padding: 4px 10px;
+  border-bottom: 1px solid #333;
+  letter-spacing: 1px;
+}
+
+.panel-content {
+  padding: 8px 10px;
+  overflow-y: auto;
+}
+
+.header {
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: #8ec07c;
+}
+
+.header .sep {
+  color: #555;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.col.left {
+  flex: 1;
+}
+
+.col.right {
+  flex: 2;
+}
+
+.col .panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.footer {
+  padding: 6px 12px;
+  flex-shrink: 0;
+  color: #f9c74f;
+  font-weight: bold;
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cursor {
+  animation: blink 1s step-end infinite;
+  color: #f9c74f;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* severity colours, matching diagnostics.py's severity vocabulary */
+.sev-critical { color: #e06c75; }
+.sev-high { color: #d19a66; }
+.sev-notable { color: #e5c07b; }
+.sev-ok { color: #98c379; }
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-bottom: 1px solid #1c1f20;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.muted {
+  color: #666;
+}
+
+.status-completed { color: #98c379; }
+.status-failed { color: #e06c75; }
+.status-running { color: #e5c07b; }
+
+.empty-state {
+  color: #666;
+  font-style: italic;
+  padding: 8px 0;
+}
