@@ -49,6 +49,7 @@ from stocksense.rag.embed import embeddings_available
 from stocksense.rag.index import index_document, rebuild_fts_index
 from stocksense.data.nse_archive import fetch_range
 from stocksense.data.universe_pit import universe_as_of
+from stocksense.server.run import run as run_server
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
 
@@ -342,6 +343,16 @@ def grade_cmd(horizon: int = typer.Option(20, help="Prediction horizon in tradin
     if result.n_graded:
         typer.echo(f"Direction correct: {result.n_correct_direction}/{result.n_graded} ({result.n_correct_direction / result.n_graded:.0%})")
         typer.echo(f"Mean absolute error: {result.mean_abs_error:.5f}")
+
+
+@app.command("serve")
+def serve_cmd(port: Optional[int] = typer.Option(None, help="Port to bind (default: auto-select from 8420)")) -> None:
+    """Run the desktop control room's local JSON API. Bound to 127.0.0.1
+    only -- this serves private trading data and must never be reachable
+    from the network. The Electron shell (desktop/) launches this as a
+    child process; running it standalone here is for direct use or
+    testing without Electron in the loop."""
+    run_server(port=port)
 
 
 @app.command("backfill-nse-archive")
