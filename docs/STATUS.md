@@ -122,6 +122,18 @@ CLI: `stocksense backfill-nse-archive --start ... --end ... --kind {cm,delivery,
 
 36 new tests — 338 tests passing, up from 302.
 
+## Desktop control room (2026-08-17, seventh backlog item) — the last of the two items flagged as needing human eyes
+
+`src/stocksense/server/` (FastAPI, read-only, `127.0.0.1`-only) + `desktop/` (Electron shell, terminal-aesthetic renderer). Full architecture and verification detail in `docs/18-desktop-app.md`.
+
+**What was verified directly:** the API works end-to-end against real data (`curl` against a live `uvicorn` process, plus 9 `TestClient` tests); every JS file passes `node --check`; `npm install` succeeds with **0 vulnerabilities** after bumping the originally-pinned `electron@31`/`electron-builder@24` (which carried 10 known CVEs, 9 high + 1 critical per `npm audit`) to `electron@43`/`electron-builder@26.15.3`; the Electron binary itself downloads and installs correctly; the 127.0.0.1-only binding and the kill-Python-child-on-exit logic are unit tested in isolation.
+
+**What could not be verified here:** the actual rendered window. This environment has `ELECTRON_RUN_AS_NODE=1` set — a documented Electron feature, almost certainly a deliberate sandbox restriction against a background agent spawning GUI windows — which makes `require('electron')` return a plain-Node shim with no `app`/`BrowserWindow`. Attempting to launch failed with exactly the error that setting predicts, not a code bug. **`cd desktop && npm start` in a normal interactive session** is needed to see and evaluate the actual window — this was flagged as needing human eyes from the point this phase was chosen, and remains the honest state.
+
+Two real bugs found and fixed along the way: (1) `main.js` originally injected the API port via `executeJavaScript` *after* `loadFile`, which runs after the page's own scripts already had a chance to execute — a race `dashboard.js` could lose. Fixed by passing the port as a URL query parameter instead, available from the first tick. (2) The originally-declared `electron`/`electron-builder` versions in `package.json` had 10 known vulnerabilities; caught by running `npm audit` rather than trusting `npm install`'s exit code alone.
+
+10 new tests (`test_server_run.py`, `test_server_app.py`) — 353 tests passing, up from 338.
+
 ## The two contradictions that matter most
 
 **1. Daily cadence → monthly cadence.** The docs (`04`, `05`, `06`) are written around a nightly retrain / daily-horizon prediction cycle. Phase 0 measured this directly: a 1-day holding horizon cannot clear realistic transaction costs, confirmed independently four times (v1's own historical output, and three re-runs in this codebase on different data). The horizon that survives costs is **~20 trading bars (roughly monthly)**. Every daily-cadence detail in `04`–`08` should be read as *the wrong cadence*, not an implementation detail to fill in later.
