@@ -11,6 +11,8 @@ import pytest
 
 from stocksense.agent.claude_cli import AgentResult
 from stocksense.foreman.planner import (
+    PLANNER_EFFORT,
+    PLANNER_MODEL,
     Plan,
     PlanStep,
     PlanValidationError,
@@ -131,3 +133,69 @@ def test_plan_to_graph_node_fn_raises_on_tool_failure() -> None:
     graph = plan_to_graph(plan)
     with pytest.raises(RuntimeError):
         graph["a"].fn({})
+
+
+def test_plan_goal_uses_opus_low_effort_for_decomposition(monkeypatch) -> None:
+    """The two-model split's planning half: decomposition must go
+    through PLANNER_MODEL/PLANNER_EFFORT (opus/low), not whatever the
+    CLI defaults to."""
+    captured = {}
+
+    def fake_invoke(req, store=None, job_run_id=None):
+        captured["model"] = req.model
+        captured["effort"] = req.effort
+        return _fake_result('[{"name": "a", "tool": "read_file", "args": {"path": "x.py"}, "depends_on": []}]')
+
+    monkeypatch.setattr("stocksense.foreman.planner.invoke", fake_invoke)
+    plan_goal("do something")
+    assert captured["model"] == PLANNER_MODEL == "opus"
+    assert captured["effort"] == PLANNER_EFFORT == "low"
+
+
+def test_plan_to_graph_routes_spec_through_codegen_not_literal_content(monkeypatch, tmp_path) -> None:
+    """A write_patch step carrying 'spec' (not 'content') must resolve
+    through codegen.generate_file_content -- the enforcement point for
+    'Opus never writes code, only decides what code is needed.'"""
+    import stocksense.foreman.tools.code as code_mod
+
+    monkeypatch.setattr(code_mod, "REPO_ROOT", tmp_path)
+    codegen_calls = []
+
+    def fake_codegen(file_path, spec, context=None, store=None, job_run_id=None):
+        codegen_calls.append((file_path, spec))
+        return "generated content"
+
+    monkeypatch.setattr("stocksense.foreman.planner.generate_file_content", fake_codegen)
+
+    plan = Plan(
+        steps=[PlanStep(name="write_it", tool="write_patch", args={"file_path": "scratch/out.py", "spec": "a module that does X"}, depends_on=())],
+        raw_response="",
+    )
+    graph = plan_to_graph(plan)
+    graph["write_it"].fn({})
+
+    assert len(codegen_calls) == 1
+    assert codegen_calls[0] == ("scratch/out.py", "a module that does X")
+    assert (tmp_path / "scratch" / "out.py").read_text() == "generated content"
+
+
+def test_plan_to_graph_skips_codegen_when_content_already_literal(monkeypatch, tmp_path) -> None:
+    """A write_patch step that already has literal 'content' (e.g. a
+    trivial config change the planner wrote inline) must NOT trigger an
+    extra codegen call -- codegen is for generated code, not every write."""
+    import stocksense.foreman.tools.code as code_mod
+
+    monkeypatch.setattr(code_mod, "REPO_ROOT", tmp_path)
+    codegen_calls = []
+    monkeypatch.setattr("stocksense.foreman.planner.generate_file_content",
+                         lambda *a, **k: codegen_calls.append(1))
+
+    plan = Plan(
+        steps=[PlanStep(name="write_it", tool="write_patch", args={"file_path": "scratch/out.txt", "content": "literal"}, depends_on=())],
+        raw_response="",
+    )
+    graph = plan_to_graph(plan)
+    graph["write_it"].fn({})
+
+    assert codegen_calls == []
+    assert (tmp_path / "scratch" / "out.txt").read_text() == "literal"

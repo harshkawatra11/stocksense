@@ -63,7 +63,7 @@ def execute_goal(goal_prompt: str, store, goal_id: str | None = None,
     except PlanValidationError as e:
         return ExecutionOutcome(goal_id, "blocked", f"planning failed: {e}", None, None, None)
 
-    graph = plan_to_graph(plan)
+    graph = plan_to_graph(plan, store=store)
     run_result = run_graph(graph, store)
 
     if not run_result.all_succeeded:

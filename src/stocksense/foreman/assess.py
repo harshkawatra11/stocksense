@@ -19,6 +19,7 @@ from pathlib import Path
 
 from stocksense.agent.claude_cli import AgentRequest, invoke
 from stocksense.core.config import REPO_ROOT
+from stocksense.foreman.planner import PLANNER_EFFORT, PLANNER_MODEL
 
 _KNOWN_BACKLOG_MARKERS = {
     "electron_desktop_app": "desktop/main.js",
@@ -88,7 +89,13 @@ def propose_goals(store) -> list[dict]:
     signals = gather_signals(store)
     import json
 
-    result = invoke(AgentRequest(prompt=_ASSESS_PROMPT.format(facts=json.dumps(signals, indent=2)), facts=signals), store=store)
+    result = invoke(
+        AgentRequest(
+            prompt=_ASSESS_PROMPT.format(facts=json.dumps(signals, indent=2)), facts=signals,
+            model=PLANNER_MODEL, effort=PLANNER_EFFORT,  # judgment/ranking, same tier as goal decomposition
+        ),
+        store=store,
+    )
     try:
         text = result.output_text.strip()
         if text.startswith("```"):
