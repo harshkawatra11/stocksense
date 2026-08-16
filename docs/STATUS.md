@@ -42,6 +42,18 @@ The plan pivoted from "build the remaining phases by hand" to "build a harness t
 
 **Not yet built:** the loop scheduler (on-demand only for now), a real invocation of `foreman run` against a live goal (only exercised in this session via mocked git/network calls — no real branch, commit, push, or PR has been created yet), and the backlog items themselves (Electron app, reconcile loop, data spine, skills, RAG, optimizer, intraday track) — those are queued as the Foreman's first real work, not done.
 
+### Fixed same day: the two-model split wasn't actually wired
+
+Caught by direct question, not by testing: `AgentRequest` had a `model` field nobody ever set, no `effort` field existed at all, and the planner was asking one undifferentiated agent call to both decompose a goal into steps AND write full file contents inline — not the "Opus plans, Sonnet executes" split the plan document names in its own byline.
+
+Fixed:
+- `agent/claude_cli.py` — added `effort` to `AgentRequest`, wired to `claude --effort <level>` (confirmed the flag exists via `claude --help`); both `model` and `effort` now logged into `agent_runs.input_json` for auditability.
+- `foreman/planner.py` — decomposition now explicitly runs at `PLANNER_MODEL="opus"`, `PLANNER_EFFORT="low"`. The prompt no longer asks for literal file content in `write_patch` steps — it asks for a `spec` (what the file must do), enforced by instruction, not just convention.
+- `foreman/codegen.py` (new) — `generate_file_content` runs at `CODEGEN_MODEL="sonnet"`, `CODEGEN_EFFORT="medium"`, resolving a `spec` into real file contents. Wired into `planner.plan_to_graph`: a `write_patch` step with `spec` (not literal `content`) is resolved through Sonnet at graph-execution time, using upstream step outputs as context — so Opus's plan never contains generated code, only the intent to generate it.
+- `foreman/assess.py` — self-assessment's goal proposal also routed through `PLANNER_MODEL`/`PLANNER_EFFORT`, since ranking/prioritization is a judgment call at the same tier as decomposition, not a code-generation task.
+
+7 new tests (`test_agent_model_effort.py`, `test_foreman_codegen.py`, plus 2 added to `test_foreman_planner.py`) assert the flags actually reach the subprocess command line, and that a `write_patch` step with literal `content` skips codegen entirely (only `spec`-only steps trigger the extra call) — 198 tests passing, up from 188.
+
 ## The two contradictions that matter most
 
 **1. Daily cadence → monthly cadence.** The docs (`04`, `05`, `06`) are written around a nightly retrain / daily-horizon prediction cycle. Phase 0 measured this directly: a 1-day holding horizon cannot clear realistic transaction costs, confirmed independently four times (v1's own historical output, and three re-runs in this codebase on different data). The horizon that survives costs is **~20 trading bars (roughly monthly)**. Every daily-cadence detail in `04`–`08` should be read as *the wrong cadence*, not an implementation detail to fill in later.
