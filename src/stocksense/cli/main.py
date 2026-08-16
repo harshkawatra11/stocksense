@@ -41,6 +41,8 @@ from stocksense.foreman.adversary import red_team, has_blocking_finding
 from stocksense.foreman.assess import propose_goals
 from stocksense.foreman.budget import check_budget
 from stocksense.foreman.executor import execute_goal, record_goal_result
+from stocksense.harness.loops import build_reconcile_graph, grade_matured_predictions, record_predictions
+from stocksense.harness.runner import run_graph
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
 
@@ -297,6 +299,72 @@ def kundli(broker: Optional[str] = typer.Option(None, help="Filter to one broker
     if result["agent_status"] != "ok":
         typer.echo(f"(agent status: {result['agent_status']})")
     typer.echo("\n" + result["narrative"])
+
+
+@app.command("record-predictions")
+def record_predictions_cmd(
+    horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
+    lifecycle: str = typer.Option("live", help="Which model to score with: 'live' or 'shadow'"),
+) -> None:
+    """The reconcile loop, step 1: score today's cross-section with the
+    current live (or shadow) model and freeze the predictions to the
+    predictions table. Closes CRITICAL-1 -- this is the write that never
+    happened before."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    result = record_predictions(store, horizon_bars=horizon, lifecycle=lifecycle)
+    store.close()
+
+    if result is None:
+        typer.echo(f"No '{lifecycle}' model registered for horizon={horizon}, or no clean data to score. Nothing recorded.")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Recorded {result.n_predictions} predictions (run_id={result.run_id}, model={result.model_id}, as_of={result.as_of_date})")
+
+
+@app.command("grade")
+def grade_cmd(horizon: int = typer.Option(20, help="Prediction horizon in trading bars")) -> None:
+    """The reconcile loop, step 2: grade every prediction whose horizon
+    has actually elapsed against realized relative forward return,
+    computed with the same function training uses."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    result = grade_matured_predictions(store, horizon_bars=horizon)
+    store.close()
+
+    typer.echo(f"Graded {result.n_graded} predictions.")
+    if result.n_graded:
+        typer.echo(f"Direction correct: {result.n_correct_direction}/{result.n_graded} ({result.n_correct_direction / result.n_graded:.0%})")
+        typer.echo(f"Mean absolute error: {result.mean_abs_error:.5f}")
+
+
+@app.command("reconcile")
+def reconcile_cmd(
+    horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
+    lifecycle: str = typer.Option("live", help="Which model to score with: 'live' or 'shadow'"),
+) -> None:
+    """The reconcile loop, run as a harness graph: grade matured
+    predictions, then record today's. Idempotency-keyed by calendar
+    date, so running this twice in one day is a no-op the second time --
+    the property docs/05-nightly-pipeline.md requires of every step."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    graph = build_reconcile_graph(store, horizon_bars=horizon, lifecycle=lifecycle)
+    result = run_graph(graph, store)
+    store.close()
+
+    for outcome in result.outcomes:
+        typer.echo(f"  [{outcome.status:>9}] {outcome.name}")
+    if not result.all_succeeded:
+        typer.echo(f"Failed: {result.failed_nodes()}")
+        raise typer.Exit(code=1)
+
+    grade_out = result.context.get("grade_matured_predictions", {})
+    record_out = result.context.get("record_predictions", {})
+    if grade_out:
+        typer.echo(f"Graded: {grade_out.get('n_graded', 0)}")
+    if record_out.get("recorded"):
+        typer.echo(f"Recorded: {record_out.get('n_predictions', 0)} predictions (run_id={record_out.get('run_id')})")
 
 
 @foreman_app.command("run")
