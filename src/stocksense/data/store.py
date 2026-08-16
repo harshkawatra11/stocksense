@@ -266,6 +266,51 @@ CREATE TABLE IF NOT EXISTS protected_violations (
     action_taken     VARCHAR NOT NULL  -- blocked_routed_to_pr
 );
 
+-- docs/17-data-spine.md: point-in-time NSE archive data. Distinct from
+-- `candles` (yfinance, adjusted, current-universe-only) -- these are
+-- RAW bhavcopy rows, the source that makes a genuine point-in-time
+-- universe possible (see data/universe_pit.py).
+CREATE TABLE IF NOT EXISTS bhavcopy_eq (
+    symbol        VARCHAR NOT NULL,
+    series        VARCHAR NOT NULL,
+    date          DATE NOT NULL,
+    open          DOUBLE,
+    high          DOUBLE,
+    low           DOUBLE,
+    close         DOUBLE,
+    prev_close    DOUBLE,
+    volume        DOUBLE,
+    turnover_inr  DOUBLE,
+    era           VARCHAR NOT NULL,
+    PRIMARY KEY (symbol, series, date)
+);
+
+CREATE TABLE IF NOT EXISTS bhavcopy_delivery (
+    symbol        VARCHAR NOT NULL,
+    series        VARCHAR NOT NULL,
+    date          DATE NOT NULL,
+    delivery_qty  DOUBLE,
+    delivery_pct  DOUBLE,
+    PRIMARY KEY (symbol, series, date)
+);
+
+CREATE TABLE IF NOT EXISTS bhavcopy_fo (
+    symbol         VARCHAR NOT NULL,
+    instrument     VARCHAR NOT NULL,
+    expiry_date    VARCHAR NOT NULL,
+    strike         DOUBLE NOT NULL,
+    option_type    VARCHAR NOT NULL,
+    date           DATE NOT NULL,
+    open           DOUBLE,
+    high           DOUBLE,
+    low            DOUBLE,
+    close          DOUBLE,
+    open_interest  DOUBLE,
+    chg_in_oi      DOUBLE,
+    era            VARCHAR NOT NULL,
+    PRIMARY KEY (symbol, instrument, expiry_date, strike, option_type, date)
+);
+
 -- Daily spend/activity cap enforcement.
 CREATE TABLE IF NOT EXISTS budget (
     period_date      DATE NOT NULL PRIMARY KEY,
@@ -635,6 +680,75 @@ class Store:
             "goals_completed = goals_completed + ? WHERE period_date = ?",
             [invocations, tokens_estimate, goals_completed, period_date],
         )
+
+    # ---- point-in-time NSE archive data (docs/17-data-spine.md) ----
+
+    def write_bhavcopy_eq(self, df: pd.DataFrame) -> int:
+        cols = ["symbol", "series", "date", "open", "high", "low", "close", "prev_close", "volume", "turnover_inr", "era"]
+        self.con.register("_bc_eq", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO bhavcopy_eq ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _bc_eq
+            ON CONFLICT (symbol, series, date) DO UPDATE SET
+                open = excluded.open, high = excluded.high, low = excluded.low, close = excluded.close,
+                prev_close = excluded.prev_close, volume = excluded.volume,
+                turnover_inr = excluded.turnover_inr, era = excluded.era
+            """
+        )
+        self.con.unregister("_bc_eq")
+        return len(df)
+
+    def read_bhavcopy_eq(self, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+        query = "SELECT * FROM bhavcopy_eq"
+        params = []
+        if start and end:
+            query += " WHERE date BETWEEN ? AND ?"
+            params = [start, end]
+        return self.con.execute(query + " ORDER BY date, symbol", params).fetchdf()
+
+    def write_bhavcopy_delivery(self, df: pd.DataFrame) -> int:
+        cols = ["symbol", "series", "date", "delivery_qty", "delivery_pct"]
+        self.con.register("_bc_deliv", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO bhavcopy_delivery ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _bc_deliv
+            ON CONFLICT (symbol, series, date) DO UPDATE SET
+                delivery_qty = excluded.delivery_qty, delivery_pct = excluded.delivery_pct
+            """
+        )
+        self.con.unregister("_bc_deliv")
+        return len(df)
+
+    def read_bhavcopy_delivery(self, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+        query = "SELECT * FROM bhavcopy_delivery"
+        params = []
+        if start and end:
+            query += " WHERE date BETWEEN ? AND ?"
+            params = [start, end]
+        return self.con.execute(query + " ORDER BY date, symbol", params).fetchdf()
+
+    def write_bhavcopy_fo(self, df: pd.DataFrame) -> int:
+        cols = ["symbol", "instrument", "expiry_date", "strike", "option_type", "date",
+                "open", "high", "low", "close", "open_interest", "chg_in_oi", "era"]
+        self.con.register("_bc_fo", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO bhavcopy_fo ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _bc_fo
+            ON CONFLICT (symbol, instrument, expiry_date, strike, option_type, date) DO UPDATE SET
+                open = excluded.open, high = excluded.high, low = excluded.low, close = excluded.close,
+                open_interest = excluded.open_interest, chg_in_oi = excluded.chg_in_oi, era = excluded.era
+            """
+        )
+        self.con.unregister("_bc_fo")
+        return len(df)
+
+    def read_bhavcopy_fo(self, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+        query = "SELECT * FROM bhavcopy_fo"
+        params = []
+        if start and end:
+            query += " WHERE date BETWEEN ? AND ?"
+            params = [start, end]
+        return self.con.execute(query + " ORDER BY date, symbol", params).fetchdf()
 
     def close(self) -> None:
         self.con.close()
