@@ -78,7 +78,13 @@ def _unzip_single_csv(content: bytes) -> pd.DataFrame:
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
         name = zf.namelist()[0]
         with zf.open(name) as f:
-            df = pd.read_csv(f)
+            # keep_default_na=False: pandas' default NA-value list includes
+            # the literal string "NA", which is a real NSE SERIES code (used
+            # for certain bond/debt instruments) -- without this, those rows'
+            # series column silently becomes NaN and fails the NOT NULL
+            # constraint on write. Blank fields still parse as NaN via the
+            # explicit na_values=[''].
+            df = pd.read_csv(f, keep_default_na=False, na_values=[""])
     df.columns = [c.strip() for c in df.columns]
     return df
 
@@ -147,7 +153,7 @@ def fetch_delivery(d: date) -> pd.DataFrame | None:
     content = _cached_or_fetch("delivery", d, url, ext="csv")
     if content is None:
         return None
-    raw = pd.read_csv(io.BytesIO(content))
+    raw = pd.read_csv(io.BytesIO(content), keep_default_na=False, na_values=[""])
     raw.columns = [c.strip() for c in raw.columns]
     deliv_col = next((c for c in raw.columns if "DELIV_QTY" in c.upper()), None)
     pct_col = next((c for c in raw.columns if "DELIV_PER" in c.upper()), None)
