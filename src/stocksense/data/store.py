@@ -318,6 +318,28 @@ CREATE TABLE IF NOT EXISTS budget (
     tokens_estimate  DOUBLE NOT NULL DEFAULT 0,
     goals_completed  INTEGER NOT NULL DEFAULT 0
 );
+
+-- Corporate actions (splits/bonuses/dividends), parsed from NSE's
+-- corporateActions API (data/corporate_actions.py). bhavcopy_eq carries
+-- NO adjustment for these -- verified directly: prev_close equals the
+-- prior raw close across confirmed splits (LICI, ECLERX, PASHUPATI).
+-- This table is what data/adjust.py backs out an adjusted price series
+-- from; without it, raw bhavcopy prices contain fake -50% to -90%
+-- one-day "returns" on every split/bonus date.
+CREATE TABLE IF NOT EXISTS corporate_actions (
+    symbol         VARCHAR NOT NULL,
+    ex_date        DATE NOT NULL,
+    action_type    VARCHAR NOT NULL,  -- split | bonus | dividend | ignore | unparsed
+    ratio_num      DOUBLE,
+    ratio_den      DOUBLE,
+    factor_price   DOUBLE NOT NULL,   -- price-return adjustment factor (splits/bonuses only)
+    dividend_amount DOUBLE,           -- Rs per share; total-return factor computed at apply time (needs ex-date price)
+    face_before    DOUBLE,
+    face_after     DOUBLE,
+    subject_raw    VARCHAR NOT NULL,
+    parse_status   VARCHAR NOT NULL,  -- ok | unparsed
+    PRIMARY KEY (symbol, ex_date, subject_raw)
+);
 """
 
 # AUDIT: predictions was created but never written to (CRITICAL-1). These
@@ -761,6 +783,31 @@ class Store:
             query += " WHERE date BETWEEN ? AND ?"
             params = [start, end]
         return self.con.execute(query + " ORDER BY date, symbol", params).fetchdf()
+
+    def write_corporate_actions(self, df: pd.DataFrame) -> int:
+        cols = ["symbol", "ex_date", "action_type", "ratio_num", "ratio_den", "factor_price",
+                "dividend_amount", "face_before", "face_after", "subject_raw", "parse_status"]
+        self.con.register("_ca", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO corporate_actions ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _ca
+            ON CONFLICT (symbol, ex_date, subject_raw) DO UPDATE SET
+                action_type = excluded.action_type, ratio_num = excluded.ratio_num,
+                ratio_den = excluded.ratio_den, factor_price = excluded.factor_price,
+                dividend_amount = excluded.dividend_amount, face_before = excluded.face_before,
+                face_after = excluded.face_after, parse_status = excluded.parse_status
+            """
+        )
+        self.con.unregister("_ca")
+        return len(df)
+
+    def read_corporate_actions(self, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+        query = "SELECT * FROM corporate_actions"
+        params = []
+        if start and end:
+            query += " WHERE ex_date BETWEEN ? AND ?"
+            params = [start, end]
+        return self.con.execute(query + " ORDER BY symbol, ex_date", params).fetchdf()
 
     def close(self) -> None:
         self.con.close()

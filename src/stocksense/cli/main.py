@@ -48,6 +48,7 @@ from stocksense.rag.agent import ask as rag_ask
 from stocksense.rag.embed import embeddings_available
 from stocksense.rag.index import index_document, rebuild_fts_index
 from stocksense.data.nse_archive import fetch_range
+from stocksense.data.corporate_actions import fetch_ca_range, parse_ca_frame
 from stocksense.data.universe_pit import universe_as_of
 from stocksense.server.run import run as run_server
 
@@ -395,6 +396,38 @@ def backfill_nse_archive_cmd(
 
     store.close()
     typer.echo(f"Backfilled {n_ok} trading day(s) of '{kind}' data ({n_holiday} holidays/weekends skipped).")
+
+
+@app.command("backfill-corporate-actions")
+def backfill_corporate_actions_cmd(
+    start: str = typer.Option(..., help="Start date, YYYY-MM-DD"),
+    end: str = typer.Option(..., help="End date, YYYY-MM-DD"),
+) -> None:
+    """Backfill NSE corporate actions (splits/bonuses/dividends) into the
+    store, quarterly window by window, genuinely resumable in the same
+    shape as backfill-nse-archive: fetch_ca_range yields each window as
+    it's fetched and this loop writes it immediately, so an interruption
+    keeps every window already fetched. Required before any bhavcopy
+    price is usable as a feature -- see data/adjust.py."""
+    from datetime import datetime as _dt
+
+    start_d = _dt.strptime(start, "%Y-%m-%d").date()
+    end_d = _dt.strptime(end, "%Y-%m-%d").date()
+
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+
+    n_windows = n_actions = n_unparsed = 0
+    for raw in fetch_ca_range(start_d, end_d):
+        parsed = parse_ca_frame(raw)
+        if not parsed.empty:
+            store.write_corporate_actions(parsed)
+            n_actions += len(parsed)
+            n_unparsed += int((parsed["parse_status"] == "unparsed").sum())
+        n_windows += 1
+
+    store.close()
+    typer.echo(f"Backfilled {n_windows} window(s), {n_actions} corporate action(s) ({n_unparsed} unparsed).")
 
 
 @app.command("universe-as-of")
