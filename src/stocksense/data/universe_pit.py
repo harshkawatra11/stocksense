@@ -54,6 +54,38 @@ def universe_as_of(
     return sorted(rows["symbol"].tolist())
 
 
+def filter_to_point_in_time_universe(
+    store, df: pd.DataFrame, date_col: str = "date", symbol_col: str = "symbol",
+    min_turnover_inr: float = 5_000_000.0, min_price_inr: float = 5.0,
+    lookback_days: int = 60, series: str = "EQ",
+) -> pd.DataFrame:
+    """Drops every (symbol, date) row of `df` not in that date's
+    point-in-time universe. This is the actual wiring point that closes
+    HIGH-4: universe_as_of/universe_membership_table were correct and
+    tested but had exactly one caller (a display CLI command) before
+    this -- every model, feature build, and walk-forward fold ran on
+    'every symbol present in the source table', which for bhavcopy_eq
+    means the full 7,556-symbol history including names that were
+    illiquid or unlisted on any given date, not the universe a trader
+    could actually have held then.
+
+    One membership query per unique date in `df` (not per row) -- for a
+    multi-year daily frame that's one query per trading day, not per
+    (symbol, date) pair.
+    """
+    dates = sorted(pd.to_datetime(df[date_col]).dt.date.unique())
+    membership = universe_membership_table(store, dates, min_turnover_inr, min_price_inr, lookback_days, series)
+    if membership.empty:
+        return df.iloc[0:0]
+
+    out = df.copy()
+    out["_d"] = pd.to_datetime(out[date_col]).dt.date
+    membership = membership.rename(columns={"symbol": symbol_col, "date": "_d"})[[symbol_col, "_d"]]
+    membership["_in_universe"] = True
+    merged = out.merge(membership, on=[symbol_col, "_d"], how="left")
+    return merged[merged["_in_universe"] == True].drop(columns=["_d", "_in_universe"]).reset_index(drop=True)  # noqa: E712
+
+
 def universe_membership_table(
     store, dates: list[date], min_turnover_inr: float = 5_000_000.0, min_price_inr: float = 5.0,
     lookback_days: int = 60, series: str = "EQ",

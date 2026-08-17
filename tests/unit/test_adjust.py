@@ -12,7 +12,12 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from stocksense.data.adjust import adjusted_prices, adjustment_factors
+from stocksense.data.adjust import (
+    adjusted_prices,
+    adjustment_factors,
+    flag_unexplained_adjustment_jumps,
+    quarantine_unexplained_jumps,
+)
 from stocksense.data.store import Store
 
 
@@ -115,3 +120,93 @@ def test_adjustment_factors_empty_when_no_actions(tmp_store) -> None:
 def test_adjustment_factors_rejects_invalid_basis(tmp_store) -> None:
     with pytest.raises(ValueError):
         adjustment_factors(tmp_store, ["X"], basis="bogus")
+
+
+# ---- flag_unexplained_adjustment_jumps / quarantine_unexplained_jumps ----
+#
+# Regression coverage for the real bug found live in Phase D2:
+# data/validate.quarantine_symbols (built for yfinance, where `close` is
+# already split-adjusted) was applied unconditionally to bhavcopy-sourced
+# adjusted prices and quarantined RELIANCE, TCS, and ~600 other blue-chip
+# symbols for their GENUINE 1:1 bonuses (factor exactly 2.0), because
+# bhavcopy's raw `close` legitimately produces a step in adj_close/close
+# at every real corporate action. These tests pin down the correct,
+# source-appropriate behavior: a jump WITH a matching corporate_actions
+# record must pass through untouched; a jump with NO matching record
+# (an unparsed action, a genuine data error) must still be caught.
+
+
+def _trading_calendar(store, dates: list[date]) -> None:
+    """Registers a full trading calendar in bhavcopy_eq (via a throwaway
+    liquid symbol) so flag_unexplained_adjustment_jumps' calendar-join
+    sees every date as a genuine trading day, matching how the real
+    table is populated."""
+    rows = [_bhav_row("_CAL_", d, close=100.0) for d in dates]
+    store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+
+def test_genuine_split_with_matching_ca_record_is_not_flagged(tmp_store) -> None:
+    dates = [date(2026, 1, d) for d in (5, 6, 7, 8, 9)]
+    _trading_calendar(tmp_store, dates)
+    tmp_store.write_corporate_actions(pd.DataFrame([_ca_row("RELIANCE_LIKE", dates[2], "bonus", 0.5)]))
+
+    # simulate the raw-close jump a real 1:1 bonus produces (close halves on ex-date)
+    rows = [
+        _bhav_row("RELIANCE_LIKE", dates[0], close=800.0),
+        _bhav_row("RELIANCE_LIKE", dates[1], close=810.0),
+        _bhav_row("RELIANCE_LIKE", dates[2], close=409.0, prev_close=818.0),  # ex-date: raw halves
+        _bhav_row("RELIANCE_LIKE", dates[3], close=412.0),
+        _bhav_row("RELIANCE_LIKE", dates[4], close=415.0),
+    ]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+    adjusted = adjusted_prices(tmp_store, ["RELIANCE_LIKE"], dates[0], dates[-1], basis="price")
+
+    flagged = flag_unexplained_adjustment_jumps(tmp_store, adjusted, jump_threshold=0.35)
+    assert flagged.empty
+
+    clean, bad = quarantine_unexplained_jumps(tmp_store, adjusted, jump_threshold=0.35)
+    assert bad == []
+    assert "RELIANCE_LIKE" in set(clean["symbol"])
+
+
+def test_jump_with_no_matching_ca_record_is_flagged_and_quarantined(tmp_store) -> None:
+    dates = [date(2026, 2, d) for d in (2, 3, 4, 5, 6)]
+    _trading_calendar(tmp_store, dates)
+    # NO corporate_actions record written -- this jump is unexplained
+    rows = [
+        _bhav_row("BUGGYCO", dates[0], close=800.0),
+        _bhav_row("BUGGYCO", dates[1], close=810.0),
+        _bhav_row("BUGGYCO", dates[2], close=400.0, prev_close=810.0),  # unexplained ~50% drop
+        _bhav_row("BUGGYCO", dates[3], close=405.0),
+        _bhav_row("BUGGYCO", dates[4], close=410.0),
+    ]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+    adjusted = adjusted_prices(tmp_store, ["BUGGYCO"], dates[0], dates[-1], basis="price")
+
+    flagged = flag_unexplained_adjustment_jumps(tmp_store, adjusted, jump_threshold=0.35)
+    assert not flagged.empty
+    assert "BUGGYCO" in set(flagged["symbol"])
+
+    clean, bad = quarantine_unexplained_jumps(tmp_store, adjusted, jump_threshold=0.35)
+    assert bad == ["BUGGYCO"]
+    assert clean.empty
+
+
+def test_non_consecutive_market_days_are_not_falsely_flagged(tmp_store) -> None:
+    """An illiquid symbol whose rows skip several calendar/trading days
+    must not have that gap misread as a same-day jump -- the same
+    LAG-across-gaps pitfall found earlier when analyzing bhavcopy
+    directly (INDOTECH's apparent 'jump' was really a multi-week gap)."""
+    dates = [date(2026, 3, d) for d in range(2, 12)]  # full calendar, 10 days
+    _trading_calendar(tmp_store, dates)
+    # THINCO only trades on day 1 and day 10 -- a large price difference
+    # across that gap is NOT a same-day jump and must not be flagged.
+    rows = [
+        _bhav_row("THINCO", dates[0], close=100.0),
+        _bhav_row("THINCO", dates[-1], close=180.0),  # +80% but across a 9-day gap, not consecutive
+    ]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+    adjusted = adjusted_prices(tmp_store, ["THINCO"], dates[0], dates[-1], basis="price")
+
+    flagged = flag_unexplained_adjustment_jumps(tmp_store, adjusted, jump_threshold=0.35)
+    assert flagged.empty

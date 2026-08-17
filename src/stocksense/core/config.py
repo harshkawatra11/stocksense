@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     min_price_inr: float = 5.0  # exclude penny stocks below this price
     min_avg_daily_turnover_inr: float = 5_000_000.0  # ~50 lakh/day liquidity floor
 
+    # Phase D2: which price source and universe the pipeline trains/backtests
+    # against. Defaults preserve the Phase 0 path unchanged (candles=yfinance,
+    # fixed 98-symbol PHASE0_UNIVERSE via quarantine_symbols) so the old
+    # numbers stay reproducible for direct A/B comparison against the
+    # bhavcopy re-run (research/preregistration_bhavcopy_rerun.md).
+    price_source: str = "candles"  # "candles" (yfinance) | "bhavcopy" (NSE, point-in-time)
+    return_basis: str = "price"    # "price" (splits/bonuses only) | "total" (also dividends)
+    use_point_in_time_universe: bool = False  # only meaningful when price_source="bhavcopy"
+
     # Upstox (Phase 0 uses yfinance; these are read only if present)
     upstox_api_key: str | None = None
     upstox_api_secret: str | None = None

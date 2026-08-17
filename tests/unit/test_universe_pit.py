@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from stocksense.data.store import Store
-from stocksense.data.universe_pit import universe_as_of, universe_membership_table
+from stocksense.data.universe_pit import filter_to_point_in_time_universe, universe_as_of, universe_membership_table
 
 
 @pytest.fixture()
@@ -104,3 +104,48 @@ def test_universe_membership_table_builds_across_multiple_dates(tmp_store) -> No
     assert len(table) == 1
     assert table.iloc[0]["symbol"] == "A"
     assert bool(table.iloc[0]["is_tradeable"]) is True
+
+
+def test_filter_to_point_in_time_universe_drops_future_liquidity(tmp_store) -> None:
+    """The wiring point that actually closes HIGH-4: a feature/label
+    frame containing a symbol that only becomes liquid AFTER a given
+    row's date must have that row dropped, even though the SAME symbol
+    has other rows (at later dates) that survive the filter."""
+    rows = []
+    for month in range(1, 13):
+        rows.append(_bhavcopy_row("FUTURECO", date(2015, month, 15), turnover=50_000_000.0))
+    for year in (2010, 2015):
+        rows.append(_bhavcopy_row("STEADY", date(year, 6, 15)))
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    frame = pd.DataFrame([
+        {"symbol": "FUTURECO", "date": date(2010, 6, 20), "value": 1},  # before FUTURECO exists -> must be dropped
+        {"symbol": "FUTURECO", "date": date(2015, 12, 20), "value": 2},  # now liquid -> must survive
+        {"symbol": "STEADY", "date": date(2010, 6, 20), "value": 3},
+        {"symbol": "STEADY", "date": date(2015, 6, 20), "value": 4},
+    ])
+
+    out = filter_to_point_in_time_universe(tmp_store, frame, lookback_days=60)
+
+    kept = set(zip(out["symbol"], out["value"]))
+    assert (2010, 6, 20) not in [(r["date"].year, r["date"].month, r["date"].day) for _, r in out.iterrows() if r["symbol"] == "FUTURECO"]
+    assert ("FUTURECO", 1) not in kept
+    assert ("FUTURECO", 2) in kept
+    assert ("STEADY", 3) in kept
+    assert ("STEADY", 4) in kept
+
+
+def test_filter_to_point_in_time_universe_preserves_non_universe_columns(tmp_store) -> None:
+    rows = [_bhavcopy_row("A", date(2020, 1, d)) for d in (5, 10, 15)]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+    frame = pd.DataFrame([{"symbol": "A", "date": date(2020, 1, 20), "some_feature": 42.0, "other": "x"}])
+
+    out = filter_to_point_in_time_universe(tmp_store, frame, lookback_days=60)
+    assert list(out.columns) == ["symbol", "date", "some_feature", "other"]
+    assert out.iloc[0]["some_feature"] == 42.0
+
+
+def test_filter_to_point_in_time_universe_empty_input(tmp_store) -> None:
+    frame = pd.DataFrame(columns=["symbol", "date", "value"])
+    out = filter_to_point_in_time_universe(tmp_store, frame, lookback_days=60)
+    assert out.empty

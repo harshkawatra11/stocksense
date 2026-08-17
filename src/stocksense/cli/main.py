@@ -49,7 +49,8 @@ from stocksense.rag.embed import embeddings_available
 from stocksense.rag.index import index_document, rebuild_fts_index
 from stocksense.data.nse_archive import fetch_range
 from stocksense.data.corporate_actions import fetch_ca_range, parse_ca_frame
-from stocksense.data.universe_pit import universe_as_of
+from stocksense.data.adjust import read_adjusted_candles, quarantine_unexplained_jumps
+from stocksense.data.universe_pit import universe_as_of, filter_to_point_in_time_universe
 from stocksense.server.run import run as run_server
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
@@ -61,21 +62,60 @@ app.add_typer(foreman_app, name="foreman")
 MODEL_TYPE = "cross_sectional_ranker"
 
 
+def _load_candles(settings, store) -> pd.DataFrame:
+    """Source switch (docs/17-data-spine.md, Phase D2): 'candles'
+    preserves the exact Phase 0 path (yfinance, fixed 98-symbol
+    universe) unchanged, so those numbers stay reproducible. 'bhavcopy'
+    pulls point-in-time NSE data through the corporate-action adjustment
+    layer (data/adjust.py) -- the widest candidate symbol set is read
+    first, then narrowed to the point-in-time-tradeable universe per
+    date if use_point_in_time_universe is set, rather than narrowed to
+    a hardcoded list up front."""
+    if settings.price_source == "candles":
+        return store.read_candles()
+
+    if settings.price_source != "bhavcopy":
+        raise ValueError(f"unknown price_source {settings.price_source!r}, expected 'candles' or 'bhavcopy'")
+
+    bounds = store.con.execute("SELECT MIN(date), MAX(date) FROM bhavcopy_eq").fetchone()
+    if bounds[0] is None:
+        return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "adj_close", "volume", "source"])
+    min_d, max_d = bounds
+    symbols = store.con.execute("SELECT DISTINCT symbol FROM bhavcopy_eq WHERE series = 'EQ'").fetchdf()["symbol"].tolist()
+    candles = read_adjusted_candles(store, symbols, min_d, max_d, basis=settings.return_basis)
+
+    if settings.use_point_in_time_universe:
+        candles = filter_to_point_in_time_universe(
+            store, candles, min_turnover_inr=settings.min_avg_daily_turnover_inr, min_price_inr=settings.min_price_inr
+        )
+    return candles
+
+
 def _load_features_and_labels(horizon: int):
     settings = get_settings()
     store = Store(settings.duckdb_path)
-    candles = store.read_candles()
-    store.close()
+    candles = _load_candles(settings, store)
 
-    # Quarantine symbols with a detected adjustment-factor discontinuity
-    # before anything downstream touches them — a real bug found during
-    # Phase 0 stress testing (ADANIENT's adj_close jumped 8.6x day-over-
-    # day in 2003 while close barely moved), which fabricated an extreme
-    # "return" and inflated one walk-forward fold's alpha. See
-    # stocksense.data.validate and research/phase0_verdict.md's "Run 3".
-    candles, quarantined = quarantine_symbols(candles)
+    # Quarantine symbols with a detected adjustment anomaly before
+    # anything downstream touches them. The detector is source-dependent
+    # and this branch matters: data/validate.quarantine_symbols compares
+    # adj_close to raw close, which is only a bug signal when close is
+    # ALREADY split-adjusted at the source (true for yfinance's `candles`
+    # — see the ADANIENT 8.6x-jump bug in research/phase0_verdict.md's
+    # "Run 3"). For bhavcopy-sourced data close is raw by construction
+    # (data/corporate_actions.py), so adj_close/close legitimately steps
+    # at every real split/bonus — applying the yfinance check there is
+    # itself a bug: it quarantined RELIANCE, TCS, and ~600 other names
+    # for their genuine corporate actions, found live during Phase D2.
+    # The bhavcopy-appropriate check instead flags adjusted-price jumps
+    # with NO matching corporate-action record.
+    if settings.price_source == "bhavcopy":
+        candles, quarantined = quarantine_unexplained_jumps(store, candles)
+    else:
+        candles, quarantined = quarantine_symbols(candles)
+    store.close()
     if quarantined:
-        log.warning("quarantined_symbols_with_adjustment_anomalies", symbols=quarantined)
+        log.warning("quarantined_symbols_with_adjustment_anomalies", symbols=quarantined, price_source=settings.price_source)
 
     feats = build_features(candles)
     fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
