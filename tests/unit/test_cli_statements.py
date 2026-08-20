@@ -59,6 +59,57 @@ def test_reingest_same_file_is_idempotent(cli_env) -> None:
     assert "Already ingested" in result.output
 
 
+def test_kundli_persists_positions_to_the_store(cli_env) -> None:
+    """AUDIT FIX regression: kundli reconstructed positions in memory and
+    handed them to generate_kundli, but never called
+    store.write_positions -- the `positions` table stayed permanently
+    empty regardless of how many times kundli ran (confirmed live:
+    trades=491, diagnostics=39, counterfactuals=21, positions=0), which
+    silently starved /api/summary (the desktop dashboard's P&L panel)
+    and optimizer/tax.py."""
+    from stocksense.cli.main import app
+    from stocksense.core.config import get_settings
+    from stocksense.data.store import Store
+
+    fixture = str(FIXTURES / "zerodha_sample.csv")
+    cli_env.invoke(app, ["statement-ingest", fixture])
+    result = cli_env.invoke(app, ["kundli"])
+    assert result.exit_code == 0, result.output
+
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    positions = store.read_positions()
+    store.close()
+
+    assert len(positions) == 2  # matches "Positions analyzed: 2" in the CLI output
+
+
+def test_kundli_rerun_is_idempotent_not_a_duplicate_key_crash(cli_env) -> None:
+    """position_id is deterministic (derived from symbol/segment/dates/
+    prices/qty in positions.py), so a naive re-insert on a second run
+    would hit the primary-key constraint. write_positions' ON CONFLICT
+    DO NOTHING must make a second kundli run a clean no-op, not a crash
+    -- the exact scenario of a user re-running a report."""
+    from stocksense.cli.main import app
+    from stocksense.core.config import get_settings
+    from stocksense.data.store import Store
+
+    fixture = str(FIXTURES / "zerodha_sample.csv")
+    cli_env.invoke(app, ["statement-ingest", fixture])
+    first = cli_env.invoke(app, ["kundli"])
+    second = cli_env.invoke(app, ["kundli"])
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output  # must not crash on re-run
+
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    positions = store.read_positions()
+    store.close()
+
+    assert len(positions) == 2  # not duplicated to 4
+
+
 def test_trade_dates_and_times_land_in_correct_columns(cli_env) -> None:
     """The regression test for the exact bug found: trade_time values
     (HH:MM:SS strings) must not end up cast into the trade_date column."""

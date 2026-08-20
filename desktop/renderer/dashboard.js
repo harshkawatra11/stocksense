@@ -2,17 +2,10 @@
 // changes on a nightly/hourly cadence at most, so push adds real
 // complexity (a persistent connection to manage, reconnect logic) for
 // no benefit over a 2s poll, matching the reference dashboard's own
-// refresh rate.
+// refresh rate. API_BASE/fetchJson now live in core/api.js (Phase F5 --
+// every panel shares one client instead of each redeclaring it).
 
-const API_PORT = new URLSearchParams(window.location.search).get("port");
-const API_BASE = `http://127.0.0.1:${API_PORT}`;
 const POLL_INTERVAL_MS = 2000;
-
-async function fetchJson(path) {
-  const resp = await fetch(`${API_BASE}${path}`);
-  if (!resp.ok) throw new Error(`${path} -> ${resp.status}`);
-  return resp.json();
-}
 
 function formatMoney(n) {
   if (n === null || n === undefined) return "--";

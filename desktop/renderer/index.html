@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'" />
   <title>StockSense</title>
   <link rel="stylesheet" href="terminal.css" />
 </head>
@@ -14,35 +14,240 @@
       <span id="db-status">connecting...</span>
       <span class="sep">·</span>
       <span id="latest-data">data: --</span>
+      <span class="sep">·</span>
+      <span id="usage-gauge">claude: --</span>
     </header>
 
-    <main class="body">
-      <section class="col left">
-        <div class="panel">
-          <div class="panel-title">P&amp;L SUMMARY</div>
-          <div id="summary" class="panel-content">loading...</div>
-        </div>
-        <div class="panel">
-          <div class="panel-title">DOSHAS</div>
-          <div id="doshas" class="panel-content">loading...</div>
-        </div>
-      </section>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="dashboard">DASHBOARD</button>
+      <button class="tab-btn" data-tab="pipeline">PIPELINE</button>
+      <button class="tab-btn" data-tab="statements">STATEMENTS</button>
+      <button class="tab-btn" data-tab="foreman">FOREMAN</button>
+      <button class="tab-btn" data-tab="claude">CLAUDE</button>
+      <button class="tab-btn" data-tab="settings">SETTINGS</button>
+    </nav>
 
-      <section class="col right">
-        <div class="panel">
-          <div class="panel-title">HARNESS</div>
-          <div id="harness" class="panel-content">loading...</div>
-        </div>
-        <div class="panel">
-          <div class="panel-title">MODEL REGISTRY</div>
-          <div id="registry" class="panel-content">loading...</div>
-        </div>
-        <div class="panel">
-          <div class="panel-title">AGENT RUNS</div>
-          <div id="agent-runs" class="panel-content">loading...</div>
-        </div>
-      </section>
+    <main class="body">
+      <!-- DASHBOARD (existing read-only view, kept as-is) -->
+      <div class="tab-panel active" id="tab-dashboard">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">P&amp;L SUMMARY</div>
+            <div id="summary" class="panel-content">loading...</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">DOSHAS</div>
+            <div id="doshas" class="panel-content">loading...</div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">HARNESS</div>
+            <div id="harness" class="panel-content">loading...</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">MODEL REGISTRY</div>
+            <div id="registry" class="panel-content">loading...</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">AGENT RUNS</div>
+            <div id="agent-runs" class="panel-content">loading...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- PIPELINE: backfills -->
+      <div class="tab-panel" id="tab-pipeline">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">NSE BHAVCOPY BACKFILL</div>
+            <div class="panel-content">
+              <form id="form-nse-archive" class="ctl-form">
+                <label>start <input type="date" name="start" value="2010-01-01" required /></label>
+                <label>end <input type="date" id="nse-archive-end" name="end" required /></label>
+                <label>kind
+                  <select name="kind"><option value="cm">cm (equity)</option><option value="delivery">delivery</option><option value="fo">fo</option></select>
+                </label>
+                <button type="submit">RUN BACKFILL</button>
+              </form>
+              <div id="status-nse-archive" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">CORPORATE ACTIONS BACKFILL</div>
+            <div class="panel-content">
+              <form id="form-ca" class="ctl-form">
+                <label>start <input type="date" name="start" value="2010-01-01" required /></label>
+                <label>end <input type="date" id="ca-end" name="end" required /></label>
+                <button type="submit">RUN BACKFILL</button>
+              </form>
+              <div id="status-ca" class="ctl-status"></div>
+            </div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">INTRADAY (UPSTOX 1-MIN) BACKFILL</div>
+            <div class="panel-content">
+              <form id="form-intraday" class="ctl-form">
+                <label>start <input type="date" name="start" value="2022-01-01" required /></label>
+                <label>end <input type="date" id="intraday-end" name="end" required /></label>
+                <label>top N symbols <input type="number" name="top_n" value="250" min="1" max="1000" /></label>
+                <button type="submit">RUN BACKFILL</button>
+              </form>
+              <div id="status-intraday" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RAG CORPUS INDEX</div>
+            <div class="panel-content">
+              <button id="btn-index-corpus">RE-INDEX CORPUS</button>
+              <div id="status-index-corpus" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RECENT PIPELINE JOBS</div>
+            <div id="pipeline-job-history" class="panel-content">loading...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- STATEMENTS & KUNDLI -->
+      <div class="tab-panel" id="tab-statements">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">INGEST STATEMENT</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label>file
+                  <select id="statement-file-select"></select>
+                </label>
+                <button id="btn-refresh-files" type="button">↻ REFRESH LIST</button>
+                <button id="btn-ingest" type="button">INGEST</button>
+              </div>
+              <div id="status-ingest" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RUN KUNDLI</div>
+            <div class="panel-content">
+              <button id="btn-kundli" type="button">RUN KUNDLI</button>
+              <div id="status-kundli" class="ctl-status"></div>
+              <div class="usage-label">Narrative (if Claude access is authorized) streams in the job console below. Numbers here are always shown regardless.</div>
+            </div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">SUMMARY</div>
+            <div id="kundli-summary" class="panel-content">loading...</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">DOSHAS</div>
+            <div id="kundli-doshas" class="panel-content">loading...</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">COUNTERFACTUALS</div>
+            <div id="kundli-counterfactuals" class="panel-content">loading...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- FOREMAN: manual control only -->
+      <div class="tab-panel" id="tab-foreman">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">RUN A GOAL</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label>goal <textarea id="foreman-goal-input" rows="3" placeholder="e.g. add a determinism test for the new parser"></textarea></label>
+                <button id="btn-foreman-run" type="button">RUN GOAL</button>
+              </div>
+              <div id="status-foreman-run" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">SELF-ASSESSMENT</div>
+            <div class="panel-content">
+              <button id="btn-foreman-assess" type="button">RUN ASSESS (proposes goals, executes nothing)</button>
+              <div id="status-foreman-assess" class="ctl-status"></div>
+            </div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">MODEL/EFFORT PER ROLE (manual -- no auto-switching here)</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label>planner model <select id="foreman-planner-model"></select></label>
+                <label>planner effort <select id="foreman-planner-effort"></select></label>
+                <label>assess model <select id="foreman-assess-model"></select></label>
+                <label>assess effort <select id="foreman-assess-effort"></select></label>
+                <button id="btn-save-foreman-settings" type="button">SAVE</button>
+              </div>
+              <div id="status-foreman-settings" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RECENT RUNS</div>
+            <div id="foreman-status" class="panel-content">loading...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- CLAUDE: auth + usage -->
+      <div class="tab-panel" id="tab-claude">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">CONNECTION</div>
+            <div class="panel-content">
+              <div id="claude-auth-status">loading...</div>
+              <div class="ctl-form" style="margin-top:8px">
+                <button id="btn-claude-authorize" type="button">AUTHORIZE</button>
+                <button id="btn-claude-decline" type="button">DECLINE</button>
+              </div>
+              <div id="status-claude-authorize" class="ctl-status"></div>
+              <div class="usage-label">StockSense never reads your Claude credentials directly -- only `claude auth status`. Revoking login there, or switching accounts, is detected automatically and re-prompts here.</div>
+            </div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">USAGE</div>
+            <div id="claude-usage-detail" class="panel-content">loading...</div>
+            <div class="panel-content ctl-form">
+              <label>soft alarm, tokens/5h <input type="number" id="soft-alarm-input" placeholder="unset" /></label>
+              <button id="btn-save-soft-alarm" type="button">SAVE</button>
+              <div id="status-soft-alarm" class="ctl-status"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="tab-panel" id="tab-settings">
+        <section class="col right" style="flex:1">
+          <div class="panel">
+            <div class="panel-title">ALL SETTINGS</div>
+            <div id="settings-form" class="panel-content">loading...</div>
+            <div class="panel-content">
+              <button id="btn-save-settings" type="button">SAVE ALL</button>
+              <div id="status-settings-save" class="ctl-status"></div>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
+
+    <div class="job-console" id="job-console">
+      <div class="job-console-header" id="job-console-header">
+        <span>JOB CONSOLE</span>
+        <span id="job-console-status" class="status-idle">idle</span>
+        <button id="job-console-stop" type="button">STOP</button>
+        <span class="job-console-toggle">▾</span>
+      </div>
+      <div class="job-console-body" id="job-console-body"></div>
+    </div>
 
     <footer class="panel footer">
       <span class="cursor">&#9608;</span>
@@ -50,6 +255,14 @@
     </footer>
   </div>
 
+  <script src="core/api.js"></script>
+  <script src="core/router.js"></script>
+  <script src="core/job-console.js"></script>
   <script src="dashboard.js"></script>
+  <script src="panels/pipeline.js"></script>
+  <script src="panels/statements.js"></script>
+  <script src="panels/foreman.js"></script>
+  <script src="panels/claude-connect.js"></script>
+  <script src="panels/settings.js"></script>
 </body>
 </html>

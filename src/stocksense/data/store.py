@@ -340,6 +340,85 @@ CREATE TABLE IF NOT EXISTS corporate_actions (
     parse_status   VARCHAR NOT NULL,  -- ok | unparsed
     PRIMARY KEY (symbol, ex_date, subject_raw)
 );
+
+-- Phase E1: 1-minute intraday bars from Upstox. `interval` is stored
+-- explicitly (not assumed '1minute') so a future coarser-grain fetch can
+-- share this table without a migration. ts is IST wall-clock, matching
+-- what Upstox returns and what a trader reasons about directly -- no UTC
+-- conversion, since this project only ever trades one exchange/timezone.
+CREATE TABLE IF NOT EXISTS intraday_bars (
+    symbol      VARCHAR NOT NULL,
+    ts          TIMESTAMP NOT NULL,
+    interval    VARCHAR NOT NULL,
+    open        DOUBLE,
+    high        DOUBLE,
+    low         DOUBLE,
+    close       DOUBLE,
+    volume      DOUBLE,
+    PRIMARY KEY (symbol, ts, interval)
+);
+
+-- Phase E1: symbol -> Upstox instrument_key resolution, cached so the
+-- ~2,600-row instrument master doesn't need re-fetching every run and so
+-- unmapped symbols are a queryable, auditable fact rather than a log line.
+CREATE TABLE IF NOT EXISTS upstox_instrument_map (
+    symbol          VARCHAR NOT NULL,
+    isin            VARCHAR,
+    instrument_key  VARCHAR,
+    resolved        BOOLEAN NOT NULL,  -- false if no Upstox instrument matched this symbol
+    PRIMARY KEY (symbol)
+);
+
+-- Phase F1: desktop control-center job tracking. Distinct from job_runs
+-- (the harness graph runner's node-level table) -- this tracks a whole
+-- CLI subprocess triggered from the UI (a backfill, foreman run, etc.),
+-- durable across a server restart so a still-running multi-hour job
+-- isn't silently forgotten. Written only at job START and FINISH (never
+-- polled/updated mid-run) -- live progress while running comes from the
+-- in-process JobRegistry's in-memory buffer, not from this table, since
+-- the job's own subprocess holds DuckDB's single-writer lock for its
+-- entire duration and a mid-run UPDATE from the server process would
+-- itself block on that lock.
+CREATE TABLE IF NOT EXISTS ui_jobs (
+    job_id       VARCHAR NOT NULL PRIMARY KEY,
+    command      VARCHAR NOT NULL,
+    args_json    VARCHAR NOT NULL,
+    pid          INTEGER,
+    status       VARCHAR NOT NULL,  -- running | completed | failed | stopped
+    started_at   TIMESTAMP NOT NULL,
+    finished_at  TIMESTAMP,
+    log_path     VARCHAR
+);
+
+-- Phase F2/F4: local app settings + the Claude-CLI access authorize/
+-- decline flag. Key-value on purpose (not a Settings-mirroring typed
+-- table) -- new keys (risk thresholds in E5, per-role model/effort in
+-- F4) get added without a migration.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key          VARCHAR NOT NULL PRIMARY KEY,
+    value        VARCHAR,
+    updated_at   TIMESTAMP NOT NULL
+);
+
+-- Phase F3: measured (not official) Claude usage, aggregated from the
+-- CLI's own local session transcripts (~/.claude/projects/**/*.jsonl).
+-- claude_usage_offsets is what makes re-scanning incremental -- a byte
+-- offset per file, never re-parsing the 600MB+ of history that already
+-- accumulated before this feature existed.
+CREATE TABLE IF NOT EXISTS claude_usage_offsets (
+    file_path    VARCHAR NOT NULL PRIMARY KEY,
+    byte_offset  BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS claude_usage_events (
+    event_id               VARCHAR NOT NULL PRIMARY KEY,
+    ts                     TIMESTAMP NOT NULL,
+    model                  VARCHAR,
+    input_tokens           BIGINT NOT NULL DEFAULT 0,
+    output_tokens          BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens  BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens      BIGINT NOT NULL DEFAULT 0
+);
 """
 
 # AUDIT: predictions was created but never written to (CRITICAL-1). These
@@ -591,8 +670,21 @@ class Store:
             "quantity", "entry_price", "exit_price", "gross_pnl", "charges", "net_pnl",
             "holding_seconds", "is_intraday", "mae", "mfe",
         ]
+        # AUDIT FIX: position_id is DETERMINISTIC (positions.py derives it
+        # from symbol/segment/dates/prices/qty, not a random uuid), so a
+        # plain INSERT crashed on the primary-key constraint the second
+        # time kundli ran against the same trades -- the exact scenario
+        # a user re-running a report hits immediately. ON CONFLICT DO
+        # NOTHING is correct here (not DO UPDATE): a reconstruction from
+        # the same trades always recomputes the same numbers, so there's
+        # nothing to update, only a no-op to allow.
         self.con.register("_positions", df[cols])
-        self.con.execute(f"INSERT INTO positions ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _positions")
+        self.con.execute(
+            f"""
+            INSERT INTO positions ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _positions
+            ON CONFLICT (position_id) DO NOTHING
+            """
+        )
         self.con.unregister("_positions")
         return len(df)
 
@@ -808,6 +900,125 @@ class Store:
             query += " WHERE ex_date BETWEEN ? AND ?"
             params = [start, end]
         return self.con.execute(query + " ORDER BY symbol, ex_date", params).fetchdf()
+
+    def write_intraday_bars(self, df: pd.DataFrame) -> int:
+        cols = ["symbol", "ts", "interval", "open", "high", "low", "close", "volume"]
+        self.con.register("_ib", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO intraday_bars ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _ib
+            ON CONFLICT (symbol, ts, interval) DO UPDATE SET
+                open = excluded.open, high = excluded.high, low = excluded.low,
+                close = excluded.close, volume = excluded.volume
+            """
+        )
+        self.con.unregister("_ib")
+        return len(df)
+
+    def read_intraday_bars(
+        self, symbols: list[str] | None = None, start: str | None = None, end: str | None = None,
+        interval: str = "1minute",
+    ) -> pd.DataFrame:
+        query = "SELECT * FROM intraday_bars WHERE interval = ?"
+        params: list = [interval]
+        if symbols:
+            query += f" AND symbol IN ({', '.join(['?'] * len(symbols))})"
+            params += symbols
+        if start and end:
+            query += " AND ts BETWEEN ? AND ?"
+            params += [start, end]
+        return self.con.execute(query + " ORDER BY symbol, ts", params).fetchdf()
+
+    def write_upstox_instrument_map(self, df: pd.DataFrame) -> int:
+        cols = ["symbol", "isin", "instrument_key", "resolved"]
+        self.con.register("_uim", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO upstox_instrument_map ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _uim
+            ON CONFLICT (symbol) DO UPDATE SET
+                isin = excluded.isin, instrument_key = excluded.instrument_key, resolved = excluded.resolved
+            """
+        )
+        self.con.unregister("_uim")
+        return len(df)
+
+    def read_upstox_instrument_map(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM upstox_instrument_map ORDER BY symbol").fetchdf()
+
+    # ---- Phase F1: UI job tracking ----
+
+    def insert_ui_job(self, row: dict) -> None:
+        cols = list(row.keys())
+        self.con.execute(
+            f"INSERT INTO ui_jobs ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row[c] for c in cols],
+        )
+
+    def finish_ui_job(self, job_id: str, status: str, finished_at) -> None:
+        self.con.execute(
+            "UPDATE ui_jobs SET status = ?, finished_at = ? WHERE job_id = ?",
+            [status, finished_at, job_id],
+        )
+
+    def read_ui_jobs(self, limit: int = 50) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM ui_jobs ORDER BY started_at DESC LIMIT ?", [limit]).fetchdf()
+
+    def read_ui_job(self, job_id: str) -> dict | None:
+        df = self.con.execute("SELECT * FROM ui_jobs WHERE job_id = ?", [job_id]).fetchdf()
+        return None if df.empty else df.iloc[0].to_dict()
+
+    # ---- Phase F2/F4: key-value app settings ----
+
+    def set_app_setting(self, key: str, value: str | None) -> None:
+        self.con.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            [key, value],
+        )
+
+    def get_app_setting(self, key: str) -> str | None:
+        row = self.con.execute("SELECT value FROM app_settings WHERE key = ?", [key]).fetchone()
+        return row[0] if row else None
+
+    def read_app_settings(self) -> dict:
+        rows = self.con.execute("SELECT key, value FROM app_settings").fetchall()
+        return dict(rows)
+
+    # ---- Phase F3: Claude usage tracking ----
+
+    def get_usage_offset(self, file_path: str) -> int:
+        row = self.con.execute("SELECT byte_offset FROM claude_usage_offsets WHERE file_path = ?", [file_path]).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_usage_offset(self, file_path: str, byte_offset: int) -> None:
+        self.con.execute(
+            """
+            INSERT INTO claude_usage_offsets (file_path, byte_offset) VALUES (?, ?)
+            ON CONFLICT (file_path) DO UPDATE SET byte_offset = excluded.byte_offset
+            """,
+            [file_path, byte_offset],
+        )
+
+    def insert_usage_events(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        cols = ["event_id", "ts", "model", "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens"]
+        self.con.register("_usage_ev", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO claude_usage_events ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _usage_ev
+            ON CONFLICT (event_id) DO NOTHING
+            """
+        )
+        self.con.unregister("_usage_ev")
+        return len(df)
+
+    def read_usage_events(self, since=None) -> pd.DataFrame:
+        if since is not None:
+            return self.con.execute("SELECT * FROM claude_usage_events WHERE ts >= ? ORDER BY ts", [since]).fetchdf()
+        return self.con.execute("SELECT * FROM claude_usage_events ORDER BY ts").fetchdf()
 
     def close(self) -> None:
         self.con.close()

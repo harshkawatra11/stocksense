@@ -12,7 +12,8 @@ the brain before building the shell around it).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -40,7 +41,7 @@ from stocksense.statements.report import generate_kundli
 from stocksense.foreman.adversary import red_team, has_blocking_finding
 from stocksense.foreman.assess import propose_goals
 from stocksense.foreman.budget import check_budget
-from stocksense.foreman.executor import execute_goal, record_goal_result
+from stocksense.foreman.executor import execute_goal, record_goal_result, record_ledger_entries, record_protected_violations
 from stocksense.harness.loops import build_reconcile_graph, grade_matured_predictions, record_predictions
 from stocksense.harness.runner import run_graph
 from stocksense.optimizer.tax import compute_tax_liability
@@ -51,6 +52,7 @@ from stocksense.data.nse_archive import fetch_range
 from stocksense.data.corporate_actions import fetch_ca_range, parse_ca_frame
 from stocksense.data.adjust import read_adjusted_candles, quarantine_unexplained_jumps
 from stocksense.data.universe_pit import universe_as_of, filter_to_point_in_time_universe
+from stocksense.data.upstox_intraday import resolve_symbol_map, fetch_range as fetch_intraday_range
 from stocksense.server.run import run as run_server
 
 foreman_app = typer.Typer(help="The Foreman: self-building harness")
@@ -60,6 +62,25 @@ app = typer.Typer(help="StockSense nightly pipeline CLI")
 app.add_typer(foreman_app, name="foreman")
 
 MODEL_TYPE = "cross_sectional_ranker"
+
+_PROGRESS_EVERY = 50  # print at most once per this many units of work, plus always on completion
+
+
+def _emit_progress(current: int, total: int, force: bool = False) -> None:
+    """Phase F1: a lightweight, parseable progress line for long-running
+    backfills, which otherwise print nothing until they finish -- a UI
+    job console watching only process-alive-or-not would show 'running'
+    for hours with no finer signal. Printed to stdout (captured by the
+    job registry's ring buffer) at a throttled cadence so a 6,500-day
+    backfill doesn't flood the log with one line per day. Format is
+    plain text, not JSON, so the command stays just as readable run by
+    hand in a real terminal as it is parsed by the UI."""
+    if total <= 0:
+        return
+    if not force and current % _PROGRESS_EVERY != 0 and current != total:
+        return
+    pct = min(100, round(100 * current / total))
+    typer.echo(f"PROGRESS: {current}/{total} ({pct}%)")
 
 
 def _load_candles(settings, store) -> pd.DataFrame:
@@ -337,6 +358,15 @@ def kundli(broker: Optional[str] = typer.Option(None, help="Filter to one broker
         store.close()
         raise typer.Exit(code=1)
 
+    # AUDIT FIX: positions were reconstructed in memory and handed to
+    # generate_kundli, but never persisted -- store.write_positions was
+    # never called anywhere on this path. The `positions` table stayed
+    # permanently empty regardless of how many times kundli ran, which
+    # silently starved /api/summary (the desktop dashboard's P&L panel)
+    # and optimizer/tax.py (nothing to compute tax on). Idempotent via
+    # write_positions' ON CONFLICT DO NOTHING -- safe to call every run.
+    store.write_positions(positions)
+
     result = generate_kundli(positions, store=store)
     store.close()
 
@@ -420,21 +450,24 @@ def backfill_nse_archive_cmd(
     settings = get_settings()
     store = Store(settings.duckdb_path)
 
+    total_days = max(1, len(pd.bdate_range(start_d, end_d)))  # business days as the progress denominator; a few public holidays inside it don't materially skew a progress percentage
     results = fetch_range(start_d, end_d, kind=kind)
     n_ok, n_holiday = 0, 0
-    for d, df in results:
+    for i, (d, df) in enumerate(results, start=1):
         if df is None:
             n_holiday += 1
-            continue
-        if kind == "cm":
-            store.write_bhavcopy_eq(df)
-        elif kind == "delivery":
-            store.write_bhavcopy_delivery(df)
-        elif kind == "fo":
-            store.write_bhavcopy_fo(df)
-        n_ok += 1
+        else:
+            if kind == "cm":
+                store.write_bhavcopy_eq(df)
+            elif kind == "delivery":
+                store.write_bhavcopy_delivery(df)
+            elif kind == "fo":
+                store.write_bhavcopy_fo(df)
+            n_ok += 1
+        _emit_progress(i, total_days)
 
     store.close()
+    _emit_progress(total_days, total_days, force=True)
     typer.echo(f"Backfilled {n_ok} trading day(s) of '{kind}' data ({n_holiday} holidays/weekends skipped).")
 
 
@@ -457,6 +490,9 @@ def backfill_corporate_actions_cmd(
     settings = get_settings()
     store = Store(settings.duckdb_path)
 
+    from stocksense.data.corporate_actions import _WINDOW_DAYS
+    total_windows = max(1, -(-(end_d - start_d).days // (_WINDOW_DAYS + 1)))  # ceil division, matches fetch_ca_range's own windowing
+
     n_windows = n_actions = n_unparsed = 0
     for raw in fetch_ca_range(start_d, end_d):
         parsed = parse_ca_frame(raw)
@@ -465,9 +501,89 @@ def backfill_corporate_actions_cmd(
             n_actions += len(parsed)
             n_unparsed += int((parsed["parse_status"] == "unparsed").sum())
         n_windows += 1
+        _emit_progress(n_windows, total_windows)
 
     store.close()
+    _emit_progress(n_windows, total_windows, force=True)
     typer.echo(f"Backfilled {n_windows} window(s), {n_actions} corporate action(s) ({n_unparsed} unparsed).")
+
+
+@app.command("backfill-intraday")
+def backfill_intraday_cmd(
+    start: str = typer.Option("2022-01-01", help="Start date, YYYY-MM-DD (clamped to Upstox's 2022-01 1-min history floor)"),
+    end: str = typer.Option(..., help="End date, YYYY-MM-DD"),
+    top_n: int = typer.Option(250, help="Number of most-liquid EQ symbols (by universe_as_of on the latest bhavcopy date) to fetch"),
+) -> None:
+    """Backfill Upstox 1-minute intraday bars into the store (Phase E1),
+    symbol by symbol, month-window by month-window, genuinely resumable
+    in the same shape as backfill-nse-archive: fetch_range is a generator
+    consumed lazily here, and each window is written to the DB as soon as
+    it's fetched, not batched until the whole run finishes. Interrupting
+    this command loses no progress -- content-hash disk cache means a
+    re-run never re-downloads a window, and the DB already has everything
+    written before the process died (the exact resumability property
+    fixed in 731c262 for the daily bhavcopy backfill).
+
+    The symbol universe is resolved once at the START of this command
+    (today's most-liquid names), not re-resolved per historical date --
+    intraday research needs the SAME symbols consistently fetched across
+    the whole range; point-in-time universe filtering happens later, at
+    feature-build time, via universe_pit.filter_to_point_in_time_universe."""
+    from datetime import datetime as _dt
+
+    start_d = _dt.strptime(start, "%Y-%m-%d").date()
+    end_d = _dt.strptime(end, "%Y-%m-%d").date()
+
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+
+    latest_date = store.con.execute("SELECT MAX(date) FROM bhavcopy_eq").fetchone()[0]
+    if latest_date is None:
+        store.close()
+        typer.echo("bhavcopy_eq is empty -- run backfill-nse-archive first to establish a liquid universe.")
+        raise typer.Exit(code=1)
+
+    turnover = store.con.execute(
+        """
+        SELECT symbol, AVG(turnover_inr) AS avg_turnover
+        FROM bhavcopy_eq
+        WHERE series = 'EQ' AND date >= ? AND date <= ?
+        GROUP BY symbol ORDER BY avg_turnover DESC LIMIT ?
+        """,
+        [latest_date - timedelta(days=60), latest_date, top_n],
+    ).fetchdf()
+    symbols = sorted(turnover["symbol"].tolist())
+    typer.echo(f"Resolved {len(symbols)} most-liquid EQ symbol(s) as of {latest_date}.")
+
+    instrument_map = resolve_symbol_map(symbols)
+    store.write_upstox_instrument_map(instrument_map)
+    n_resolved = int(instrument_map["resolved"].sum())
+    n_unresolved = len(instrument_map) - n_resolved
+    if n_unresolved:
+        unresolved_syms = instrument_map.loc[~instrument_map["resolved"], "symbol"].tolist()
+        typer.echo(f"WARNING: {n_unresolved} symbol(s) unmapped to an Upstox instrument (excluded, not silently skipped): {unresolved_syms}")
+
+    from stocksense.data.upstox_intraday import EARLIEST_1MIN_DATE, _month_windows
+    clamped_start = max(start_d, EARLIEST_1MIN_DATE)
+    windows_per_symbol = max(1, sum(1 for _ in _month_windows(clamped_start, end_d)))
+    total_windows = max(1, n_resolved * windows_per_symbol)
+
+    n_windows = n_bars = n_failed = 0
+    for symbol, window_start, window_end, df in fetch_intraday_range(instrument_map, start_d, end_d):
+        n_windows += 1
+        if df is None:
+            n_failed += 1
+        elif not df.empty:
+            store.write_intraday_bars(df)
+            n_bars += len(df)
+        _emit_progress(n_windows, total_windows)
+
+    store.close()
+    _emit_progress(n_windows, total_windows, force=True)
+    typer.echo(
+        f"Backfilled {n_bars} intraday bar(s) across {n_windows} symbol-window(s) "
+        f"for {n_resolved} symbol(s) ({n_failed} window(s) failed and should be re-run)."
+    )
 
 
 @app.command("universe-as-of")
@@ -629,9 +745,27 @@ def foreman_run(
         store.close()
         raise typer.Exit(code=1)
 
-    goal_id = None
-    outcome = execute_goal(goal, store, max_attempts=max_attempts)
+    # AUDIT FIX: this invocation previously never counted against its own
+    # budget (invocations was never incremented anywhere), so check_budget
+    # compared 0 against the cap forever and the cap could never fire.
+    store.increment_budget(date.today(), invocations=1)
 
+    # AUDIT FIX: insert_goal had zero call sites before this, so
+    # record_goal_result's later UPDATE was always a no-op against a row
+    # that never existed and the goals table stayed permanently empty.
+    # Inserted here (not inside execute_goal) to keep execute_goal free
+    # of store write side effects beyond agent_runs/job_runs, matching
+    # record_goal_result's own stated separation-of-concerns reason.
+    goal_id = str(uuid.uuid4())[:12]
+    store.insert_goal({
+        "goal_id": goal_id, "source": "user", "prompt": goal, "status": "executing",
+        "priority": 5, "created_at": datetime.now(timezone.utc), "completed_at": None,
+        "parent_goal_id": None, "result_summary": None,
+    })
+
+    outcome = execute_goal(goal, store, goal_id=goal_id, max_attempts=max_attempts)
+
+    changed: list[str] = []
     if outcome.run_result is not None:
         changed = [
             v.get("data", {}).get("path")
@@ -645,11 +779,13 @@ def foreman_run(
                 typer.echo("\n=== ADVERSARY FINDINGS ===")
                 for f in findings:
                     typer.echo(f"  [{f.severity}] {f.check} in {f.file}: {f.detail}")
-                if has_blocking_finding(findings) and outcome.status == "merged":
-                    typer.echo("Blocking finding on an otherwise-merged result -- downgrading to blocked. Review required.")
-                    outcome = type(outcome)(outcome.goal_id, "blocked", "adversary found a blocking issue post-merge-check", outcome.branch, outcome.verification, outcome.run_result)
+                if has_blocking_finding(findings) and outcome.status == "pushed":
+                    typer.echo("Blocking finding on an otherwise-pushed result -- downgrading to blocked. Review required.")
+                    outcome = type(outcome)(outcome.goal_id, "blocked", "adversary found a blocking issue post-push-check", outcome.branch, outcome.verification, outcome.run_result)
 
     record_goal_result(store, outcome)
+    record_ledger_entries(store, goal_id, outcome)
+    record_protected_violations(store, goal_id, outcome, changed)
     store.close()
 
     typer.echo(f"\n=== FOREMAN: {outcome.status.upper()} ===")

@@ -132,9 +132,201 @@ body {
 .status-completed { color: #98c379; }
 .status-failed { color: #e06c75; }
 .status-running { color: #e5c07b; }
+.status-stopped { color: #d19a66; }
+.status-idle { color: #666; }
 
 .empty-state {
   color: #666;
   font-style: italic;
   padding: 8px 0;
+}
+
+/* ---- Phase F5: tabs ---- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 4px 0 4px;
+  flex-shrink: 0;
+  background: #0b0e0f;
+}
+
+.tab-btn {
+  background: #101314;
+  color: #888;
+  border: 1px solid #333;
+  border-bottom: none;
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.tab-btn:hover {
+  color: #d4d4d4;
+}
+
+.tab-btn.active {
+  color: #6fa8dc;
+  background: #151a1c;
+  border-color: #6fa8dc;
+}
+
+.tab-panel {
+  display: none;
+  flex: 1;
+  gap: 4px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.tab-panel.active {
+  display: flex;
+}
+
+/* ---- Phase F5: forms/controls ---- */
+
+.ctl-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.ctl-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #888;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.ctl-form input,
+.ctl-form select,
+.ctl-form textarea {
+  background: #0b0e0f;
+  color: #d4d4d4;
+  border: 1px solid #333;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  min-width: 120px;
+}
+
+.ctl-form textarea {
+  min-width: 260px;
+  resize: vertical;
+}
+
+.ctl-form input:focus,
+.ctl-form select:focus,
+.ctl-form textarea:focus {
+  outline: none;
+  border-color: #6fa8dc;
+}
+
+button {
+  background: #151a1c;
+  color: #6fa8dc;
+  border: 1px solid #6fa8dc;
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #1c2326;
+}
+
+button:disabled {
+  color: #555;
+  border-color: #444;
+  cursor: default;
+}
+
+.ctl-status {
+  padding-top: 6px;
+  font-size: 12px;
+  min-height: 1.2em;
+}
+
+.usage-label {
+  color: #666;
+  font-size: 11px;
+  font-style: italic;
+  padding-top: 6px;
+}
+
+/* ---- Phase F5: job console ---- */
+
+.job-console {
+  flex-shrink: 0;
+  border: 1px solid #333;
+  border-top: 1px solid #f9c74f;
+  background: #0b0e0f;
+  display: flex;
+  flex-direction: column;
+  max-height: 34px;
+  transition: max-height 0.15s ease;
+  overflow: hidden;
+}
+
+.job-console.expanded {
+  max-height: 220px;
+}
+
+.job-console-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: #f9c74f;
+  font-weight: bold;
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+
+.job-console-toggle {
+  margin-left: auto;
+  color: #888;
+}
+
+.job-console-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 10px 8px 10px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.job-line {
+  color: #aaa;
+  padding: 1px 0;
+}
+
+.job-cmd {
+  color: #6fa8dc;
+}
+
+.job-completed {
+  color: #98c379;
+  font-weight: bold;
+}
+
+.job-failed {
+  color: #e06c75;
+  font-weight: bold;
+}
+
+.job-stopped,
+.job-stopping {
+  color: #d19a66;
+  font-weight: bold;
 }

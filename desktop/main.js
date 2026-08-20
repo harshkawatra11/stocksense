@@ -34,22 +34,35 @@ function findFreePort() {
 }
 
 function waitForHealth(port, timeoutMs = 15000) {
+  // AUDIT FIX (found live 2026-08-18, via a real npm start while a
+  // backfill job held the database's write lock): this used to require
+  // /api/health to return exactly 200 before ever showing the window --
+  // but Phase F1 made a busy database a NORMAL, CORRECT 503 response
+  // (server/app.py's _store() -- a job is running, not a crash). This
+  // function only needs to confirm the API PROCESS is up and listening;
+  // it does not need the database to be free, and never did -- the
+  // renderer's own dashboard.js already handles a 503 gracefully
+  // per-endpoint ("API unreachable" / "unavailable" empty states) once
+  // the window exists. Waiting on 200 here meant a busy database at
+  // startup silently prevented the window from ever opening at all,
+  // which is a strictly worse failure than just showing the window and
+  // letting the dashboard report its own per-endpoint status.
+  //
+  // So: ANY HTTP response (any status code) proves the server is alive
+  // and listening -- resolve immediately. Only a connection ERROR
+  // (ECONNREFUSED, the brief window before uvicorn binds the port)
+  // means "not up yet, keep retrying."
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = () => {
       const http = require("http");
       const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
-        if (res.statusCode === 200) {
-          resolve();
-        } else if (Date.now() > deadline) {
-          reject(new Error(`API health check failed with status ${res.statusCode}`));
-        } else {
-          setTimeout(attempt, 300);
-        }
+        res.resume(); // drain the response so the socket can close cleanly
+        resolve();
       });
       req.on("error", () => {
         if (Date.now() > deadline) {
-          reject(new Error("API did not become healthy within timeout"));
+          reject(new Error("API process did not start listening within timeout"));
         } else {
           setTimeout(attempt, 300);
         }
