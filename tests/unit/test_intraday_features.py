@@ -17,8 +17,10 @@ from stocksense.features.intraday import (
     OPENING_RANGE_MINUTES,
     attach_prior_day_context,
     build_intraday_features,
+    build_intraday_features_cached,
     feature_columns,
     resample_to_bars,
+    resample_to_bars_sql,
 )
 
 
@@ -62,6 +64,48 @@ def test_resample_aggregates_ohlcv_correctly() -> None:
     assert row["high"] == pytest.approx(103.5)  # 103 + 0.5
     assert row["low"] == pytest.approx(98.5)     # 99 - 0.5
     assert row["volume"] == pytest.approx(1000 + 1001 + 1002 + 1003 + 1004)
+
+
+# ---- resample_to_bars_sql: DuckDB equivalent, ~49x faster at full scale
+# (measured: 72.7s pandas vs 1.5s SQL on 2.14M real 1-min rows) -- kept
+# as a separate function, proven identical on fixtures before any E4
+# sweep script is trusted to use it as a drop-in replacement. ----
+
+def test_sql_resample_matches_pandas_resample_multi_symbol_multi_day() -> None:
+    day1_x = _minute_bars("X", "2026-01-05", list(np.linspace(95, 105, 375)))
+    day1_y = _minute_bars("Y", "2026-01-05", list(np.linspace(200, 210, 375)))
+    day2_x = _minute_bars("X", "2026-01-06", list(np.linspace(90, 110, 375)))
+    bars_1min = pd.concat([day1_x, day1_y, day2_x], ignore_index=True)
+
+    pandas_out = resample_to_bars(bars_1min, "5min").sort_values(["symbol", "ts"]).reset_index(drop=True)
+    sql_out = resample_to_bars_sql(bars_1min, "5min").sort_values(["symbol", "ts"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(pandas_out, sql_out, check_dtype=False)
+
+
+def test_sql_resample_matches_pandas_resample_on_irregular_gaps() -> None:
+    """An illiquid symbol's bars aren't evenly spaced -- both paths must
+    still agree on bucket boundaries when minutes are missing."""
+    ts0 = pd.Timestamp("2026-01-05 09:15")
+    rows = []
+    for minute_offset in [0, 1, 2, 7, 8, 22, 23, 24, 25, 40]:  # gaps, not a dense 0..N range
+        px = 100.0 + minute_offset * 0.1
+        rows.append({
+            "symbol": "THIN", "ts": ts0 + pd.Timedelta(minutes=minute_offset), "interval": "1minute",
+            "open": px, "high": px + 0.3, "low": px - 0.3, "close": px, "volume": 500.0,
+        })
+    bars_1min = pd.DataFrame(rows)
+
+    pandas_out = resample_to_bars(bars_1min, "5min").sort_values(["symbol", "ts"]).reset_index(drop=True)
+    sql_out = resample_to_bars_sql(bars_1min, "5min").sort_values(["symbol", "ts"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(pandas_out, sql_out, check_dtype=False)
+
+
+def test_sql_resample_rejects_unsupported_interval_suffix() -> None:
+    bars_1min = _minute_bars("X", "2026-01-05", [100.0] * 10)
+    with pytest.raises(ValueError):
+        resample_to_bars_sql(bars_1min, interval="5weird")
 
 
 # ---- build_intraday_features: opening range ----
@@ -198,3 +242,44 @@ def test_feature_columns_excludes_join_keys() -> None:
     assert "symbol" not in cols
     assert "ts" not in cols
     assert "vwap" in cols
+
+
+# ---- build_intraday_features_cached: parquet caching (Phase E4 perf fix) ----
+
+def test_cached_build_writes_and_then_reads_the_parquet_cache(tmp_path) -> None:
+    bars = resample_to_bars(_minute_bars("X", "2026-01-05", [100.0] * 30), interval="5min")
+
+    first = build_intraday_features_cached(bars, cache_key="test1", parquet_dir=tmp_path)
+    cache_file = tmp_path / "intraday_features_test1.parquet"
+    assert cache_file.exists()
+
+    # second call must return the CACHED content, not silently recompute
+    # differently -- verified by corrupting the input so a fresh build
+    # would look obviously different if the cache were bypassed
+    bars_changed = bars.copy()
+    bars_changed["close"] = 999.0
+    second = build_intraday_features_cached(bars_changed, cache_key="test1", parquet_dir=tmp_path)
+
+    pd.testing.assert_frame_equal(first.reset_index(drop=True), second.reset_index(drop=True))
+
+
+def test_cached_build_force_rebuild_ignores_stale_cache(tmp_path) -> None:
+    bars = resample_to_bars(_minute_bars("X", "2026-01-05", [100.0] * 30), interval="5min")
+    build_intraday_features_cached(bars, cache_key="test2", parquet_dir=tmp_path)
+
+    bars_changed = resample_to_bars(_minute_bars("X", "2026-01-05", [200.0] * 30), interval="5min")
+    forced = build_intraday_features_cached(bars_changed, cache_key="test2", parquet_dir=tmp_path, force_rebuild=True)
+
+    assert forced["vwap"].iloc[0] == pytest.approx(200.0)
+
+
+def test_cached_build_different_cache_keys_do_not_collide(tmp_path) -> None:
+    bars_a = resample_to_bars(_minute_bars("X", "2026-01-05", [100.0] * 30), interval="5min")
+    bars_b = resample_to_bars(_minute_bars("Y", "2026-01-05", [200.0] * 30), interval="5min")
+
+    out_a = build_intraday_features_cached(bars_a, cache_key="a", parquet_dir=tmp_path)
+    out_b = build_intraday_features_cached(bars_b, cache_key="b", parquet_dir=tmp_path)
+
+    assert (tmp_path / "intraday_features_a.parquet").exists()
+    assert (tmp_path / "intraday_features_b.parquet").exists()
+    assert out_a["vwap"].iloc[0] != out_b["vwap"].iloc[0]

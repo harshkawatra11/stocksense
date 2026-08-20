@@ -21,6 +21,9 @@ fires a false spike at every single open and close.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import duckdb
 import numpy as np
 import pandas as pd
 
@@ -60,6 +63,52 @@ def resample_to_bars(bars_1min: pd.DataFrame, interval: str = "5min") -> pd.Data
         .reset_index()
     )
     resampled["interval"] = interval
+    return resampled[["symbol", "ts", "interval", "open", "high", "low", "close", "volume"]]
+
+
+def resample_to_bars_sql(bars_1min: pd.DataFrame, interval: str = "5min") -> pd.DataFrame:
+    """SQL equivalent of resample_to_bars (Phase E4 performance fix):
+    the pandas groupby(...).apply(...) version measured ~48 minutes at
+    full scale (244 symbols, ~280k session groups) -- DuckDB's
+    time_bucket over the same data measured 3.4s for a comparable
+    aggregation. Kept as a SEPARATE function rather than a silent
+    rewrite of the tested pandas path: tests/unit/test_intraday_features.py
+    proves both produce IDENTICAL frames on the existing fixtures before
+    this is trusted as a drop-in replacement for full-scale runs.
+
+    Only `interval` values expressible as a DuckDB INTERVAL literal are
+    supported (e.g. '5min' -> '5 minutes', '15min' -> '15 minutes') --
+    this covers every grain the research pipeline actually uses.
+    """
+    unit_map = {"min": "minutes", "T": "minutes", "h": "hours", "H": "hours"}
+    digits = "".join(c for c in interval if c.isdigit())
+    suffix = interval[len(digits):]
+    if suffix not in unit_map:
+        raise ValueError(f"unsupported interval suffix {suffix!r} in {interval!r} -- expected one of {list(unit_map)}")
+    duckdb_interval = f"{digits} {unit_map[suffix]}"
+
+    df = bars_1min.copy()
+    df["ts"] = pd.to_datetime(df["ts"])
+
+    con = duckdb.connect(":memory:")
+    con.register("_bars_1min", df)
+    resampled = con.execute(
+        f"""
+        SELECT
+            symbol,
+            time_bucket(INTERVAL '{duckdb_interval}', ts) AS ts,
+            '{interval}' AS interval,
+            FIRST(open ORDER BY ts) AS open,
+            MAX(high) AS high,
+            MIN(low) AS low,
+            LAST(close ORDER BY ts) AS close,
+            SUM(volume) AS volume
+        FROM _bars_1min
+        GROUP BY symbol, CAST(ts AS DATE), time_bucket(INTERVAL '{duckdb_interval}', ts)
+        ORDER BY symbol, ts
+        """
+    ).fetchdf()
+    con.close()
     return resampled[["symbol", "ts", "interval", "open", "high", "low", "close", "volume"]]
 
 
@@ -142,6 +191,38 @@ def build_intraday_features(bars: pd.DataFrame) -> IntradayFeatureFrame:
     feats = feats.drop(columns=["volume", "_vol_baseline"])
 
     return feats.sort_values(["symbol", "ts"]).reset_index(drop=True)
+
+
+def build_intraday_features_cached(
+    bars: pd.DataFrame, cache_key: str, parquet_dir: Path | None = None, force_rebuild: bool = False,
+) -> IntradayFeatureFrame:
+    """Caches build_intraday_features' output to parquet (Phase E4
+    performance fix): the feature build itself measured ~78 minutes at
+    full scale (244 symbols, ~280k session groups through pandas
+    groupby.apply -- see build_intraday_features' docstring) and,
+    unlike resample_to_bars, is NOT rewritten to SQL here -- VWAP/RSI/
+    opening-range logic already has 11 passing tests, and a one-time
+    cost doesn't justify re-deriving tested session-feature logic in
+    SQL. Instead: build once, cache to parquet, every subsequent E4
+    sweep run against the SAME inputs reads the cache in seconds.
+
+    `cache_key` is caller-supplied (e.g. derived from the date range and
+    symbol count actually used), not auto-derived from hashing `bars`
+    itself -- hashing 18M+ rows would cost nearly as much as the
+    resample it's trying to avoid paying for twice.
+    """
+    from stocksense.core.config import get_settings
+
+    directory = parquet_dir or get_settings().parquet_dir
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"intraday_features_{cache_key}.parquet"
+
+    if path.exists() and not force_rebuild:
+        return pd.read_parquet(path)
+
+    feats = build_intraday_features(bars)
+    feats.to_parquet(path, index=False)
+    return feats
 
 
 def feature_columns(feats: IntradayFeatureFrame) -> list[str]:
