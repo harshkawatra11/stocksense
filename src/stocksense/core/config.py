@@ -53,6 +53,26 @@ class Settings(BaseSettings):
 
     random_seed: int = 42
 
+    # Phase F4: per-role Claude model/effort, live-editable from the
+    # desktop app's Settings panel instead of hardcoded constants in
+    # foreman/planner.py, foreman/codegen.py, foreman/assess.py, and
+    # statements/report.py. kundli_narrative_* default to None (no
+    # override -- the CLI's own default applies), matching
+    # AgentRequest.model/.effort's existing None-means-unset semantics.
+    planner_model: str = "opus"
+    planner_effort: str = "low"
+    codegen_model: str = "sonnet"
+    codegen_effort: str = "medium"
+    assess_model: str = "opus"
+    assess_effort: str = "low"
+    kundli_narrative_model: str | None = None
+    kundli_narrative_effort: str | None = None
+
+    # Foreman budget cap, was DEFAULT_MAX_INVOCATIONS_PER_DAY = 200
+    # hardcoded in foreman/budget.py with no way to change it short of
+    # editing source.
+    foreman_max_invocations_per_day: int = 200
+
     def ensure_dirs(self) -> None:
         self.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
         self.parquet_dir.mkdir(parents=True, exist_ok=True)

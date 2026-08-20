@@ -18,6 +18,7 @@ import json
 from dataclasses import dataclass
 
 from stocksense.agent.claude_cli import AgentRequest, invoke
+from stocksense.core.config import get_settings
 from stocksense.foreman.codegen import generate_file_content
 from stocksense.foreman.tools import registry
 from stocksense.harness.graph import Graph, Node
@@ -25,11 +26,15 @@ from stocksense.harness.graph import Graph, Node
 # Two-model split (docs/19-foreman.md): Opus decides WHAT to build --
 # architecture, step sequencing, which files to touch -- a small number
 # of judgment calls where low effort is genuinely sufficient. Sonnet
-# (codegen.py, CODEGEN_MODEL/CODEGEN_EFFORT) writes the actual file
-# contents, a larger and more mechanical task that gets its own,
-# separately-tuned effort budget rather than inheriting the planner's.
-PLANNER_MODEL = "opus"
-PLANNER_EFFORT = "low"
+# (codegen.py) writes the actual file contents, a larger and more
+# mechanical task that gets its own, separately-tuned effort budget
+# rather than inheriting the planner's.
+#
+# Phase F4: was PLANNER_MODEL/PLANNER_EFFORT module-level constants,
+# fixed at import time. Now read from Settings on every call
+# (get_settings() re-reads fresh, no caching to invalidate) so a change
+# in the desktop app's Settings panel takes effect on the NEXT
+# invocation without a process restart.
 
 
 @dataclass(frozen=True)
@@ -82,9 +87,10 @@ The goal:
 
 
 def plan_goal(goal_prompt: str, facts: dict | None = None, store=None, job_run_id: str | None = None) -> Plan:
+    settings = get_settings()
     prompt = _PLANNER_PROMPT.format(tool_descriptions=registry.describe_all(), goal_prompt=goal_prompt)
     result = invoke(
-        AgentRequest(prompt=prompt, facts=facts or {}, skill="backtest-rigor", model=PLANNER_MODEL, effort=PLANNER_EFFORT),
+        AgentRequest(prompt=prompt, facts=facts or {}, skill="backtest-rigor", model=settings.planner_model, effort=settings.planner_effort),
         store=store, job_run_id=job_run_id,
     )
     steps = _parse_plan(result.output_text)

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from stocksense.agent.claude_cli import AgentRequest, invoke
+from stocksense.core.config import get_settings
 from stocksense.statements.counterfactuals import Counterfactual, run_all as run_all_counterfactuals
 from stocksense.statements.diagnostics import Diagnostic, run_all as run_all_diagnostics
 
@@ -98,8 +99,12 @@ def generate_kundli(positions: pd.DataFrame, store=None, period_label: str = "al
     if store is not None:
         _persist(store, run_id, positions)
 
+    settings = get_settings()
     result = invoke(
-        AgentRequest(prompt=_REPORT_PROMPT, facts=fact_sheet, skill="statement-forensics"),
+        AgentRequest(
+            prompt=_REPORT_PROMPT, facts=fact_sheet, skill="statement-forensics",
+            model=settings.kundli_narrative_model, effort=settings.kundli_narrative_effort,
+        ),
         store=store, job_run_id=run_id,
     )
 

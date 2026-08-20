@@ -7,7 +7,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from stocksense.agent.claude_cli import AgentResult
-from stocksense.foreman.codegen import CODEGEN_EFFORT, CODEGEN_MODEL, generate_file_content
+from stocksense.core.config import get_settings
+from stocksense.foreman.codegen import generate_file_content
 
 
 def _fake_result(text: str) -> AgentResult:
@@ -44,5 +45,6 @@ def test_generate_file_content_uses_sonnet_medium(monkeypatch) -> None:
 
     monkeypatch.setattr("stocksense.foreman.codegen.invoke", fake_invoke)
     generate_file_content("foo.py", "spec")
-    assert captured["model"] == CODEGEN_MODEL == "sonnet"
-    assert captured["effort"] == CODEGEN_EFFORT == "medium"
+    settings = get_settings()
+    assert captured["model"] == settings.codegen_model == "sonnet"
+    assert captured["effort"] == settings.codegen_effort == "medium"

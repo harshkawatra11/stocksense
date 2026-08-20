@@ -19,9 +19,10 @@ def _mock_proc(stdout='{"result": "ok"}', returncode=0):
     return m
 
 
+@patch("stocksense.agent.claude_cli._check_access")  # Phase F2's access gate is a separate concern from this file
 @patch("stocksense.agent.claude_cli.subprocess.run")
 @patch("stocksense.agent.claude_cli._resolve_claude_binary", return_value="claude")
-def test_model_flag_passed_when_set(mock_resolve, mock_run) -> None:
+def test_model_flag_passed_when_set(mock_resolve, mock_run, mock_access) -> None:
     mock_run.return_value = _mock_proc()
     invoke(AgentRequest(prompt="hi", model="opus"))
     cmd = mock_run.call_args[0][0]
@@ -29,9 +30,10 @@ def test_model_flag_passed_when_set(mock_resolve, mock_run) -> None:
     assert cmd[cmd.index("--model") + 1] == "opus"
 
 
+@patch("stocksense.agent.claude_cli._check_access")
 @patch("stocksense.agent.claude_cli.subprocess.run")
 @patch("stocksense.agent.claude_cli._resolve_claude_binary", return_value="claude")
-def test_effort_flag_passed_when_set(mock_resolve, mock_run) -> None:
+def test_effort_flag_passed_when_set(mock_resolve, mock_run, mock_access) -> None:
     mock_run.return_value = _mock_proc()
     invoke(AgentRequest(prompt="hi", model="sonnet", effort="medium"))
     cmd = mock_run.call_args[0][0]
@@ -39,9 +41,10 @@ def test_effort_flag_passed_when_set(mock_resolve, mock_run) -> None:
     assert cmd[cmd.index("--effort") + 1] == "medium"
 
 
+@patch("stocksense.agent.claude_cli._check_access")
 @patch("stocksense.agent.claude_cli.subprocess.run")
 @patch("stocksense.agent.claude_cli._resolve_claude_binary", return_value="claude")
-def test_neither_flag_passed_when_unset(mock_resolve, mock_run) -> None:
+def test_neither_flag_passed_when_unset(mock_resolve, mock_run, mock_access) -> None:
     mock_run.return_value = _mock_proc()
     invoke(AgentRequest(prompt="hi"))
     cmd = mock_run.call_args[0][0]

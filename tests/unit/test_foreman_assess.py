@@ -26,18 +26,14 @@ def test_gather_signals_reflects_real_test_count() -> None:
     assert signals["test_count"] > 100  # this suite alone has well over 100 tests
 
 
-def test_gather_signals_reports_backlog_not_built() -> None:
-    signals = gather_signals(_StubStore())
-    # not yet built at this point in the plan
-    assert "intraday_track" in signals["backlog_not_built"]
-
-
 def test_gather_signals_reports_backlog_built() -> None:
     signals = gather_signals(_StubStore())
     # genuinely built: harness/loops.py, skills/nse-market-structure/SKILL.md,
     # optimizer/risk_layer.py, rag/agent.py, data/nse_archive.py,
-    # desktop/main.js all exist as of this point in the plan
+    # desktop/main.js, and (Phase E1) data/upstox_intraday.py all exist
+    # as of this point in the plan
     assert "reconcile_loop" in signals["backlog_built"]
+    assert "intraday_track" in signals["backlog_built"]
     assert "skills_suite" in signals["backlog_built"]
     assert "optimizer" in signals["backlog_built"]
     assert "rag_agent" in signals["backlog_built"]

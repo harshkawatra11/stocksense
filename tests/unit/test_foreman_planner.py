@@ -10,9 +10,8 @@ from datetime import datetime, timezone
 import pytest
 
 from stocksense.agent.claude_cli import AgentResult
+from stocksense.core.config import get_settings
 from stocksense.foreman.planner import (
-    PLANNER_EFFORT,
-    PLANNER_MODEL,
     Plan,
     PlanStep,
     PlanValidationError,
@@ -137,8 +136,8 @@ def test_plan_to_graph_node_fn_raises_on_tool_failure() -> None:
 
 def test_plan_goal_uses_opus_low_effort_for_decomposition(monkeypatch) -> None:
     """The two-model split's planning half: decomposition must go
-    through PLANNER_MODEL/PLANNER_EFFORT (opus/low), not whatever the
-    CLI defaults to."""
+    through Settings.planner_model/planner_effort (opus/low by default,
+    Phase F4 makes these live-editable), not whatever the CLI defaults to."""
     captured = {}
 
     def fake_invoke(req, store=None, job_run_id=None):
@@ -148,8 +147,9 @@ def test_plan_goal_uses_opus_low_effort_for_decomposition(monkeypatch) -> None:
 
     monkeypatch.setattr("stocksense.foreman.planner.invoke", fake_invoke)
     plan_goal("do something")
-    assert captured["model"] == PLANNER_MODEL == "opus"
-    assert captured["effort"] == PLANNER_EFFORT == "low"
+    settings = get_settings()
+    assert captured["model"] == settings.planner_model == "opus"
+    assert captured["effort"] == settings.planner_effort == "low"
 
 
 def test_plan_to_graph_routes_spec_through_codegen_not_literal_content(monkeypatch, tmp_path) -> None:

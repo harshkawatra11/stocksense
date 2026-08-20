@@ -17,9 +17,11 @@ files are code, not narrative containing figures.
 from __future__ import annotations
 
 from stocksense.agent.claude_cli import AgentRequest, invoke
+from stocksense.core.config import get_settings
 
-CODEGEN_MODEL = "sonnet"
-CODEGEN_EFFORT = "medium"
+# Phase F4: was CODEGEN_MODEL/CODEGEN_EFFORT module-level constants --
+# now Settings fields, read fresh on every call. See planner.py's
+# equivalent comment for why (live-editable from the desktop app).
 
 _CODEGEN_PROMPT = """You are writing the complete contents of one file
 for the StockSense NSE quant-trading codebase, as part of a larger
@@ -43,9 +45,10 @@ no explanation before or after."""
 
 def generate_file_content(file_path: str, spec: str, context: dict | None = None,
                            store=None, job_run_id: str | None = None) -> str:
+    settings = get_settings()
     prompt = _CODEGEN_PROMPT.format(file_path=file_path, spec=spec, context=context or {})
     result = invoke(
-        AgentRequest(prompt=prompt, facts={}, skill="claude-report-writing", model=CODEGEN_MODEL, effort=CODEGEN_EFFORT),
+        AgentRequest(prompt=prompt, facts={}, skill="claude-report-writing", model=settings.codegen_model, effort=settings.codegen_effort),
         store=store, job_run_id=job_run_id,
     )
     text = result.output_text.strip()

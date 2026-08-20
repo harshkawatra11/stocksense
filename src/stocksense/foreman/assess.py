@@ -18,8 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from stocksense.agent.claude_cli import AgentRequest, invoke
-from stocksense.core.config import REPO_ROOT
-from stocksense.foreman.planner import PLANNER_EFFORT, PLANNER_MODEL
+from stocksense.core.config import REPO_ROOT, get_settings
 
 _KNOWN_BACKLOG_MARKERS = {
     "electron_desktop_app": "desktop/main.js",
@@ -89,10 +88,11 @@ def propose_goals(store) -> list[dict]:
     signals = gather_signals(store)
     import json
 
+    settings = get_settings()
     result = invoke(
         AgentRequest(
             prompt=_ASSESS_PROMPT.format(facts=json.dumps(signals, indent=2)), facts=signals,
-            model=PLANNER_MODEL, effort=PLANNER_EFFORT,  # judgment/ranking, same tier as goal decomposition
+            model=settings.assess_model, effort=settings.assess_effort,  # Phase F4: own Settings fields, decoupled from planner's
         ),
         store=store,
     )

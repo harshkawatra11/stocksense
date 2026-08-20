@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-DEFAULT_MAX_INVOCATIONS_PER_DAY = 200
+from stocksense.core.config import get_settings
+
+DEFAULT_MAX_INVOCATIONS_PER_DAY = 200  # fallback only if Settings itself can't be read; see check_budget
 DEFAULT_MAX_TOKENS_ESTIMATE_PER_DAY = 2_000_000.0
 
 
@@ -22,7 +24,13 @@ class BudgetStatus:
     reason: str | None = None
 
 
-def check_budget(store, max_invocations: int = DEFAULT_MAX_INVOCATIONS_PER_DAY) -> BudgetStatus:
+def check_budget(store, max_invocations: int | None = None) -> BudgetStatus:
+    """Phase F4: `max_invocations` defaults to
+    Settings.foreman_max_invocations_per_day (live-editable from the
+    desktop app), not a hardcoded constant -- pass an explicit value to
+    override for one call (tests do this)."""
+    if max_invocations is None:
+        max_invocations = get_settings().foreman_max_invocations_per_day
     today = date.today()
     current = store.get_or_create_budget(today)
     used = int(current["invocations"])
