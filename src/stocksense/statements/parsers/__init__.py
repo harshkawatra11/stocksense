@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from stocksense.statements.parsers.angel import AngelOneParser
 from stocksense.statements.parsers.base import CANONICAL_TRADE_COLUMNS, StatementParser
 from stocksense.statements.parsers.upstox import UpstoxParser
 from stocksense.statements.parsers.zerodha import ZerodhaParser
 
-PARSERS: list[StatementParser] = [ZerodhaParser(), UpstoxParser()]
+PARSERS: list[StatementParser] = [ZerodhaParser(), UpstoxParser(), AngelOneParser()]
 
 
 def detect_parser(path) -> StatementParser | None:

@@ -81,3 +81,40 @@ def test_empty_trades_returns_empty_frame() -> None:
     pos = reconstruct_positions(pd.DataFrame(columns=["symbol", "segment", "trade_date", "trade_time", "side", "quantity", "price"]))
     assert len(pos) == 0
     assert "position_id" in pos.columns
+
+
+def test_identical_same_day_round_trips_get_distinct_position_ids() -> None:
+    """AUDIT FIX regression: position_id used to be built with no time
+    component (symbol|segment|open_date|open_price|close_date|
+    close_price|quantity), so an active intraday trader opening and
+    closing the SAME symbol at the SAME round price more than once in a
+    single day produced identical ids for genuinely distinct round
+    trips -- confirmed live against a real tradebook (444 reconstructed,
+    only 434 survived write_positions' ON CONFLICT DO NOTHING). Two
+    scalps at the exact same prices, same day, must still get two rows
+    with two different ids."""
+    trades = pd.DataFrame([
+        _trade("SBIN", "equity_intraday", "2024-02-01", "09:20:00", "buy", 10, 500.0),
+        _trade("SBIN", "equity_intraday", "2024-02-01", "09:25:00", "sell", 10, 505.0),
+        _trade("SBIN", "equity_intraday", "2024-02-01", "10:20:00", "buy", 10, 500.0),
+        _trade("SBIN", "equity_intraday", "2024-02-01", "10:25:00", "sell", 10, 505.0),
+    ])
+    pos = reconstruct_positions(trades)
+    assert len(pos) == 2
+    assert pos.iloc[0]["position_id"] != pos.iloc[1]["position_id"]
+
+
+def test_position_id_is_deterministic_across_reruns() -> None:
+    """The sequence-counter fix must not break idempotency: reconstructing
+    the SAME trades twice must produce the SAME position_ids in the same
+    order, since write_positions' ON CONFLICT DO NOTHING relies on a
+    genuine re-run being a no-op, not a fresh set of ids every time."""
+    trades = pd.DataFrame([
+        _trade("SBIN", "equity_intraday", "2024-02-01", "09:20:00", "buy", 10, 500.0),
+        _trade("SBIN", "equity_intraday", "2024-02-01", "09:25:00", "sell", 10, 505.0),
+        _trade("SBIN", "equity_intraday", "2024-02-01", "10:20:00", "buy", 10, 500.0),
+        _trade("SBIN", "equity_intraday", "2024-02-01", "10:25:00", "sell", 10, 505.0),
+    ])
+    first = reconstruct_positions(trades)
+    second = reconstruct_positions(trades)
+    assert list(first["position_id"]) == list(second["position_id"])

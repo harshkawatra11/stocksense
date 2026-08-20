@@ -19,6 +19,25 @@ history — do not rediscover them:
 - Every invocation is timed and written to `agent_runs`, success or not,
   so "did the agent actually run and what did it say" is always
   answerable from the database, not from scrollback.
+- THE PROMPT MUST GO ON STDIN, NEVER AS A `-p <prompt>` POSITIONAL
+  ARGUMENT. Found live (2026-08-18): on Windows, `claude.cmd` can only be
+  launched via `cmd.exe`'s own argument handling (a `.cmd` file isn't
+  directly executable by `CreateProcess`), and `cmd.exe` parses its
+  command line the way a line typed at a console prompt would — a raw
+  newline inside a quoted argument is NOT preserved as literal content,
+  it terminates the line. Every prompt in this module is multi-line
+  (`_REPORT_PROMPT`-style instructions plus a fenced JSON facts block),
+  so passing it as `[binary, "-p", full_prompt, ...]` silently truncated
+  every such call at the FIRST newline — confirmed directly: Claude
+  received only the first line and replied confused ("your message
+  seems to have been cut off"), while `--output-format json`'s own
+  output got corrupted into non-JSON text in the process. This means
+  every prior multi-line Claude CLI call in this project's history that
+  ran on Windows was plausibly receiving a truncated prompt, not the
+  full instructions+facts. Fixed by passing the prompt via `stdin`
+  (`subprocess.run(cmd, input=full_prompt, ...)`) with no prompt
+  positional at all — verified directly to preserve a 3-line prompt
+  with embedded quotes intact and return clean JSON.
 """
 
 from __future__ import annotations
@@ -35,6 +54,7 @@ from pathlib import Path
 
 import structlog
 
+from stocksense.agent.access import ClaudeAccessNotGranted
 from stocksense.core.config import REPO_ROOT
 
 log = structlog.get_logger(__name__)
@@ -85,6 +105,32 @@ class AgentResult:
     error: str | None
     started_at: datetime
     finished_at: datetime
+
+
+def _check_access(store) -> None:
+    """Raises ClaudeAccessNotGranted unless the desktop app's local
+    authorize flag is set for the currently-logged-in account. Opens a
+    short-lived Store when the caller didn't pass one, so the gate
+    still applies (see invoke()'s docstring) -- fails closed if that
+    open itself fails, e.g. another job holds the write lock."""
+    from stocksense.agent.access import require_claude_access
+
+    if store is not None:
+        require_claude_access(store)
+        return
+
+    try:
+        from stocksense.core.config import get_settings
+        from stocksense.data.store import Store
+
+        temp_store = Store(get_settings().duckdb_path)
+    except Exception as e:  # noqa: BLE001 -- fail closed: can't confirm access, so deny it
+        raise ClaudeAccessNotGranted(f"could not verify Claude access (database unavailable: {e})") from e
+
+    try:
+        require_claude_access(temp_store)
+    finally:
+        temp_store.close()
 
 
 def _resolve_claude_binary() -> str:
@@ -168,7 +214,18 @@ def invoke(req: AgentRequest, store=None, job_run_id: str | None = None) -> Agen
     """Invoke the Claude CLI non-interactively with the given facts and
     prompt. Always records the invocation to agent_runs when a store is
     provided (best-effort — a logging failure must not mask the agent's
-    actual result)."""
+    actual result).
+
+    Phase F2: this is the single enforcement point for the desktop app's
+    Claude-CLI authorize/decline gate (agent/access.py) — every caller
+    (foreman/planner.py, foreman/codegen.py, foreman/assess.py,
+    statements/report.py, rag/agent.py) funnels through here, so none of
+    them can accidentally bypass the gate by forgetting to check it
+    themselves. If `store` is None, a short-lived Store is opened just
+    for this check (fail-closed if that open itself fails, e.g. the
+    database is busy) — the gate applies even to a caller that didn't
+    think to pass one, rather than silently skipping the check.
+    """
     agent_run_id = str(uuid.uuid4())
     started_at = datetime.now(timezone.utc)
     full_prompt = _build_prompt(req)
@@ -179,17 +236,31 @@ def invoke(req: AgentRequest, store=None, job_run_id: str | None = None) -> Agen
     output_text = ""
 
     try:
+        _check_access(store)
         binary = _resolve_claude_binary()
-        cmd = [binary, "-p", full_prompt, "--output-format", "json"]
+        # Prompt goes on stdin, never as a `-p <prompt>` argument -- see
+        # the module docstring's "THE PROMPT MUST GO ON STDIN" note for
+        # why (Windows' cmd.exe wrapping of the .cmd shim truncates a
+        # multi-line argument at its first newline).
+        cmd = [binary, "-p", "--output-format", "json"]
         if SKILLS_DIR.exists():
-            cmd += ["--setting-sources", str(SKILLS_DIR)]
+            # AUDIT FIX: `--setting-sources` takes one of the enum values
+            # user|project|local (verified: passing a raw path raises
+            # "Invalid setting source" and every invoke() call failed
+            # whenever SKILLS_DIR existed, i.e. always in this repo). It
+            # was never meant to point at an arbitrary directory -- with
+            # cwd=REPO_ROOT (set below), "project" is what makes Claude
+            # load this repo's own project-level settings, including
+            # SKILLS_DIR itself under the project's skill-discovery
+            # convention.
+            cmd += ["--setting-sources", "project"]
         if req.model:
             cmd += ["--model", req.model]
         if req.effort:
             cmd += ["--effort", req.effort]
 
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=req.timeout_s,
+            cmd, input=full_prompt, capture_output=True, text=True, timeout=req.timeout_s,
             cwd=str(REPO_ROOT),
         )
         if proc.returncode != 0:
@@ -209,6 +280,9 @@ def invoke(req: AgentRequest, store=None, job_run_id: str | None = None) -> Agen
     except subprocess.TimeoutExpired:
         status = "timeout"
         error = f"exceeded {req.timeout_s}s"
+    except ClaudeAccessNotGranted as e:
+        status = "access_denied"
+        error = str(e)
     except Exception as e:  # noqa: BLE001
         status = "error"
         error = str(e)

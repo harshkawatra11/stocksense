@@ -57,6 +57,21 @@ def reconstruct_positions(trades: pd.DataFrame) -> pd.DataFrame:
     trades = trades.sort_values(["trade_date", "trade_time"], na_position="first").reset_index(drop=True)
 
     books: dict[tuple[str, str], _OpenBook] = {}
+    # AUDIT FIX: position_id used to be built from
+    # symbol|segment|open_date|open_price|close_date|close_price|quantity
+    # -- no TIME component. Confirmed live against the user's real
+    # tradebook (444 positions reconstructed, only 434 persisted): an
+    # active intraday trader (40+ trades/day) genuinely opens and closes
+    # the same symbol at the same round price more than once in a single
+    # day, producing identical position_id strings for real, DISTINCT
+    # round trips. write_positions' ON CONFLICT DO NOTHING then silently
+    # dropped the second one as if it were a duplicate re-ingest, not a
+    # real position -- corrupting the persisted aggregate by exactly the
+    # collision count. Fixed structurally with a per-(symbol, segment)
+    # monotonic sequence counter, which is unique by construction
+    # regardless of price/timestamp granularity, rather than trusting
+    # open_time/close_time strings to always disambiguate.
+    seq_counters: dict[tuple[str, str], int] = {}
     out_rows: list[dict] = []
 
     for _, t in trades.iterrows():
@@ -74,8 +89,9 @@ def reconstruct_positions(trades: pd.DataFrame) -> pd.DataFrame:
             while remaining > 1e-9 and book.short_lots:
                 lot = book.short_lots[0]
                 matched = min(remaining, lot.quantity)
+                seq = seq_counters[key] = seq_counters.get(key, 0) + 1
                 out_rows.append(
-                    _close_position(t["symbol"], t["segment"], lot, price, trade_date, trade_time, matched, is_short=True)
+                    _close_position(t["symbol"], t["segment"], lot, price, trade_date, trade_time, matched, is_short=True, seq=seq)
                 )
                 lot.quantity -= matched
                 remaining -= matched
@@ -88,8 +104,9 @@ def reconstruct_positions(trades: pd.DataFrame) -> pd.DataFrame:
             while remaining > 1e-9 and book.long_lots:
                 lot = book.long_lots[0]
                 matched = min(remaining, lot.quantity)
+                seq = seq_counters[key] = seq_counters.get(key, 0) + 1
                 out_rows.append(
-                    _close_position(t["symbol"], t["segment"], lot, price, trade_date, trade_time, matched, is_short=False)
+                    _close_position(t["symbol"], t["segment"], lot, price, trade_date, trade_time, matched, is_short=False, seq=seq)
                 )
                 lot.quantity -= matched
                 remaining -= matched
@@ -104,7 +121,7 @@ def reconstruct_positions(trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def _close_position(symbol, segment, open_lot: _Lot, close_price: float, close_date: str,
-                     close_time: str | None, quantity: float, is_short: bool) -> dict:
+                     close_time: str | None, quantity: float, is_short: bool, seq: int) -> dict:
     entry_price = open_lot.price if not is_short else open_lot.price
     exit_price = close_price
     if is_short:
@@ -125,7 +142,7 @@ def _close_position(symbol, segment, open_lot: _Lot, close_price: float, close_d
     holding_seconds = _holding_seconds(open_lot.trade_date, open_lot.trade_time, close_date, close_time)
 
     return {
-        "position_id": f"{symbol}|{segment}|{open_lot.trade_date}|{open_lot.price}|{close_date}|{close_price}|{quantity}",
+        "position_id": f"{symbol}|{segment}|{open_lot.trade_date}|{open_lot.price}|{close_date}|{close_price}|{quantity}|{seq}",
         "symbol": symbol,
         "segment": segment,
         "open_date": open_lot.trade_date,

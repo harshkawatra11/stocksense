@@ -13,6 +13,15 @@ venv/
 .env
 *.env.local
 
+# personal financial data (real broker exports -- account numbers, trade
+# history). Anchored to repo root with a leading slash -- unanchored
+# "statements/" also matched src/stocksense/statements/, the SOURCE
+# CODE package, and silently excluded it from every future `git add`.
+/statements/
+
+# run logs (local scratch output from backfill/serve commands)
+*.log
+
 # OS
 .DS_Store
 Thumbs.db
