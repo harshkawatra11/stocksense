@@ -87,13 +87,20 @@ def verify(
             return VerificationResult(gates=gates)
 
     if is_research_goal:
-        # Research goals additionally require the pre-registered gate
-        # itself to pass -- imported lazily so ordinary (non-research)
-        # goals never import evaluation.gate at all.
+        # AUDIT FIX: this gate was hardcoded passed=True, delegating to
+        # foreman/tools/research.py -- which does not exist. A gate that
+        # always passes for a check nothing implements is not a gate, it
+        # is a rubber stamp; is_research_goal defaults to False and no
+        # caller currently sets it True, so this was latent rather than
+        # actively firing, but it must fail closed rather than open the
+        # moment something does set it. Once foreman/tools/research.py
+        # lands (Phase D3/E4's pre-registered-gate wiring) this becomes a
+        # real check against that module's own evaluate_gate() result,
+        # not a permanent False.
         gates.append(GateResult(
-            "pre_registered_gate", passed=True,
-            detail="research-goal gate check delegated to the goal's own evaluate_gate() call; "
-                   "verifier only confirms the gate ran and was not bypassed -- see foreman/tools/research.py",
+            "pre_registered_gate", passed=False,
+            detail="research-goal gate check has no implementation yet (foreman/tools/research.py "
+                   "does not exist) -- failing closed rather than rubber-stamping a check that isn't real",
         ))
 
     return VerificationResult(gates=gates)

@@ -101,7 +101,7 @@ def test_execute_goal_merges_on_full_green(mock_plan_goal, mock_verify, mock_cre
     mock_push.return_value = ToolResult(ok=True, output="")
 
     outcome = execute_goal("add a small feature", _StubStore())
-    assert outcome.status == "merged"
+    assert outcome.status == "pushed"
     mock_open_pr.assert_not_called()  # merged, so no PR needed
 
 
@@ -140,7 +140,7 @@ def test_execute_goal_opens_pr_when_remote_ci_fails(mock_plan_goal, mock_verify,
 def test_execute_goal_never_merges_without_calling_verify_with_remote_ci(monkeypatch):
     """Structural check: merged status must only ever come from a path
     that called verify(..., require_remote_ci=True). Guards against a
-    future refactor accidentally short-circuiting to 'merged' on local
+    future refactor accidentally short-circuiting to 'pushed' on local
     green alone."""
     import inspect
 
@@ -149,5 +149,5 @@ def test_execute_goal_never_merges_without_calling_verify_with_remote_ci(monkeyp
     source = inspect.getsource(executor_mod)
     # the merge line must appear after a require_remote_ci=True call in the source
     ci_true_idx = source.index("require_remote_ci=True")
-    merged_idx = source.index('"merged"')
-    assert ci_true_idx < merged_idx
+    pushed_idx = source.index('"pushed"')
+    assert ci_true_idx < pushed_idx

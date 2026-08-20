@@ -6,8 +6,17 @@ Routing, which is the entire point of this module:
 - Any protected path touched -> STOP. Open a PR for human review. Never
   self-merge, regardless of how green everything else is.
 - Unprotected + fully green (local tests, leakage, determinism, and a
-  GREEN REMOTE CI run) -> commit, push, and merge to the dev integration
-  branch automatically.
+  GREEN REMOTE CI run) -> commit and push the branch. Status is 'pushed',
+  not 'merged' -- AUDIT FIX: this module previously reported status
+  "merged" here even though no merge into the dev branch ever happens
+  anywhere in this codebase (git_tools.py has create_branch/commit/push/
+  open_pr/check_ci, no merge tool at all). A harness that reports an
+  action it did not perform is not something to ship; actually merging
+  unattended (no human review) is also a materially riskier capability
+  than this module should grant itself without that being an explicit,
+  separate decision. So the fix is to make the self-report honest, not
+  to add auto-merge. Merging the pushed branch into dev remains a human
+  action, same as for pr_opened.
 - Anything else (a tool failed, tests failed, attempts exhausted) ->
   mark the goal 'blocked' with a written reason. Never retried
   automatically past max_attempts -- an unattended loop that keeps
@@ -20,11 +29,14 @@ specifically so this doesn't need a second execution engine).
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
 from stocksense.foreman.planner import Plan, PlanValidationError, plan_goal, plan_to_graph
+from stocksense.foreman.policy import check_patch
+from stocksense.foreman.tools.base import registry
 from stocksense.foreman.tools.git_tools import commit as git_commit
 from stocksense.foreman.tools.git_tools import create_branch, open_pr, push
 from stocksense.foreman.verifier import VerificationResult, verify
@@ -37,7 +49,7 @@ MAX_ATTEMPTS_DEFAULT = 3
 @dataclass(frozen=True)
 class ExecutionOutcome:
     goal_id: str
-    status: str  # 'merged' | 'pr_opened' | 'blocked'
+    status: str  # 'pushed' | 'pr_opened' | 'blocked'
     reason: str
     branch: str | None
     verification: VerificationResult | None
@@ -101,7 +113,7 @@ def execute_goal(goal_prompt: str, store, goal_id: str | None = None,
     if not remote_check.passed:
         return _route_to_pr(goal_id, plan, changed, remote_check, run_result, branch=branch, reason="remote CI did not pass")
 
-    return ExecutionOutcome(goal_id, "merged", "all gates green, merged to dev", branch, remote_check, run_result)
+    return ExecutionOutcome(goal_id, "pushed", "all gates green, pushed for human merge", branch, remote_check, run_result)
 
 
 def _route_to_pr(goal_id: str, plan: Plan, changed: list[str], verification: VerificationResult,
@@ -131,9 +143,77 @@ def record_goal_result(store, outcome: ExecutionOutcome, source: str = "user") -
     execute_goal, kept separate so execute_goal itself has no store
     write side effects beyond what plan_goal/run_graph already do
     (agent_runs, job_runs) -- easier to unit test in isolation."""
-    status_map = {"merged": "done", "pr_opened": "blocked", "blocked": "blocked"}
+    # 'pushed' still needs a human to actually merge it, so it is not
+    # recorded as 'done' -- 'awaiting_merge' is a distinct terminal state
+    # from 'blocked' (nothing went wrong) and from 'done' (nothing left
+    # to do), matching the honesty fix above: the goal produced a green,
+    # ready-to-merge branch, but merging it was never this module's call.
+    status_map = {"pushed": "awaiting_merge", "pr_opened": "blocked", "blocked": "blocked"}
     store.update_goal_status(
         outcome.goal_id, status_map.get(outcome.status, "blocked"),
         completed_at=datetime.now(timezone.utc), result_summary=f"{outcome.status}: {outcome.reason}",
     )
-    store.increment_budget(date.today(), goals_completed=1 if outcome.status == "merged" else 0)
+    store.increment_budget(date.today(), goals_completed=1 if outcome.status == "pushed" else 0)
+
+
+def record_ledger_entries(store, goal_id: str, outcome: ExecutionOutcome) -> int:
+    """Writes one build_ledger row per tool invocation the run made.
+    AUDIT FIX: insert_ledger_entry had zero call sites before this, so
+    the ledger (the record 'a pattern of reaching for gate.py is
+    visible' is meant to come from) was permanently empty regardless of
+    how much the Foreman actually did. Kept separate from execute_goal
+    itself for the same testability reason record_goal_result is
+    separate -- see its docstring."""
+    if outcome.run_result is None:
+        return 0
+    n = 0
+    for node in outcome.run_result.outcomes:
+        tool_output = outcome.run_result.context.get(node.name)
+        tool_name = tool_output.get("tool") if tool_output else None
+        try:
+            tool_def = registry.get(tool_name) if tool_name else None
+        except KeyError:
+            tool_def = None
+        verdict = {"completed": "ok", "failed": "failed", "skipped": "blocked_protected"}.get(node.status, node.status)
+        files_touched = []
+        if tool_output and isinstance(tool_output.get("data"), dict) and tool_output["data"].get("path"):
+            files_touched = [tool_output["data"]["path"]]
+        store.insert_ledger_entry({
+            "entry_id": str(uuid.uuid4())[:12],
+            "goal_id": goal_id,
+            "task_name": node.name,
+            "tool": tool_name or "(unknown -- node failed before a tool call was recorded)",
+            "action": tool_def.action_class.value if tool_def else "exec",
+            "diff_summary": tool_output.get("output", "")[:500] if tool_output else (node.error or ""),
+            "files_touched": json.dumps(files_touched),
+            "verdict": verdict,
+            "ci_run_url": None,
+            "attempts": 1,
+            "tokens_estimate": None,
+            "created_at": datetime.now(timezone.utc),
+        })
+        n += 1
+    return n
+
+
+def record_protected_violations(store, goal_id: str, outcome: ExecutionOutcome, changed_paths: list[str]) -> int:
+    """Records every protected path a goal attempted to touch. AUDIT
+    FIX: insert_protected_violation had zero call sites before this, so
+    protected_violation_count (a self-assessment risk signal per
+    foreman/assess.py) was permanently 0 no matter how often a goal
+    reached for gate.py or walkforward.py. Only fires on the exact
+    routing reason _route_to_pr uses for a protected-path hit, so this
+    can't over-count unrelated PR/blocked outcomes."""
+    if outcome.reason != "touches a protected path":
+        return 0
+    protected = check_patch(changed_paths)
+    now = datetime.now(timezone.utc)
+    for path in protected:
+        store.insert_protected_violation({
+            "violation_id": str(uuid.uuid4())[:12],
+            "goal_id": goal_id,
+            "path": path,
+            "attempted_at": now,
+            "action_taken": "blocked_routed_to_pr",
+        })
+    return len(protected)
