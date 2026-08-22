@@ -227,6 +227,97 @@ def registry():
     return {"models": _df_to_records(df)}
 
 
+@app.get("/api/brief")
+def brief(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
+    """Phase G5: the daily brief -- today's top-N recommendation from
+    the live model, plus yesterday's revision (matured/graded
+    predictions), plus a capital-agnostic sizing note. NO capital
+    figure is ever computed or assumed server-side; `min_capital_for_
+    full_positions_inr` is the whole-share-divisibility floor derived
+    from real prices and weights (optimizer/sizing.py), not a rupee
+    target, and the client multiplies weights by whatever capital the
+    viewer optionally types in -- that number never reaches this
+    endpoint or gets persisted anywhere.
+
+    Returns an explicit `status` so the UI can render a clear reason
+    rather than an empty table: 'no_live_model' (nothing promoted to
+    live for this horizon yet), 'no_predictions' (a live model exists
+    but the reconcile loop hasn't recorded anything for it), or 'ok'.
+    """
+    from stocksense.optimizer.sizing import min_capital_for_full_positions, round_trip_cost_bps
+    from stocksense.portfolio.construct import target_weights_top_n
+
+    store = _store()
+    try:
+        live = store.get_live_model(model_type, horizon)
+        if live.empty:
+            return {"status": "no_live_model", "horizon_bars": horizon}
+        model_row = live.iloc[0]
+        model_id = model_row["model_id"]
+        top_n = int(model_row["top_n"]) if model_row["top_n"] else 10
+
+        preds = store.read_predictions()
+        preds = preds[preds["model_version"] == model_id]
+        if preds.empty:
+            return {"status": "no_predictions", "horizon_bars": horizon, "model_id": model_id}
+
+        latest_date = preds["as_of_date"].max()
+        latest = preds[preds["as_of_date"] == latest_date].copy()
+
+        scores = latest.set_index("symbol")["score"]
+        weights = target_weights_top_n(scores, top_n)
+        weights = weights[weights > 0].sort_values(ascending=False)
+
+        candles = store.read_candles()
+        latest_prices: dict[str, float] = {}
+        if not candles.empty:
+            latest_close = candles.sort_values("date").groupby("symbol")["close"].last()
+            latest_prices = {s: float(latest_close[s]) for s in weights.index if s in latest_close.index}
+
+        picks = []
+        for symbol, weight in weights.items():
+            row = latest[latest["symbol"] == symbol].iloc[0]
+            picks.append({
+                "symbol": symbol,
+                "weight": float(weight),
+                "rank": int(row["rank"]) if pd.notna(row["rank"]) else None,
+                "predicted_return": _clean(row.get("predicted_return")),
+                "confidence": _clean(row.get("confidence")),
+                "last_close": latest_prices.get(symbol),
+            })
+
+        # Yesterday's revision: the most recently graded predictions for
+        # THIS model -- what was predicted, what actually happened.
+        graded = preds[preds["graded_at"].notna()].sort_values("graded_at", ascending=False).head(20)
+        revision = [
+            {
+                "symbol": r["symbol"], "as_of_date": str(r["as_of_date"]),
+                "predicted_return": _clean(r.get("predicted_return")),
+                "actual_return": _clean(r.get("actual_return")),
+                "direction_correct": (
+                    bool((r["predicted_return"] > 0) == (r["actual_return"] > 0))
+                    if pd.notna(r.get("predicted_return")) and pd.notna(r.get("actual_return")) else None
+                ),
+            }
+            for _, r in graded.iterrows()
+        ]
+
+        min_capital = min_capital_for_full_positions(latest_prices, weights.to_dict()) if latest_prices else None
+
+        return {
+            "status": "ok",
+            "horizon_bars": horizon,
+            "model_id": model_id,
+            "as_of_date": str(latest_date),
+            "picks": picks,
+            "yesterdays_revision": revision,
+            "min_capital_for_full_positions_inr": min_capital,
+            "round_trip_cost_bps_equity_delivery": round_trip_cost_bps("equity_delivery"),
+        }
+    finally:
+        store.close()
+
+
 @app.get("/api/agent-runs")
 def agent_runs(limit: int = 20):
     store = _store()
