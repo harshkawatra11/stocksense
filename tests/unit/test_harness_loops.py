@@ -220,3 +220,66 @@ def test_reconcile_graph_is_idempotent_within_the_same_day(store_with_live_model
     predictions_after_second = store.read_predictions()
     assert len(predictions_after_second) == len(predictions_after_first)  # not doubled
     assert all(o.status == "skipped" for o in result2.outcomes)
+
+
+# ---- Phase G2: check_forward_record node in the reconcile graph ----
+
+def test_reconcile_graph_check_forward_record_noops_for_shadow_lifecycle(store_with_live_model) -> None:
+    store, horizon, model_id = store_with_live_model
+    graph = build_reconcile_graph(store, horizon_bars=horizon, lifecycle="shadow")
+    result = run_graph(graph, store)
+
+    assert result.context["check_forward_record"]["checked"] is False
+    assert result.context["check_forward_record"]["reason"].startswith("only the live model")
+
+
+def test_reconcile_graph_check_forward_record_noops_when_no_live_model(tmp_store) -> None:
+    graph = build_reconcile_graph(tmp_store, horizon_bars=20, lifecycle="live")
+    result = run_graph(graph, tmp_store)
+
+    assert result.context["check_forward_record"]["checked"] is False
+    assert result.context["check_forward_record"]["reason"] == "no live model for this horizon"
+
+
+def test_reconcile_graph_demotes_underperforming_live_model_before_recording(store_with_live_model) -> None:
+    """The end-to-end property Phase G2 exists for: a live model with a
+    significantly-below-chance forward record gets rolled back to
+    'shadow' by the SAME reconcile run that would otherwise have
+    recorded a fresh prediction against it -- and that fresh prediction
+    must NOT be recorded once the model is no longer live (fail-closed,
+    not a leftover stale prediction from a demoted model)."""
+    store, horizon, model_id = store_with_live_model
+
+    # Seed a bad forward record for the real registered live model_id:
+    # 6 correct out of 30, well below chance.
+    rows = []
+    for i in range(6):
+        rows.append({
+            "run_id": f"r{i}", "symbol": f"SYN{i % 10}", "as_of_date": pd.Timestamp("2023-06-01") + pd.Timedelta(days=i),
+            "horizon_bars": horizon, "score": 0.01, "rank": 1, "model_version": model_id,
+            "horizon_type": "monthly", "predicted_return": 0.01, "confidence": None, "feature_snapshot_hash": "h",
+        })
+    for i in range(24):
+        rows.append({
+            "run_id": f"w{i}", "symbol": f"SYN{i % 10}", "as_of_date": pd.Timestamp("2023-06-01") + pd.Timedelta(days=i),
+            "horizon_bars": horizon, "score": 0.01, "rank": 1, "model_version": model_id,
+            "horizon_type": "monthly", "predicted_return": 0.01, "confidence": None, "feature_snapshot_hash": "h",
+        })
+    store.write_predictions(pd.DataFrame(rows))
+    now = datetime.now(timezone.utc)
+    for i in range(6):
+        store.grade_prediction(f"r{i}", f"SYN{i % 10}", pd.Timestamp("2023-06-01") + pd.Timedelta(days=i), horizon,
+                                actual_return=0.02, grade_json="{}", graded_at=now)
+    for i in range(24):
+        store.grade_prediction(f"w{i}", f"SYN{i % 10}", pd.Timestamp("2023-06-01") + pd.Timedelta(days=i), horizon,
+                                actual_return=-0.02, grade_json="{}", graded_at=now)
+
+    graph = build_reconcile_graph(store, horizon_bars=horizon, lifecycle="live")
+    result = run_graph(graph, store)
+
+    assert result.context["check_forward_record"]["checked"] is True
+    assert result.context["check_forward_record"]["demoted"] is True
+    assert result.context["record_predictions"]["recorded"] is False  # no live model left to score with
+
+    row = store.con.execute("SELECT lifecycle_state FROM model_registry WHERE model_id = ?", [model_id]).fetchdf().iloc[0]
+    assert row["lifecycle_state"] == "shadow"

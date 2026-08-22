@@ -6,11 +6,12 @@ does Run 4's h=10/h=20 GATE PASS survive on the real point-in-time
 bhavcopy universe (8.17M rows, 2010-2026), and does any mid/small-cap
 liquidity-rank band clear the same pre-registered gate?
 
-Reuses cli/main.py's _load_candles (the bhavcopy + point-in-time-
-universe + turnover_rank_band path) rather than reading candles
-directly, so this sweep and the production training path can never
-diverge -- the exact fix preregistration_bhavcopy_rerun.md names as
-missing from the original phase0_sweep.py.
+Reuses data/loader.py's load_candles (the bhavcopy + point-in-time-
+universe + turnover_rank_band path, shared with cli/main.py's
+train_candidate and harness/loops.py's reconcile loop) rather than
+reading candles directly, so this sweep and the production training
+path can never diverge -- the exact fix preregistration_bhavcopy_rerun.md
+names as missing from the original phase0_sweep.py.
 
 Usage: python research/bhavcopy_rerun_sweep.py
 """
@@ -26,9 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import pandas as pd
 import structlog
 
-from stocksense.cli.main import _load_candles
 from stocksense.core.config import get_settings
 from stocksense.data.adjust import quarantine_unexplained_jumps
+from stocksense.data.loader import load_candles
 from stocksense.data.store import Store
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
 from stocksense.evaluation.gate import GateCriteria, evaluate_gate
@@ -60,7 +61,7 @@ GATE_CRITERIA = GateCriteria()  # research/gate_criteria_preregistration.md defa
 
 
 def _load_and_prepare(settings, store, cap_band: tuple[float, float] | None):
-    candles = _load_candles(settings, store, turnover_rank_band=cap_band)
+    candles = load_candles(settings, store, turnover_rank_band=cap_band)
     if candles.empty:
         return candles, None, None
 

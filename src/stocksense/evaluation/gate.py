@@ -159,3 +159,99 @@ def apply_gate_decision(model_id: str, verdict: GateVerdict, store: Store) -> No
         [decision, verdict.reason, json.dumps(verdict.metrics), model_id],
     )
     store.update_model_lifecycle(model_id, new_state, promoted_at=now if verdict.passed else None)
+
+
+@dataclass(frozen=True)
+class ForwardRecordCriteria:
+    """Phase G2: closes the gap docs/STATUS.md names -- "grading does
+    not currently feed the gate... that's the natural next extension."
+    Deliberately reuses the SAME statistical framework as GateCriteria
+    (exact one-sided binomial test at the same 0.10 significance level)
+    rather than inventing a new threshold, for the same reason
+    gate_criteria_preregistration.md gives for its own choices: a
+    demotion rule chosen independently of any live model's actual
+    forward record is not tunable into firing (or not firing) on a
+    specific result after the fact."""
+    min_graded_predictions: int = 30  # ledger-row analogue of min_folds_required -- enough for the binomial test to mean something
+    hit_rate_significance_alpha: float = 0.10  # same alpha as GateCriteria's promotion-side test
+
+
+@dataclass(frozen=True)
+class ForwardRecordVerdict:
+    demote: bool
+    reason: str
+    metrics: dict
+
+
+def evaluate_forward_record(store, model_id: str, criteria: ForwardRecordCriteria | None = None) -> ForwardRecordVerdict:
+    """Checks a live model's OWN graded forward-prediction record (the
+    `predictions` ledger Phase G2's reconcile loop writes to) for a
+    significantly-below-chance hit rate -- the live analogue of the
+    promotion gate's hit-rate check, run in the opposite direction. A
+    model that cleared the historical walk-forward gate can still decay
+    once live (regime shift, a bug in a later feature-pipeline change,
+    etc.); this is what would actually catch that, rather than nothing
+    ever re-checking a promoted model again.
+
+    Direction-correct is defined the same way grading itself does
+    (`grade_matured_predictions`'s `direction_correct`): sign(predicted)
+    == sign(actual). Testing whether the WRONG-direction count is
+    significantly high is the mirror image of GateCriteria's own test of
+    whether the correct-direction count is significantly high -- same
+    `_one_sided_binomial_pvalue` call, unmodified, just handed the
+    complementary count.
+    """
+    criteria = criteria or ForwardRecordCriteria()
+    preds = store.read_predictions()
+    graded = preds[(preds["model_version"] == model_id) & preds["graded_at"].notna()]
+    n = len(graded)
+
+    if n < criteria.min_graded_predictions:
+        return ForwardRecordVerdict(
+            False,
+            f"insufficient graded predictions: {n} < {criteria.min_graded_predictions} required",
+            {"n_graded": n},
+        )
+
+    n_correct = int(((graded["predicted_return"] > 0) == (graded["actual_return"] > 0)).sum())
+    n_wrong = n - n_correct
+    pvalue_underperforming = _one_sided_binomial_pvalue(n_wrong, n)
+
+    metrics = {
+        "n_graded": n,
+        "n_correct_direction": n_correct,
+        "hit_rate": n_correct / n,
+        "pvalue_underperforming": pvalue_underperforming,
+    }
+
+    if pvalue_underperforming <= criteria.hit_rate_significance_alpha:
+        return ForwardRecordVerdict(
+            True,
+            f"forward hit rate {n_correct / n:.0%} ({n_correct}/{n}) significantly below chance: "
+            f"one-sided binomial p={pvalue_underperforming:.3f} <= alpha={criteria.hit_rate_significance_alpha}",
+            metrics,
+        )
+
+    return ForwardRecordVerdict(False, "forward record not significantly underperforming", metrics)
+
+
+def apply_forward_record_decision(model_id: str, verdict: ForwardRecordVerdict, store: Store) -> None:
+    """A demote verdict rolls a 'live' model back to 'shadow' -- not
+    'archived', which is reserved for a candidate that never earned
+    promotion in the first place (apply_gate_decision's FAIL branch).
+    A model demoted here already proved itself once on walk-forward
+    history; losing live status on a bad forward stretch is a
+    downgrade to renewed probation, not a verdict that it was always
+    worthless."""
+    import json
+
+    now = datetime.now(timezone.utc)
+    if not verdict.demote:
+        return
+
+    store.con.execute(
+        "UPDATE model_registry SET gate_decision = 'forward_record_demoted', gate_reason = ?, "
+        "metrics_json = ? WHERE model_id = ?",
+        [verdict.reason, json.dumps(verdict.metrics), model_id],
+    )
+    store.update_model_lifecycle(model_id, "shadow", rolled_back_at=now)

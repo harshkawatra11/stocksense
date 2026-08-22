@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import pandas as pd
+import pytest
+
+from stocksense.data.store import Store
 from stocksense.evaluation.backtest import FoldResult
-from stocksense.evaluation.gate import GateCriteria, _one_sided_binomial_pvalue, evaluate_gate
+from stocksense.evaluation.gate import (
+    ForwardRecordCriteria,
+    GateCriteria,
+    _one_sided_binomial_pvalue,
+    apply_forward_record_decision,
+    evaluate_forward_record,
+    evaluate_gate,
+)
 
 
 def _fold(alpha_net: float, fold_id: int = 0) -> FoldResult:
@@ -117,3 +130,115 @@ def test_drop_fraction_is_scale_invariant_not_a_fixed_count() -> None:
     folds = [_fold(a, i) for i, a in enumerate(strong)]
     verdict = evaluate_gate(folds)
     assert verdict.metrics["n_folds_dropped_for_stress_test"] == 3
+
+
+# ---- Phase G2: forward-record feedback (evaluate_forward_record / apply_forward_record_decision) ----
+
+@pytest.fixture()
+def tmp_store(tmp_path):
+    store = Store(tmp_path / "test.duckdb")
+    yield store
+    store.close()
+
+
+def _insert_model(store: Store, model_id: str, lifecycle_state: str = "live") -> None:
+    store.con.execute(
+        """
+        INSERT INTO model_registry (
+            model_id, model_type, horizon_bars, top_n, feature_schema_version,
+            created_at, lifecycle_state, artifact_path
+        ) VALUES (?, 'cross_sectional_ranker', 10, 10, 'v1', ?, ?, 'unused.joblib')
+        """,
+        [model_id, datetime.now(timezone.utc), lifecycle_state],
+    )
+
+
+def _write_graded_predictions(store: Store, model_id: str, n_correct: int, n_wrong: int) -> None:
+    """n_correct rows where sign(predicted) == sign(actual), n_wrong where they disagree."""
+    rows = []
+    for i in range(n_correct):
+        rows.append({
+            "run_id": f"r{i}", "symbol": f"S{i}", "as_of_date": pd.Timestamp("2026-01-01") + pd.Timedelta(days=i),
+            "horizon_bars": 10, "score": 0.01, "rank": 1, "model_version": model_id,
+            "horizon_type": "short", "predicted_return": 0.01, "confidence": None,
+            "feature_snapshot_hash": "h",
+        })
+    for i in range(n_wrong):
+        rows.append({
+            "run_id": f"w{i}", "symbol": f"W{i}", "as_of_date": pd.Timestamp("2026-01-01") + pd.Timedelta(days=i),
+            "horizon_bars": 10, "score": 0.01, "rank": 1, "model_version": model_id,
+            "horizon_type": "short", "predicted_return": 0.01, "confidence": None,
+            "feature_snapshot_hash": "h",
+        })
+    store.write_predictions(pd.DataFrame(rows))
+
+    now = datetime.now(timezone.utc)
+    for i in range(n_correct):
+        store.grade_prediction(f"r{i}", f"S{i}", pd.Timestamp("2026-01-01") + pd.Timedelta(days=i), 10,
+                                actual_return=0.02, grade_json="{}", graded_at=now)  # same sign as predicted (0.01)
+    for i in range(n_wrong):
+        store.grade_prediction(f"w{i}", f"W{i}", pd.Timestamp("2026-01-01") + pd.Timedelta(days=i), 10,
+                                actual_return=-0.02, grade_json="{}", graded_at=now)  # opposite sign
+
+
+def test_evaluate_forward_record_insufficient_predictions(tmp_store) -> None:
+    _insert_model(tmp_store, "m1")
+    _write_graded_predictions(tmp_store, "m1", n_correct=5, n_wrong=5)  # only 10 < default 30 required
+
+    verdict = evaluate_forward_record(tmp_store, "m1")
+    assert not verdict.demote
+    assert "insufficient" in verdict.reason
+
+
+def test_evaluate_forward_record_significantly_underperforming_demotes(tmp_store) -> None:
+    _insert_model(tmp_store, "m1")
+    # 30 graded, only 6 correct -- well below chance, should be significant
+    _write_graded_predictions(tmp_store, "m1", n_correct=6, n_wrong=24)
+
+    verdict = evaluate_forward_record(tmp_store, "m1")
+    assert verdict.demote
+    assert "significantly below chance" in verdict.reason
+    assert verdict.metrics["n_graded"] == 30
+
+
+def test_evaluate_forward_record_near_chance_does_not_demote(tmp_store) -> None:
+    _insert_model(tmp_store, "m1")
+    _write_graded_predictions(tmp_store, "m1", n_correct=16, n_wrong=14)  # close to 50/50
+
+    verdict = evaluate_forward_record(tmp_store, "m1")
+    assert not verdict.demote
+
+
+def test_evaluate_forward_record_respects_custom_criteria(tmp_store) -> None:
+    _insert_model(tmp_store, "m1")
+    _write_graded_predictions(tmp_store, "m1", n_correct=6, n_wrong=24)
+
+    verdict = evaluate_forward_record(tmp_store, "m1", criteria=ForwardRecordCriteria(min_graded_predictions=100))
+    assert not verdict.demote
+    assert "insufficient" in verdict.reason
+
+
+def test_apply_forward_record_decision_demotes_live_to_shadow(tmp_store) -> None:
+    _insert_model(tmp_store, "m1", lifecycle_state="live")
+    _write_graded_predictions(tmp_store, "m1", n_correct=6, n_wrong=24)
+    verdict = evaluate_forward_record(tmp_store, "m1")
+    assert verdict.demote
+
+    apply_forward_record_decision("m1", verdict, tmp_store)
+
+    row = tmp_store.con.execute("SELECT lifecycle_state, rolled_back_at, gate_decision FROM model_registry WHERE model_id = 'm1'").fetchdf().iloc[0]
+    assert row["lifecycle_state"] == "shadow"
+    assert row["rolled_back_at"] is not None
+    assert row["gate_decision"] == "forward_record_demoted"
+
+
+def test_apply_forward_record_decision_noop_when_not_demoting(tmp_store) -> None:
+    _insert_model(tmp_store, "m1", lifecycle_state="live")
+    verdict = evaluate_forward_record(tmp_store, "m1")  # insufficient data -> demote=False
+    assert not verdict.demote
+
+    apply_forward_record_decision("m1", verdict, tmp_store)
+
+    row = tmp_store.con.execute("SELECT lifecycle_state, rolled_back_at FROM model_registry WHERE model_id = 'm1'").fetchdf().iloc[0]
+    assert row["lifecycle_state"] == "live"  # untouched
+    assert pd.isna(row["rolled_back_at"])

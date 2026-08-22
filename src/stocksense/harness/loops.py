@@ -32,7 +32,11 @@ from datetime import date, datetime, timezone
 
 import pandas as pd
 
+from stocksense.core.config import get_settings
+from stocksense.data.adjust import quarantine_unexplained_jumps
+from stocksense.data.loader import load_candles
 from stocksense.data.validate import quarantine_symbols
+from stocksense.evaluation.gate import apply_forward_record_decision, evaluate_forward_record
 from stocksense.features.engine import build_features
 from stocksense.harness.graph import Graph, Node
 from stocksense.labels.forward_return import add_forward_return_labels, add_relative_forward_return
@@ -65,14 +69,26 @@ def _feature_snapshot_hash(row: pd.Series, feature_names: list[str]) -> str:
 
 
 def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
-                        model_type: str = "cross_sectional_ranker") -> RecordResult | None:
+                        model_type: str = "cross_sectional_ranker",
+                        turnover_rank_band: tuple[float, float] | None = None) -> RecordResult | None:
     """Scores the most recent available cross-section with the
     registered `lifecycle` model for `horizon_bars` and writes one
     predictions row per symbol. Returns None (rather than raising) if no
     such model exists or there is no clean data to score — the caller
     (a nightly loop) should treat that as "nothing to do today," not a
     hard failure, since a missing model on a given night is an expected
-    state before the first model is ever promoted."""
+    state before the first model is ever promoted.
+
+    Loads candles via data.loader.load_candles (Phase G) rather than
+    store.read_candles() directly, so the ledger scores the SAME
+    universe/price source `settings.price_source`/
+    `settings.use_point_in_time_universe` selects for training — a
+    ledger scoring the hardcoded 98-symbol path while train_candidate
+    trains on bhavcopy would silently grade a model against a universe
+    it was never shown. `turnover_rank_band`: see universe_pit.py's
+    docstring -- only meaningful when settings.use_point_in_time_universe
+    is set; forwarded so the ledger can be restricted to a specific cap
+    band once Phase G1's re-run identifies which one to run live."""
     row = store.con.execute(
         "SELECT * FROM model_registry WHERE model_type = ? AND horizon_bars = ? AND lifecycle_state = ? "
         "ORDER BY created_at DESC LIMIT 1",
@@ -85,8 +101,14 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
     artifact_path = row.iloc[0]["artifact_path"]
     ranker = load_model(artifact_path)
 
-    candles = store.read_candles()
-    candles, _ = quarantine_symbols(candles)
+    settings = get_settings()
+    candles = load_candles(settings, store, turnover_rank_band=turnover_rank_band)
+    if candles.empty:
+        return None
+    if settings.price_source == "bhavcopy":
+        candles, _ = quarantine_unexplained_jumps(store, candles)
+    else:
+        candles, _ = quarantine_symbols(candles)
     feats = build_features(candles)
 
     latest_date = feats["date"].max()
@@ -120,19 +142,29 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
     return RecordResult(run_id=run_id, model_id=model_id, as_of_date=str(latest_date), n_predictions=len(pred_rows))
 
 
-def grade_matured_predictions(store, horizon_bars: int, as_of_before: date | None = None) -> GradeResult:
+def grade_matured_predictions(store, horizon_bars: int, as_of_before: date | None = None,
+                               turnover_rank_band: tuple[float, float] | None = None) -> GradeResult:
     """Finds predictions whose horizon has elapsed (as_of_date +
     horizon_bars trading bars <= as_of_before, defaulting to the latest
     available candle date) and grades them against realized relative
     forward return, computed by the SAME function training uses
     (labels.forward_return) so grading and training can never disagree
-    about what "actual return" means."""
+    about what "actual return" means.
+
+    Loads candles via the same load_candles path as record_predictions
+    (Phase G) -- a prediction recorded against the bhavcopy universe
+    must be graded against the same universe's realized returns, not
+    silently re-scored against the 98-symbol candles table."""
     as_of_before = as_of_before or date.today()
 
-    candles = store.read_candles()
+    settings = get_settings()
+    candles = load_candles(settings, store, turnover_rank_band=turnover_rank_band)
     if candles.empty:
         return GradeResult(n_graded=0, n_correct_direction=0, mean_abs_error=None)
-    candles, _ = quarantine_symbols(candles)
+    if settings.price_source == "bhavcopy":
+        candles, _ = quarantine_unexplained_jumps(store, candles)
+    else:
+        candles, _ = quarantine_symbols(candles)
     labeled = add_forward_return_labels(candles, horizon_bars=horizon_bars)
     labeled = add_relative_forward_return(labeled, horizon_bars=horizon_bars)
     rel_col = f"fwd_ret_{horizon_bars}b_rel"
@@ -179,26 +211,51 @@ def grade_matured_predictions(store, horizon_bars: int, as_of_before: date | Non
     return GradeResult(n_graded=n_graded, n_correct_direction=n_correct, mean_abs_error=mean_abs_error)
 
 
-def build_reconcile_graph(store, horizon_bars: int, lifecycle: str = "live") -> Graph:
+def build_reconcile_graph(store, horizon_bars: int, lifecycle: str = "live",
+                           turnover_rank_band: tuple[float, float] | None = None,
+                           model_type: str = "cross_sectional_ranker") -> Graph:
     """The reconcile loop as a harness.Graph, so it gets resumability,
     idempotency, and job_runs logging for free (harness/runner.py) --
     the loop engineering this whole module exists to demonstrate isn't a
     separate mechanism from the Foreman's; it's the same one.
 
-    Two nodes: grade runs first (grading yesterday's matured predictions
-    doesn't depend on today's new ones) and record runs second. Each
-    node is idempotency-keyed by calendar date, so re-running the graph
-    twice on the same day is a no-op on the second run rather than
-    double-recording or double-grading -- the exact property
+    Three nodes: grade runs first (grading yesterday's matured
+    predictions doesn't depend on today's new ones), then
+    check_forward_record (Phase G2 -- closes docs/STATUS.md's named gap:
+    a live model's own graded ledger can now roll it back to 'shadow' on
+    a significantly-below-chance forward hit rate, per
+    evaluation.gate.evaluate_forward_record/apply_forward_record_decision;
+    only meaningful for lifecycle='live', so it no-ops for 'shadow'),
+    then record runs last -- deliberately AFTER the demotion check, so a
+    just-demoted model does not also get a fresh prediction recorded
+    against it in the same run (record_predictions naturally returns
+    None once no 'live' model remains, which is the correct fail-closed
+    behavior, not a bug to work around). Each node is idempotency-keyed
+    by calendar date, so re-running the graph twice on the same day is a
+    no-op on the second run rather than double-recording, double-
+    grading, or double-demoting -- the exact property
     docs/05-nightly-pipeline.md requires of every step."""
     today_key = date.today().isoformat()
 
     def _grade(ctx: dict) -> dict:
-        result = grade_matured_predictions(store, horizon_bars=horizon_bars)
+        result = grade_matured_predictions(store, horizon_bars=horizon_bars, turnover_rank_band=turnover_rank_band)
         return {"n_graded": result.n_graded, "n_correct_direction": result.n_correct_direction, "mean_abs_error": result.mean_abs_error}
 
+    def _check_forward_record(ctx: dict) -> dict:
+        if lifecycle != "live":
+            return {"checked": False, "reason": "only the live model's forward record is checked"}
+        live = store.get_live_model(model_type, horizon_bars)
+        if live.empty:
+            return {"checked": False, "reason": "no live model for this horizon"}
+        model_id = live.iloc[0]["model_id"]
+        verdict = evaluate_forward_record(store, model_id)
+        if verdict.demote:
+            apply_forward_record_decision(model_id, verdict, store)
+        return {"checked": True, "model_id": model_id, "demoted": verdict.demote, "reason": verdict.reason}
+
     def _record(ctx: dict) -> dict:
-        result = record_predictions(store, horizon_bars=horizon_bars, lifecycle=lifecycle)
+        result = record_predictions(store, horizon_bars=horizon_bars, lifecycle=lifecycle,
+                                     model_type=model_type, turnover_rank_band=turnover_rank_band)
         if result is None:
             return {"recorded": False}
         return {"recorded": True, "run_id": result.run_id, "n_predictions": result.n_predictions}
@@ -206,7 +263,9 @@ def build_reconcile_graph(store, horizon_bars: int, lifecycle: str = "live") -> 
     return Graph(
         [
             Node("grade_matured_predictions", fn=_grade, idempotency_key=f"reconcile_grade:{horizon_bars}:{today_key}"),
-            Node("record_predictions", fn=_record, depends_on=("grade_matured_predictions",),
+            Node("check_forward_record", fn=_check_forward_record, depends_on=("grade_matured_predictions",),
+                 idempotency_key=f"reconcile_forward_check:{horizon_bars}:{today_key}"),
+            Node("record_predictions", fn=_record, depends_on=("check_forward_record",),
                  idempotency_key=f"reconcile_record:{horizon_bars}:{today_key}"),
         ]
     )
