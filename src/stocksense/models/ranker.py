@@ -81,3 +81,101 @@ class CrossSectionalRanker:
         return pd.Series(
             self.model.feature_importances_, index=self.feature_names_
         ).sort_values(ascending=False)
+
+
+QUANTILES = (0.1, 0.5, 0.9)  # p10/p50/p90 -- an 80% interval, wide enough to be honest at this sample size
+
+
+class QuantileRanker:
+    """Phase G3: the point-estimate CrossSectionalRanker above answers
+    "which names rank highest" but not "how big a move, and how sure are
+    we" -- the user's own "expected movements" requirement
+    (predictions.predicted_return/confidence exist in the schema and are
+    written NULL by every caller today). This wraps three independent
+    LightGBM quantile regressors (p10/p50/p90, objective='quantile') so
+    a caller gets a genuine interval rather than a single score dressed
+    up as one.
+
+    Deliberately a SEPARATE class from CrossSectionalRanker, not a mode
+    switch on it: every existing caller (train_and_score_fold,
+    simulate_portfolio, the walk-forward gate, the whole Phase 0/Run 4
+    result) depends on CrossSectionalRanker's single-score `.predict()`
+    contract unchanged. Three quantile models cost roughly 3x the fit
+    time of one point model -- an explicit, opt-in choice for the
+    handful of callers (Phase G3's record_predictions path) that
+    actually need a band, not a cost every walk-forward fold pays.
+    """
+
+    def __init__(self, config: RankerConfig | None = None, quantiles: tuple[float, ...] = QUANTILES):
+        self.config = config or RankerConfig()
+        self.quantiles = quantiles
+        self.models: dict[float, lgb.LGBMRegressor] = {}
+        self.feature_names_: list[str] | None = None
+
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> "QuantileRanker":
+        mask = y.notna() & X.notna().all(axis=1)
+        X_train, y_train = X.loc[mask], y.loc[mask]
+        if len(X_train) < 100:
+            raise ValueError(f"too few clean training rows: {len(X_train)}")
+
+        for q in self.quantiles:
+            model = lgb.LGBMRegressor(
+                objective="quantile",
+                alpha=q,
+                num_leaves=self.config.num_leaves,
+                learning_rate=self.config.learning_rate,
+                n_estimators=self.config.n_estimators,
+                min_child_samples=self.config.min_child_samples,
+                subsample=self.config.subsample,
+                colsample_bytree=self.config.colsample_bytree,
+                random_state=self.config.random_state,
+                verbosity=-1,
+            )
+            model.fit(X_train, y_train)
+            self.models[q] = model
+        self.feature_names_ = list(X.columns)
+        return self
+
+    def predict_quantiles(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Returns one column per fitted quantile (named 'q10', 'q50',
+        'q90' for the default quantiles), NaN-preserving row-for-row like
+        CrossSectionalRanker.predict(). Quantiles are fit independently
+        (LightGBM has no built-in monotonicity guarantee across separate
+        quantile models), so a caller relying on p10 <= p50 <= p90
+        should sort per-row rather than assume fit order -- `bands()`
+        below does exactly that."""
+        if not self.models:
+            raise RuntimeError("call .fit() before .predict_quantiles()")
+        X_aligned = X[self.feature_names_]
+        valid = X_aligned.notna().all(axis=1)
+        out = pd.DataFrame(
+            {f"q{int(q * 100)}": np.nan for q in self.quantiles}, index=X.index,
+        )
+        if valid.any():
+            for q in self.quantiles:
+                out.loc[valid, f"q{int(q * 100)}"] = self.models[q].predict(X_aligned.loc[valid])
+        return out
+
+    def predict_bands(self, X: pd.DataFrame) -> pd.DataFrame:
+        """The band a caller actually wants to show: `predicted_return`
+        (median, q50) and `confidence` (half-width of the outer
+        interval, e.g. (q90-q10)/2) -- matching predictions.predicted_
+        return/confidence's schema and the project's own standing rule
+        (research/phase0_verdict.md) that alpha figures are quoted as a
+        band, never a point estimate. Sorts each row's raw quantile
+        predictions before computing the width, so an occasional
+        crossed-quantile row (independently fit models, no monotonicity
+        constraint) still yields a non-negative confidence rather than a
+        silently-wrong negative one."""
+        raw = self.predict_quantiles(X)
+        cols = [f"q{int(q * 100)}" for q in sorted(self.quantiles)]
+        mid_col = cols[len(cols) // 2]
+
+        sorted_arr = np.sort(raw[cols].to_numpy(dtype=float), axis=1)  # NaN sorts last; an all-NaN row stays all-NaN
+        lo = pd.Series(sorted_arr[:, 0], index=raw.index)
+        hi = pd.Series(sorted_arr[:, -1], index=raw.index)
+
+        return pd.DataFrame({
+            "predicted_return": raw[mid_col],
+            "confidence": ((hi - lo) / 2.0),
+        })
