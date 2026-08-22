@@ -22,17 +22,11 @@ import pandas as pd
 import structlog
 import typer
 
-from stocksense.core.calendar import trading_days_index
 from stocksense.core.config import REPO_ROOT, get_settings
 from stocksense.data.store import Store
 from stocksense.data.loader import load_candles, load_features_and_labels
 from stocksense.data.validate import quarantine_symbols
-from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
-from stocksense.evaluation.gate import GateCriteria, apply_gate_decision, evaluate_gate
-from stocksense.evaluation.walkforward import make_folds
 from stocksense.features.engine import build_features
-from stocksense.models.ranker import CrossSectionalRanker, RankerConfig
-from stocksense.models.registry import register_candidate
 from stocksense.portfolio.construct import target_weights_top_n
 from stocksense.statements.parsers import detect_parser
 from stocksense.statements.parsers.base import file_hash
@@ -43,6 +37,7 @@ from stocksense.foreman.assess import propose_goals
 from stocksense.foreman.budget import check_budget
 from stocksense.foreman.executor import execute_goal, record_goal_result, record_ledger_entries, record_protected_violations
 from stocksense.harness.loops import build_reconcile_graph, grade_matured_predictions, record_predictions
+from stocksense.harness.retrain import build_weekly_retrain_graph
 from stocksense.harness.runner import run_graph
 from stocksense.optimizer.tax import compute_tax_liability
 from stocksense.rag.agent import ask as rag_ask
@@ -109,74 +104,30 @@ def train_candidate(
     failure that pre-registration exists to prevent — someone could keep
     loosening criteria from the command line until a candidate passes.
     Experiment with alternative criteria in a research script, never here.
+
+    Thin wrapper around models.train_candidate.train_candidate_core
+    (Phase G4) — the actual logic is factored out so harness/retrain.py's
+    weekly retrain graph can call it as a plain function, the same
+    extraction Phase G2 did for record_predictions/grade_matured_
+    predictions. This command's behavior is unchanged.
     """
+    from stocksense.models.train_candidate import train_candidate_core
+
     settings = get_settings()
     store = Store(settings.duckdb_path)
 
-    candles, feats, fcols, labeled = _load_features_and_labels(horizon)
-    trading_dates = trading_days_index(feats["date"])
-    test_window = max(21, horizon * 12)
-    folds = make_folds(trading_dates, horizon_bars=horizon, test_window_bars=test_window)
-    log.info("folds_built", horizon=horizon, n_folds=len(folds))
+    result = train_candidate_core(horizon, top_n, cost_bps, store, settings=settings)
 
-    ranker_config = RankerConfig(random_state=settings.random_seed)
-    fold_results = []
-    for fold in folds:
-        scored = train_and_score_fold(feats, labeled, fcols, fold, horizon_bars=horizon, ranker_config=ranker_config)
-        if scored is None:
-            continue
-        result = simulate_portfolio(scored, top_n=top_n, round_trip_cost_bps=cost_bps)
-        if result is not None:
-            fold_results.append(result)
-
-    if not fold_results:
+    if result.lifecycle_state is None:
         typer.echo("No fold results produced — insufficient data for this horizon/universe.")
+        store.close()
         raise typer.Exit(code=1)
 
-    incumbent = store.get_live_model(MODEL_TYPE, horizon)
-    incumbent_alpha = None
-    if not incumbent.empty:
-        incumbent_metrics = json.loads(incumbent.iloc[0]["metrics_json"])
-        incumbent_alpha = incumbent_metrics.get("mean_alpha_net")
-
-    verdict = evaluate_gate(
-        fold_results,
-        criteria=GateCriteria(),  # pre-registered defaults, always — see docstring above
-        incumbent_mean_alpha_net=incumbent_alpha,
-    )
-
-    typer.echo(f"\nGate verdict: {'PASS' if verdict.passed else 'FAIL'}")
-    typer.echo(f"Reason: {verdict.reason}")
-    typer.echo(f"Metrics: {json.dumps(verdict.metrics, indent=2)}")
-
-    # Train the artifact that would actually be deployed: full available
-    # history, not just one fold. Walk-forward folds prove out-of-sample
-    # validity; this is the model that scores tomorrow's cross-section.
-    full_merged = feats.merge(
-        labeled[["symbol", "date", f"fwd_ret_{horizon}b", f"fwd_ret_{horizon}b_rel"]],
-        on=["symbol", "date"], how="inner",
-    ).dropna(subset=[f"fwd_ret_{horizon}b_rel"])
-
-    final_ranker = CrossSectionalRanker(ranker_config)
-    final_ranker.fit(full_merged[fcols], full_merged[f"fwd_ret_{horizon}b_rel"])
-
-    metrics = dict(verdict.metrics)
-    metrics["fold_alphas"] = [f.alpha_net for f in fold_results]
-    metrics["cost_bps_used"] = cost_bps
-
-    model_id = register_candidate(
-        final_ranker,
-        model_type=MODEL_TYPE,
-        horizon_bars=horizon,
-        top_n=top_n,
-        training_start=str(full_merged["date"].min().date()),
-        training_end=str(full_merged["date"].max().date()),
-        metrics=metrics,
-        store=store,
-    )
-    apply_gate_decision(model_id, verdict, store)
-    typer.echo(f"\nRegistered: {model_id}")
-    typer.echo(f"Lifecycle state: {'shadow' if verdict.passed else 'archived'}")
+    typer.echo(f"\nGate verdict: {'PASS' if result.verdict.passed else 'FAIL'}")
+    typer.echo(f"Reason: {result.verdict.reason}")
+    typer.echo(f"Metrics: {json.dumps(result.verdict.metrics, indent=2)}")
+    typer.echo(f"\nRegistered: {result.model_id}")
+    typer.echo(f"Lifecycle state: {result.lifecycle_state}")
     store.close()
 
 
@@ -669,6 +620,36 @@ def reconcile_cmd(
         typer.echo(f"Graded: {grade_out.get('n_graded', 0)}")
     if record_out.get("recorded"):
         typer.echo(f"Recorded: {record_out.get('n_predictions', 0)} predictions (run_id={record_out.get('run_id')})")
+
+
+@app.command("retrain-weekly")
+def retrain_weekly_cmd(
+    horizon: int = typer.Option(10, help="Prediction horizon in trading bars"),
+    top_n: int = typer.Option(10, help="Portfolio size (top-N by rank)"),
+    cost_bps: float = typer.Option(25.0, help="Round-trip cost assumption for gate evaluation, bps"),
+) -> None:
+    """The weekly retrain loop (Phase G4), run as a harness graph:
+    walk-forward evaluate, gate, and register a fresh candidate.
+    Idempotency-keyed by ISO week, so running this more than once in
+    the same week is a no-op after the first success -- the weekly
+    analogue of `reconcile`'s daily idempotency."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    graph = build_weekly_retrain_graph(store, horizon=horizon, top_n=top_n, cost_bps=cost_bps)
+    result = run_graph(graph, store)
+    store.close()
+
+    for outcome in result.outcomes:
+        typer.echo(f"  [{outcome.status:>9}] {outcome.name}")
+    if not result.all_succeeded:
+        typer.echo(f"Failed: {result.failed_nodes()}")
+        raise typer.Exit(code=1)
+
+    train_out = result.context.get("train_candidate", {})
+    if train_out:
+        typer.echo(f"Model: {train_out.get('model_id')}")
+        typer.echo(f"Gate passed: {train_out.get('gate_passed')} ({train_out.get('gate_reason')})")
+        typer.echo(f"Lifecycle state: {train_out.get('lifecycle_state')}")
 
 
 @foreman_app.command("run")
