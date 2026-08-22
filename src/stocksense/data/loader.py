@@ -17,6 +17,7 @@ import structlog
 import pandas as pd
 
 from stocksense.data.adjust import quarantine_unexplained_jumps, read_adjusted_candles
+from stocksense.data.liquidity import segment_symbols_by_trading_gap
 from stocksense.data.store import Store
 from stocksense.data.universe_pit import filter_to_point_in_time_universe
 from stocksense.data.validate import quarantine_symbols
@@ -107,9 +108,43 @@ def load_features_and_labels(horizon: int, turnover_rank_band: tuple[float, floa
     if quarantined:
         log.warning("quarantined_symbols_with_adjustment_anomalies", symbols=quarantined, price_source=settings.price_source)
 
-    feats = build_features(candles)
-    fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
+    # Phase G1 finding (research/preregistration_bhavcopy_rerun.md): the
+    # wider bhavcopy universe contains symbols with long trading halts,
+    # which fabricate huge cross-halt "returns" that neither quarantine
+    # above catches (raw close jumps too, not just the adjustment
+    # factor -- see data/liquidity.py's module docstring for the full
+    # finding). features.engine.build_features and labels.forward_
+    # return.add_forward_return_labels both compute returns over the bar
+    # SEQUENCE (pct_change/shift), with no awareness of elapsed calendar
+    # time, so a halt-and-reopen pair is silently treated as an ordinary
+    # adjacent trading day unless the symbol used for grouping is split
+    # at the gap. Substituting the segment symbol here, then mapping
+    # back to the real symbol on every output frame before returning,
+    # fixes this for any bar-sequence feature/label without touching
+    # engine.py or forward_return.py's per-feature logic one at a time.
+    # For price_source="candles" (the 98-symbol, continuously-liquid
+    # Phase 0 universe) this is a no-op in practice -- included
+    # unconditionally rather than branched on price_source so the same
+    # correctness property holds regardless of source, and so Phase 0's
+    # own reproducibility is verified rather than assumed unaffected.
+    if not candles.empty:
+        real_symbol = candles["symbol"]
+        segment_symbol = segment_symbols_by_trading_gap(candles)
+        seg_to_real = dict(zip(segment_symbol, real_symbol))
+        candles = candles.assign(symbol=segment_symbol)
 
-    labeled = add_forward_return_labels(candles, horizon_bars=horizon)
-    labeled = add_relative_forward_return(labeled, horizon_bars=horizon)
+        feats = build_features(candles)
+        fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
+
+        labeled = add_forward_return_labels(candles, horizon_bars=horizon)
+        labeled = add_relative_forward_return(labeled, horizon_bars=horizon)
+
+        candles = candles.assign(symbol=candles["symbol"].map(seg_to_real))
+        feats = feats.assign(symbol=feats["symbol"].map(seg_to_real))
+        labeled = labeled.assign(symbol=labeled["symbol"].map(seg_to_real))
+    else:
+        feats = build_features(candles)
+        fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
+        labeled = add_forward_return_labels(candles, horizon_bars=horizon)
+        labeled = add_relative_forward_return(labeled, horizon_bars=horizon)
     return candles, feats, fcols, labeled

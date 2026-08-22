@@ -29,6 +29,7 @@ import structlog
 
 from stocksense.core.config import get_settings
 from stocksense.data.adjust import quarantine_unexplained_jumps
+from stocksense.data.liquidity import segment_symbols_by_trading_gap
 from stocksense.data.loader import load_candles
 from stocksense.data.store import Store
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
@@ -73,6 +74,19 @@ def _load_and_prepare(settings, store, cap_band: tuple[float, float] | None):
     candles, quarantined = quarantine_unexplained_jumps(store, candles)
     if quarantined:
         log.warning("quarantined_symbols_with_adjustment_anomalies", symbols=quarantined)
+
+    # Bug found live running this exact sweep (data/liquidity.py has the
+    # full finding): the wider bhavcopy universe contains long-halted
+    # symbols whose reopening print fabricates a huge cross-halt "return"
+    # neither quarantine step above catches. Substituting the segment
+    # symbol before build_features/add_forward_return_labels makes their
+    # bar-sequence pct_change/shift reset at the halt instead of
+    # spanning it. Left substituted (not restored) for the rest of this
+    # script deliberately -- FoldResult carries no per-symbol detail, so
+    # nothing downstream ever needs the real ticker back; only
+    # data/loader.py's production path (predictions, portfolio
+    # construction) needs the restoration this sweep doesn't.
+    candles = candles.assign(symbol=segment_symbols_by_trading_gap(candles))
 
     feats = build_features(candles)
     fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
