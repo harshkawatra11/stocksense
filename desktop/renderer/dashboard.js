@@ -17,6 +17,11 @@ function severityClass(sev) {
   return { critical: "sev-critical", high: "sev-high", notable: "sev-notable", ok: "sev-ok" }[sev] || "muted";
 }
 
+function _isDashboardActive() {
+  const btn = document.querySelector('.tab-btn[data-tab="dashboard"]');
+  return !btn || btn.classList.contains("active"); // no tab bar yet (e.g. tests) -> assume active
+}
+
 async function updateClock() {
   document.getElementById("clock").textContent = new Date().toLocaleTimeString("en-IN", { hour12: false });
 }
@@ -30,7 +35,7 @@ async function updateHealth() {
     el.className = "";
     dataEl.textContent = `data: ${health.latest_candle_date || "none"}`;
   } catch (e) {
-    el.textContent = "API unreachable";
+    el.textContent = `API unreachable: ${e.message}`;
     el.className = "sev-critical";
   }
 }
@@ -51,7 +56,7 @@ async function updateSummary() {
       <div class="row"><span>win rate</span><span>${(s.win_rate * 100).toFixed(0)}%</span></div>
     `;
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">unavailable</div>`;
+    el.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
@@ -68,7 +73,7 @@ async function updateDoshas() {
       .map((d) => `<div class="row"><span class="${severityClass(d.severity)}">&#9679; ${d.metric_name}</span><span>${Number(d.metric_value).toFixed(3)}</span></div>`)
       .join("");
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">unavailable</div>`;
+    el.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
@@ -84,7 +89,7 @@ async function updateHarness() {
       .map((j) => `<div class="row"><span>${j.job_name}</span><span class="status-${j.status}">${j.status}</span></div>`)
       .join("");
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">unavailable</div>`;
+    el.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
@@ -101,7 +106,7 @@ async function updateRegistry() {
       .map((m) => `<div class="row"><span>h${m.horizon_bars} ${m.lifecycle_state}</span><span>${m.gate_decision || "pending"}</span></div>`)
       .join("");
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">unavailable</div>`;
+    el.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
@@ -119,11 +124,16 @@ async function updateAgentRuns() {
       .map((r) => `<div class="row"><span>${r.skill_name || "(none)"}</span><span class="${r.status === 'ok' ? '' : 'sev-high'}">${r.status}</span></div>`)
       .join("");
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">unavailable</div>`;
+    el.innerHTML = `<div class="empty-state">${e.message}</div>`;
   }
 }
 
 async function refresh() {
+  // Phase G: only poll while the Dashboard tab is actually visible --
+  // this ran unconditionally on every tab before, unlike every other
+  // panel module (which are all onTabActivate-gated), wasting a request
+  // round-trip every 2s regardless of which tab was open.
+  if (!_isDashboardActive()) return;
   await Promise.all([
     updateHealth(), updateSummary(), updateDoshas(),
     updateHarness(), updateRegistry(), updateAgentRuns(),
@@ -134,3 +144,6 @@ updateClock();
 setInterval(updateClock, 1000);
 refresh();
 setInterval(refresh, POLL_INTERVAL_MS);
+if (typeof onTabActivate === "function") {
+  onTabActivate("dashboard", refresh); // refresh immediately on switching back, don't wait for the next tick
+}

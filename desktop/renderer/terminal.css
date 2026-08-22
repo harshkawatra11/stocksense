@@ -125,6 +125,14 @@ body {
   border-bottom: none;
 }
 
+.row-clickable {
+  cursor: pointer;
+}
+
+.row-clickable:hover {
+  background: #1c2326;
+}
+
 .muted {
   color: #666;
 }
@@ -262,6 +270,15 @@ button:disabled {
   padding-top: 6px;
 }
 
+.doc-viewer {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 12px;
+  color: #d4d4d4;
+}
+
 /* ---- Phase F5: job console ---- */
 
 .job-console {
@@ -313,6 +330,11 @@ button:disabled {
 
 .job-cmd {
   color: #6fa8dc;
+}
+
+.job-progress {
+  color: #8ec07c;
+  font-weight: bold;
 }
 
 .job-completed {

@@ -112,6 +112,60 @@ def test_websocket_streams_output_and_signals_done(mock_popen, client) -> None:
         assert any(m.get("done") for m in messages)
 
 
+# ---- Phase G/A1: job log history (re-reading a job after it's done) ----
+
+@patch("stocksense.server.jobs.subprocess.Popen")
+def test_get_log_of_running_job_reads_live_buffer(mock_popen, client) -> None:
+    never_ending = MagicMock()
+    never_ending.pid = 1
+    never_ending.stdout = iter(["still going\n"])
+    import time as _time
+    never_ending.wait = lambda: _time.sleep(5)
+    mock_popen.return_value = never_ending
+
+    trigger = client.post("/api/jobs/foreman-assess", json={})
+    job_id = trigger.json()["job_id"]
+    import time
+    time.sleep(0.2)
+
+    resp = client.get(f"/api/jobs/{job_id}/log")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] == "live"
+    assert "still going" in data["lines"]
+
+
+@patch("stocksense.server.jobs.subprocess.Popen")
+def test_get_log_of_finished_job_reads_from_disk(mock_popen, client) -> None:
+    """The whole point of A1: a job's output must still be readable
+    AFTER it's no longer the one 'currently running' -- before this
+    endpoint existed, a finished job's log was unrecoverable from the UI
+    even though server/jobs.py was already persisting it to disk."""
+    mock_popen.return_value = _fake_popen(["line one", "line two"])
+    trigger = client.post("/api/jobs/foreman-assess", json={})
+    job_id = trigger.json()["job_id"]
+
+    import time
+    for _ in range(20):
+        jobs = client.get("/api/jobs").json()["jobs"]
+        row = next((j for j in jobs if j["job_id"] == job_id), None)
+        if row and row["status"] != "running":
+            break
+        time.sleep(0.1)
+
+    resp = client.get(f"/api/jobs/{job_id}/log")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] == "disk"
+    assert "line one" in data["lines"]
+    assert "line two" in data["lines"]
+
+
+def test_get_log_of_unknown_job_returns_404(client) -> None:
+    resp = client.get("/api/jobs/does-not-exist/log")
+    assert resp.status_code == 404
+
+
 # ---- Settings ----
 
 def test_settings_get_returns_current_effective_values(client, monkeypatch) -> None:
@@ -250,3 +304,92 @@ def test_usage_soft_alarm_roundtrip(client, tmp_path, monkeypatch) -> None:
 
     resp = client.get("/api/claude/usage")
     assert resp.json()["soft_alarm_tokens_5h"] == 500000
+
+
+# ---- Phase G/B3: /api/ask (the RAG corpus was buildable but not queryable) ----
+
+def test_ask_requires_a_question(client) -> None:
+    resp = client.post("/api/ask", json={})
+    assert resp.status_code == 422
+
+
+def test_ask_returns_no_results_on_empty_corpus(client) -> None:
+    resp = client.post("/api/ask", json={"question": "why did I lose money?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["n_chunks_retrieved"] == 0
+    assert "Nothing relevant" in data["answer"]
+
+
+def test_ask_goes_through_the_f2_access_gate(client, monkeypatch) -> None:
+    """rag.agent.ask() calls agent.claude_cli.invoke(), which is the
+    single F2 enforcement point -- no corpus content is needed to prove
+    this: an indexed document with no Claude access granted must come
+    back access_denied via the exact same path every other Claude call
+    uses, not a separate/bypassable check in this endpoint."""
+    from stocksense.data.store import Store
+    from stocksense.rag.index import index_document, rebuild_fts_index
+    import stocksense.server.app as app_mod
+
+    settings_db = app_mod.get_settings().duckdb_path
+    store = Store(settings_db)
+    index_document(store, "research", "verdict.md", "Verdict", "The gate passed with p=0.0085.")
+    rebuild_fts_index(store)
+    store.close()
+
+    resp = client.post("/api/ask", json={"question": "did the gate pass?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["n_chunks_retrieved"] == 1  # retrieval doesn't need Claude access, only narration does
+
+
+# ---- Phase G/Track C: research doc listing/reading, path-traversal safety ----
+
+@pytest.fixture()
+def research_client(client, tmp_path, monkeypatch):
+    import stocksense.server.app as app_mod
+
+    fake_repo_root = tmp_path / "fake_repo"
+    (fake_repo_root / "research").mkdir(parents=True)
+    (fake_repo_root / "research" / "verdict_intraday.md").write_text("# Verdict\n\nGATE FAIL", encoding="utf-8")
+    (fake_repo_root / "research" / "fold_results.csv").write_text("fold_id,alpha_net\n0,-0.001\n", encoding="utf-8")
+    (fake_repo_root / "research" / "not_a_doc.py").write_text("print('hi')", encoding="utf-8")
+    # a real secret file OUTSIDE research/, at repo root -- the traversal target
+    (fake_repo_root / ".env").write_text("STOCKSENSE_UPSTOX_API_KEY=real-secret-value", encoding="utf-8")
+    monkeypatch.setattr(app_mod, "REPO_ROOT", fake_repo_root)
+    return client
+
+
+def test_list_research_docs_only_lists_md_and_csv(research_client) -> None:
+    resp = research_client.get("/api/research/docs")
+    assert resp.status_code == 200
+    docs = resp.json()["docs"]
+    assert "verdict_intraday.md" in docs
+    assert "fold_results.csv" in docs
+    assert "not_a_doc.py" not in docs
+
+
+def test_get_research_doc_returns_content(research_client) -> None:
+    resp = research_client.get("/api/research/doc/verdict_intraday.md")
+    assert resp.status_code == 200
+    assert "GATE FAIL" in resp.json()["content"]
+
+
+def test_get_research_doc_rejects_path_traversal(research_client) -> None:
+    """The decisive test: a name that would escape research/ and read
+    the real .env-equivalent (STOCKSENSE_UPSTOX_API_KEY) must be
+    rejected, not served."""
+    for attempt in ["../.env", "..%2f.env", "..\\.env", "/etc/passwd"]:
+        resp = research_client.get(f"/api/research/doc/{attempt}")
+        assert resp.status_code in (400, 404), f"traversal attempt {attempt!r} was not rejected: {resp.status_code}"
+        assert "real-secret-value" not in resp.text
+
+
+def test_get_research_doc_rejects_nonexistent_file(research_client) -> None:
+    resp = research_client.get("/api/research/doc/does_not_exist.md")
+    assert resp.status_code == 404
+
+
+def test_get_research_doc_rejects_non_doc_extension(research_client) -> None:
+    resp = research_client.get("/api/research/doc/not_a_doc.py")
+    assert resp.status_code == 404

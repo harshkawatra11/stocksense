@@ -113,12 +113,42 @@ COMMANDS: dict[str, JobCommandSpec] = {
         param_flags={"broker": "--broker"},
     ),
     "train-candidate": JobCommandSpec(
+        # AUDIT FIX (Phase G/B1): param_flags was empty, so the UI could
+        # only ever run this at the hardcoded defaults (horizon=20,
+        # top_n=20, cost_bps=25.0) -- cli/main.py's train_candidate takes
+        # all three as real options. Gate criteria are deliberately NOT
+        # exposed here, matching the command's own docstring: allowing
+        # ad-hoc gate overrides from a form would recreate the exact
+        # evaluator-overfitting failure pre-registration exists to
+        # prevent.
         name="train-candidate",
         cli_args=("train-candidate",),
+        param_flags={"horizon": "--horizon", "top_n": "--top-n", "cost_bps": "--cost-bps"},
     ),
     "reconcile": JobCommandSpec(
+        # AUDIT FIX (Phase G/B1): same gap -- horizon/lifecycle were
+        # real cli/main.py options with no way to reach them.
         name="reconcile",
         cli_args=("reconcile",),
+        param_flags={"horizon": "--horizon", "lifecycle": "--lifecycle"},
+    ),
+    "predict": JobCommandSpec(
+        # Phase G/B2: previously unreachable from the UI entirely.
+        name="predict",
+        cli_args=("predict",),
+        param_flags={"horizon": "--horizon", "lifecycle": "--lifecycle"},
+    ),
+    "tax-summary": JobCommandSpec(
+        name="tax-summary",
+        cli_args=("tax-summary",),
+        param_flags={"fy_start": "--fy-start", "fy_end": "--fy-end", "ltcg_exemption_used": "--ltcg-exemption-used"},
+        required_params=("fy_start", "fy_end"),
+    ),
+    "universe-as-of": JobCommandSpec(
+        name="universe-as-of",
+        cli_args=("universe-as-of",),
+        param_flags={"as_of": "--as-of"},
+        required_params=("as_of",),
     ),
     "foreman-run": JobCommandSpec(
         name="foreman-run",

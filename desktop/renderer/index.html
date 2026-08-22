@@ -23,6 +23,7 @@
       <button class="tab-btn" data-tab="pipeline">PIPELINE</button>
       <button class="tab-btn" data-tab="statements">STATEMENTS</button>
       <button class="tab-btn" data-tab="foreman">FOREMAN</button>
+      <button class="tab-btn" data-tab="research">RESEARCH</button>
       <button class="tab-btn" data-tab="claude">CLAUDE</button>
       <button class="tab-btn" data-tab="settings">SETTINGS</button>
     </nav>
@@ -195,6 +196,68 @@
         </section>
       </div>
 
+      <!-- RESEARCH: train/reconcile, registry drill-in, verdict/report
+           viewer, positions table, RAG query. -->
+      <div class="tab-panel" id="tab-research">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">TRAIN A CANDIDATE</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label>horizon (bars) <input type="number" id="train-horizon" value="20" /></label>
+                <label>top N <input type="number" id="train-top-n" value="20" /></label>
+                <label>cost (bps) <input type="number" id="train-cost-bps" value="25.0" step="0.1" /></label>
+                <button id="btn-train-candidate" type="button">RUN</button>
+              </div>
+              <div id="status-train-candidate" class="ctl-status"></div>
+              <div class="usage-label">Gate criteria are not configurable here on purpose -- research/gate_criteria_preregistration.md's thresholds are always used verbatim.</div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RECONCILE (grade + record predictions)</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label>horizon (bars) <input type="number" id="reconcile-horizon" value="20" /></label>
+                <label>lifecycle
+                  <select id="reconcile-lifecycle"><option value="live">live</option><option value="shadow">shadow</option></select>
+                </label>
+                <button id="btn-reconcile" type="button">RUN</button>
+              </div>
+              <div id="status-reconcile" class="ctl-status"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">ASK THE RESEARCH CORPUS</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label style="flex:1">question <input type="text" id="ask-question" placeholder="e.g. why did the intraday gate fail?" style="min-width:100%" /></label>
+                <button id="btn-ask" type="button">ASK</button>
+              </div>
+              <div id="ask-answer" class="panel-content"></div>
+              <div class="usage-label">Answers only from the indexed corpus (run PIPELINE &rarr; RE-INDEX CORPUS first) and require Claude access to be authorized in the CLAUDE tab.</div>
+            </div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">MODEL REGISTRY (full)</div>
+            <div id="research-registry" class="panel-content">loading...</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">RESEARCH DOCS &amp; VERDICTS</div>
+            <div class="panel-content">
+              <select id="research-doc-select"></select>
+              <button id="btn-load-doc" type="button">OPEN</button>
+            </div>
+            <pre id="research-doc-content" class="panel-content doc-viewer">select a document above</pre>
+          </div>
+          <div class="panel">
+            <div class="panel-title">POSITIONS</div>
+            <div id="research-positions" class="panel-content">loading...</div>
+          </div>
+        </section>
+      </div>
+
       <!-- CLAUDE: auth + usage -->
       <div class="tab-panel" id="tab-claude">
         <section class="col left">
@@ -262,6 +325,7 @@
   <script src="panels/pipeline.js"></script>
   <script src="panels/statements.js"></script>
   <script src="panels/foreman.js"></script>
+  <script src="panels/research.js"></script>
   <script src="panels/claude-connect.js"></script>
   <script src="panels/settings.js"></script>
 </body>

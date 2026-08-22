@@ -19,7 +19,7 @@
         ? files.map((f) => `<option value="statements/${f}">${f}</option>`).join("")
         : `<option value="">(no files found in statements/)</option>`;
     } catch (e) {
-      select.innerHTML = `<option value="">(unavailable)</option>`;
+      select.innerHTML = `<option value="">(${e.message})</option>`;
     }
   }
 
@@ -78,7 +78,7 @@
           <div class="row"><span>win rate</span><span>${(s.win_rate * 100).toFixed(1)}%</span></div>
         `;
     } catch (e) {
-      summaryEl.innerHTML = `<div class="empty-state">unavailable</div>`;
+      summaryEl.innerHTML = `<div class="empty-state">${e.message}</div>`;
     }
 
     try {
@@ -87,7 +87,7 @@
         ? doshas.map((d) => `<div class="row"><span class="${severityClass(d.severity)}">● ${d.metric_name}</span><span>${Number(d.metric_value).toFixed(4)} ${d.metric_unit || ""}</span></div>`).join("")
         : `<div class="empty-state">No diagnostics run yet.</div>`;
     } catch (e) {
-      doshasEl.innerHTML = `<div class="empty-state">unavailable</div>`;
+      doshasEl.innerHTML = `<div class="empty-state">${e.message}</div>`;
     }
 
     try {
@@ -96,7 +96,7 @@
         ? counterfactuals.map((c) => `<div class="row"><span>${c.scenario_name}</span><span class="${c.delta_pnl >= 0 ? "sev-ok" : "sev-critical"}">Δ₹${c.delta_pnl.toLocaleString("en-IN", { maximumFractionDigits: 2 })} (${c.n_trades_affected} trades)</span></div>`).join("")
         : `<div class="empty-state">No counterfactuals run yet.</div>`;
     } catch (e) {
-      cfEl.innerHTML = `<div class="empty-state">unavailable</div>`;
+      cfEl.innerHTML = `<div class="empty-state">${e.message}</div>`;
     }
   }
 

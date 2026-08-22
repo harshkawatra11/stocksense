@@ -114,6 +114,7 @@ async function createWindow() {
     height: 800,
     backgroundColor: "#0b0e0f",
     frame: true,
+    icon: path.join(__dirname, "build", "icon.png"), // .png here (not .ico) -- Electron's runtime window icon needs a raster image on every platform; .ico is used separately, only for the Windows shortcut/taskbar via electron-builder's build.win.icon in package.json.
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,

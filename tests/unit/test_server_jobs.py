@@ -73,6 +73,52 @@ def test_build_command_no_params_needed_for_simple_commands() -> None:
     assert args == ["foreman", "assess"]
 
 
+# ---- Phase G/B1: train-candidate and reconcile params were previously
+# unreachable (empty param_flags) -- regression coverage that they're
+# now real, correctly-flagged parameters, not just present in the dict. ----
+
+def test_train_candidate_params_are_reachable() -> None:
+    spec = COMMANDS["train-candidate"]
+    args = build_command(spec, {"horizon": 10, "top_n": 30, "cost_bps": 15.0})
+    assert args == ["train-candidate", "--horizon", "10", "--top-n", "30", "--cost-bps", "15.0"]
+
+
+def test_train_candidate_works_with_no_params_too() -> None:
+    spec = COMMANDS["train-candidate"]
+    assert build_command(spec, {}) == ["train-candidate"]
+
+
+def test_reconcile_params_are_reachable() -> None:
+    spec = COMMANDS["reconcile"]
+    args = build_command(spec, {"horizon": 5, "lifecycle": "shadow"})
+    assert args == ["reconcile", "--horizon", "5", "--lifecycle", "shadow"]
+
+
+# ---- Phase G/B2: predict, tax-summary, universe-as-of were entirely
+# absent from the allowlist -- previously unreachable from the UI. ----
+
+def test_predict_command_registered() -> None:
+    spec = COMMANDS["predict"]
+    args = build_command(spec, {"horizon": 20, "lifecycle": "live"})
+    assert args == ["predict", "--horizon", "20", "--lifecycle", "live"]
+
+
+def test_tax_summary_requires_fy_bounds() -> None:
+    spec = COMMANDS["tax-summary"]
+    with pytest.raises(MissingParamError):
+        build_command(spec, {"fy_start": "2024-04-01"})  # fy_end missing
+    args = build_command(spec, {"fy_start": "2024-04-01", "fy_end": "2025-03-31"})
+    assert args == ["tax-summary", "--fy-start", "2024-04-01", "--fy-end", "2025-03-31"]
+
+
+def test_universe_as_of_requires_date() -> None:
+    spec = COMMANDS["universe-as-of"]
+    with pytest.raises(MissingParamError):
+        build_command(spec, {})
+    args = build_command(spec, {"as_of": "2020-06-30"})
+    assert args == ["universe-as-of", "--as-of", "2020-06-30"]
+
+
 # ---- JobRegistry: allowlist enforcement ----
 
 def test_start_rejects_unregistered_command(registry) -> None:

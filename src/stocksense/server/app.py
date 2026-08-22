@@ -195,6 +195,28 @@ def harness():
     return {"jobs": _df_to_records(latest_per_job)}
 
 
+@app.post("/api/ask")
+def ask_rag(payload: dict):
+    """Phase G/B3: `index-corpus` was already triggerable from the
+    Pipeline tab, but nothing could query the corpus it builds -- no
+    UI, no endpoint. rag.agent.ask() already funnels through
+    agent.claude_cli.invoke(), so the F2 authorize/decline gate applies
+    here automatically, same as every other Claude-touching path; this
+    endpoint adds no separate access check because there is exactly one
+    enforcement point and this call already goes through it."""
+    from stocksense.rag.agent import ask as rag_ask
+
+    question = (payload or {}).get("question", "").strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="'question' is required")
+
+    store = _store()
+    try:
+        return rag_ask(question, store)
+    finally:
+        store.close()
+
+
 @app.get("/api/registry")
 def registry():
     store = _store()
@@ -234,6 +256,51 @@ def list_statements_folder():
     return {"folder": str(folder), "files": files}
 
 
+RESEARCH_DOC_EXTENSIONS = (".md", ".csv")
+
+
+@app.get("/api/research/docs")
+def list_research_docs():
+    """Phase G/Track C: lists readable files in `research/` -- pre-
+    registrations, verdicts, fold-result CSVs -- so E4's answer (and
+    every future research doc) is readable from the UI without a
+    terminal. Listing is not a security boundary by itself; the
+    traversal protection lives in get_research_doc below, which is the
+    endpoint that actually reads file content from a caller-supplied
+    name."""
+    folder = REPO_ROOT / "research"
+    if not folder.exists():
+        return {"docs": []}
+    docs = sorted(
+        p.name for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in RESEARCH_DOC_EXTENSIONS
+    )
+    return {"docs": docs}
+
+
+@app.get("/api/research/doc/{name}")
+def get_research_doc(name: str):
+    """Serves one file's content by NAME, not by arbitrary path --
+    deliberately restricted to a single path segment (no '/' allowed)
+    resolved against `research/` and then verified to still resolve
+    INSIDE that directory before ever being opened. Both checks matter:
+    rejecting '/' stops the obvious 'name=../../.env' case, but
+    resolving and re-checking containment is what actually stops a
+    symlink or a cleverer traversal from escaping the directory --
+    string-matching the input alone is not a sufficient guard."""
+    if "/" in name or "\\" in name or name in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid document name")
+
+    folder = (REPO_ROOT / "research").resolve()
+    candidate = (folder / name).resolve()
+    if not candidate.is_relative_to(folder):
+        raise HTTPException(status_code=400, detail="invalid document name")
+    if candidate.suffix.lower() not in RESEARCH_DOC_EXTENSIONS or not candidate.is_file():
+        raise HTTPException(status_code=404, detail=f"no research document named {name!r}")
+
+    return {"name": name, "content": candidate.read_text(encoding="utf-8", errors="replace")}
+
+
 @app.get("/api/job-commands")
 def job_commands():
     """The allowlist itself, so the UI can build its trigger forms from
@@ -268,6 +335,44 @@ def stop_job(job_id: str):
     if not stopped:
         raise HTTPException(status_code=404, detail=f"no running job with id {job_id!r}")
     return {"job_id": job_id, "status": "stopping"}
+
+
+@app.get("/api/jobs/{job_id}/log")
+def get_job_log(job_id: str):
+    """Phase G/A1: re-reads a job's output after the fact -- the console
+    drawer only ever streams a job that's running RIGHT NOW
+    (job-console.js clears on every new trigger), so a finished
+    overnight backfill was otherwise unrecoverable even though its full
+    output was already being written to disk the whole time
+    (server/jobs.py's _pump_output, log_path column on `ui_jobs`).
+
+    Still-running jobs are served from the in-memory ring buffer (no
+    database read, same as /ws/jobs -- works even while this job or
+    another one holds the write lock); finished jobs are read from their
+    persisted log file on disk. Checking the job's STATUS, not just
+    whether the registry has ever heard of it, matters: JobRegistry
+    never evicts a finished job's in-memory entry for the life of the
+    server process, so "registry knows about it" alone would never
+    exercise the disk-read path at all once a job completes."""
+    registry = _job_registry()
+    live_status = registry.status(job_id)
+    if live_status is not None and live_status["status"] == "running":
+        return {"job_id": job_id, "lines": registry.tail(job_id), "source": "live"}
+
+    store = _store()
+    try:
+        job = store.read_ui_job(job_id)
+    finally:
+        store.close()
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no job with id {job_id!r}")
+
+    log_path = job.get("log_path")
+    if not log_path or not Path(log_path).exists():
+        return {"job_id": job_id, "lines": [], "source": "disk", "note": "no log file found"}
+
+    lines = Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    return {"job_id": job_id, "lines": lines, "source": "disk"}
 
 
 @app.get("/api/jobs")

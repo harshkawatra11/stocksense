@@ -82,11 +82,20 @@
     try {
       const { jobs } = await fetchJson("/api/jobs?limit=15");
       const foremanJobs = jobs.filter((j) => ["foreman-run", "foreman-assess"].includes(j.command));
-      el.innerHTML = foremanJobs.length
-        ? foremanJobs.map((j) => `<div class="row"><span>${j.command} · ${new Date(j.started_at).toLocaleString("en-IN")}</span><span class="status-${j.status}">${j.status}</span></div>`).join("")
-        : `<div class="empty-state">No Foreman runs yet.</div>`;
+      if (foremanJobs.length === 0) {
+        el.innerHTML = `<div class="empty-state">No Foreman runs yet.</div>`;
+        return;
+      }
+      // Phase G/A1: clickable rows re-open that run's persisted log --
+      // same treatment as pipeline.js's job history.
+      el.innerHTML = foremanJobs
+        .map((j) => `<div class="row row-clickable" data-job-id="${j.job_id}" data-command="${j.command}"><span>${j.command} · ${new Date(j.started_at).toLocaleString("en-IN")}</span><span class="status-${j.status}">${j.status}</span></div>`)
+        .join("");
+      el.querySelectorAll(".row-clickable").forEach((row) => {
+        row.addEventListener("click", () => viewJobLog(row.dataset.jobId, row.dataset.command));
+      });
     } catch (e) {
-      el.innerHTML = `<div class="empty-state">unavailable</div>`;
+      el.innerHTML = `<div class="empty-state">${e.message}</div>`;
     }
   }
 

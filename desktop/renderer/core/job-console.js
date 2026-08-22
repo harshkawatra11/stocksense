@@ -12,8 +12,33 @@ function _consoleEl(id) {
   return document.getElementById(id);
 }
 
+const PROGRESS_RE = /^PROGRESS:\s*(\d+)\/(\d+)\s*\((\d+)%\)/;
+let _progressLineEl = null;
+
+function _renderProgressBar(pct) {
+  const filled = Math.round(pct / 5);
+  return "█".repeat(filled) + "░".repeat(20 - filled);
+}
+
 function _appendLine(text, cls) {
   const body = _consoleEl("job-console-body");
+  const match = !cls && PROGRESS_RE.exec(text);
+  if (match) {
+    // Phase G/A2: the CLI backfill loops print a fresh "PROGRESS: n/total
+    // (pct%)" line often -- appending each as its own row would flood the
+    // console over a multi-hour run, so a single progress line is
+    // updated in place instead of growing the log.
+    const [, done, total, pct] = match;
+    if (!_progressLineEl) {
+      _progressLineEl = document.createElement("div");
+      _progressLineEl.className = "job-line job-progress";
+      body.appendChild(_progressLineEl);
+    }
+    _progressLineEl.textContent = `${_renderProgressBar(Number(pct))} ${done}/${total} (${pct}%)`;
+    body.scrollTop = body.scrollHeight;
+    return;
+  }
+
   const line = document.createElement("div");
   line.className = `job-line${cls ? ` ${cls}` : ""}`;
   line.textContent = text;
@@ -48,6 +73,7 @@ async function triggerJob(command, params) {
 
   openJobConsole();
   _consoleEl("job-console-body").innerHTML = "";
+  _progressLineEl = null;
   _appendLine(`$ ${command} ${JSON.stringify(params || {})}`, "job-cmd");
   _setStatus("running");
   _streamJob(job_id);
@@ -74,6 +100,36 @@ function _streamJob(jobId) {
   };
   ws.onerror = () => _appendLine("[console connection error]", "job-failed");
   ws.onclose = () => { if (_activeSocket === ws) _activeSocket = null; };
+}
+
+/**
+ * Phase G/A1: re-opens a FINISHED job's log (or a still-running one's
+ * live buffer) on demand -- the console normally only ever shows
+ * whatever was just triggered, so without this a job that failed
+ * overnight was unrecoverable even though its output was persisted the
+ * whole time. Closes any active live-stream socket first: viewing
+ * history and watching a live job are mutually exclusive in one drawer.
+ */
+async function viewJobLog(jobId, command) {
+  if (_activeSocket) {
+    try { _activeSocket.close(); } catch (e) { /* already closed */ }
+    _activeSocket = null;
+  }
+  openJobConsole();
+  _consoleEl("job-console-body").innerHTML = "";
+  _progressLineEl = null;
+  _appendLine(`$ ${command || jobId} (viewing saved log)`, "job-cmd");
+  try {
+    const { lines, source } = await fetchJson(`/api/jobs/${jobId}/log`);
+    if (lines.length === 0) {
+      _appendLine(`[no log content -- source: ${source}]`, "job-stopped");
+    } else {
+      lines.forEach((line) => _appendLine(line));
+    }
+  } catch (e) {
+    _appendLine(`[could not load log: ${e.message}]`, "job-failed");
+  }
+  _setStatus("idle");
 }
 
 async function stopActiveJob() {

@@ -2,16 +2,14 @@
 // backfill-corporate-actions, backfill-intraday, index-corpus via F1's
 // job API. Progress comes from the job console's live stream, which
 // parses the "PROGRESS: n/total (pct%)" lines cli/main.py's backfill
-// loops now print (see _emit_progress in cli/main.py).
+// loops print -- job-console.js renders that as an in-place progress
+// bar (Phase G/A2; this panel used to define its own progressBar()
+// helper and never call it, since the parsing needs to live where the
+// stream is actually consumed).
 
 (function () {
   function today() {
     return new Date().toISOString().slice(0, 10);
-  }
-
-  function progressBar(pct) {
-    const filled = Math.round(pct / 5);
-    return "█".repeat(filled) + "░".repeat(20 - filled);
   }
 
   async function runBackfill(command, params, statusElId) {
@@ -71,11 +69,18 @@
         el.innerHTML = `<div class="empty-state">No pipeline jobs run yet.</div>`;
         return;
       }
+      // Phase G/A1: rows are clickable -- re-opens that job's persisted
+      // log (live buffer if still running, the on-disk file if it's
+      // finished) in the console drawer. Before this, a job's output was
+      // only ever visible while it was the MOST RECENTLY triggered one.
       el.innerHTML = pipelineJobs
-        .map((j) => `<div class="row"><span>${j.command} · ${new Date(j.started_at).toLocaleString("en-IN")}</span><span class="status-${j.status}">${j.status}</span></div>`)
+        .map((j) => `<div class="row row-clickable" data-job-id="${j.job_id}" data-command="${j.command}"><span>${j.command} · ${new Date(j.started_at).toLocaleString("en-IN")}</span><span class="status-${j.status}">${j.status}</span></div>`)
         .join("");
+      el.querySelectorAll(".row-clickable").forEach((row) => {
+        row.addEventListener("click", () => viewJobLog(row.dataset.jobId, row.dataset.command));
+      });
     } catch (e) {
-      el.innerHTML = `<div class="empty-state">unavailable</div>`;
+      el.innerHTML = `<div class="empty-state">${e.message}</div>`;
     }
   }
 
