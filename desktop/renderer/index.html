@@ -20,6 +20,7 @@
 
     <nav class="tabs">
       <button class="tab-btn active" data-tab="dashboard">DASHBOARD</button>
+      <button class="tab-btn" data-tab="brief">BRIEF</button>
       <button class="tab-btn" data-tab="pipeline">PIPELINE</button>
       <button class="tab-btn" data-tab="statements">STATEMENTS</button>
       <button class="tab-btn" data-tab="foreman">FOREMAN</button>
@@ -53,6 +54,41 @@
           <div class="panel">
             <div class="panel-title">AGENT RUNS</div>
             <div id="agent-runs" class="panel-content">loading...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- BRIEF: today's top-N recommendation (Phase G5). No capital
+           figure is ever sent to the server -- the optional capital
+           input below is purely client-side arithmetic on the weights
+           the API already returned. -->
+      <div class="tab-panel" id="tab-brief">
+        <section class="col left">
+          <div class="panel">
+            <div class="panel-title">TODAY'S BRIEF</div>
+            <div class="panel-content">
+              <div class="ctl-form">
+                <label>horizon (bars) <input type="number" id="brief-horizon" value="10" /></label>
+                <label>capital (optional, ₹) <input type="number" id="brief-capital" placeholder="not required" /></label>
+                <button id="btn-brief-refresh" type="button">REFRESH</button>
+              </div>
+              <div class="usage-label">Capital above is never sent anywhere -- it only scales the weights already returned into an indicative rupee amount, entirely in this browser tab. Leave it blank to see pure percentages.</div>
+              <div id="brief-status" class="panel-content"></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">TOP PICKS</div>
+            <div id="brief-picks" class="panel-content">run REFRESH above</div>
+          </div>
+        </section>
+        <section class="col right">
+          <div class="panel">
+            <div class="panel-title">YESTERDAY'S REVISION</div>
+            <div id="brief-revision" class="panel-content">run REFRESH above</div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">COST &amp; SIZING NOTES</div>
+            <div id="brief-notes" class="panel-content"></div>
           </div>
         </section>
       </div>
@@ -322,6 +358,7 @@
   <script src="core/router.js"></script>
   <script src="core/job-console.js"></script>
   <script src="dashboard.js"></script>
+  <script src="panels/brief.js"></script>
   <script src="panels/pipeline.js"></script>
   <script src="panels/statements.js"></script>
   <script src="panels/foreman.js"></script>
