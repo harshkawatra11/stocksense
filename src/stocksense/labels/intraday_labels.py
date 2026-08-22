@@ -46,12 +46,34 @@ def add_session_forward_return(
     return df.drop(columns=["_session_date"])
 
 
+def precompute_sessions(bars_1min: pd.DataFrame) -> dict:
+    """PERFORMANCE FIX (found live 2026-08-20, running the real E4
+    sweep): first_touch_label used to rebuild this exact
+    groupby(["symbol","_session_date"]) from scratch on EVERY call --
+    fine for a handful of entries, but simulate_intraday_trades_for_fold
+    calls it once PER FILLED TRADE, and a single fold's test window
+    (~42 sessions x 244 symbols) is millions of 1-minute rows. That
+    turned into O(entries x fold_data_size): the first fold alone ran
+    for 6.5+ hours (confirmed via CPU-time vs wall-clock: ~56% active,
+    not hung, just doing the same expensive regroup hundreds of times
+    over). Splitting the grouping out as its own step lets a caller with
+    MANY entries against the SAME bars (the sweep's actual access
+    pattern) build this once and reuse it, turning that O(entries x
+    data) into O(data) + O(entries x lookup)."""
+    bars = bars_1min.copy()
+    bars["ts"] = pd.to_datetime(bars["ts"])
+    bars["_session_date"] = bars["ts"].dt.date
+    bars = bars.sort_values(["symbol", "ts"])
+    return {key: g for key, g in bars.groupby(["symbol", "_session_date"])}
+
+
 def first_touch_label(
     bars_1min: pd.DataFrame,
     entries: pd.DataFrame,
     stop_pct: float,
     target_pct: float,
     max_holding_minutes: int = 60,
+    sessions: dict | None = None,
 ) -> pd.DataFrame:
     """For each entry (symbol, entry_ts, entry_price), walks forward
     through the SAME session's 1-minute bars and reports which happened
@@ -67,14 +89,18 @@ def first_touch_label(
     bar-level (not tick-level) backtesting -- it can only ever
     understate the label's favorability, never overstate it.
 
+    `sessions`: an optional pre-built precompute_sessions(bars_1min)
+    result, for a caller making many calls against the same bars_1min
+    (see precompute_sessions' docstring for why this matters). Ordinary
+    callers with a handful of entries can omit it -- bars_1min is still
+    grouped internally, exactly as before, so existing behavior and
+    every existing test are unchanged.
+
     Returns one row per entry: symbol, entry_ts, outcome
     ('stop'|'target'|'time_exit'|'no_data'), exit_ts, exit_price, ret.
     """
-    bars = bars_1min.copy()
-    bars["ts"] = pd.to_datetime(bars["ts"])
-    bars["_session_date"] = bars["ts"].dt.date
-    bars = bars.sort_values(["symbol", "ts"])
-    sessions = {key: g for key, g in bars.groupby(["symbol", "_session_date"])}
+    if sessions is None:
+        sessions = precompute_sessions(bars_1min)
 
     rows = []
     for _, e in entries.iterrows():

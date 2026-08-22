@@ -32,7 +32,7 @@ from stocksense.evaluation.backtest import FoldResult
 from stocksense.evaluation.walkforward import Fold, make_folds
 from stocksense.execution.cost_model import compute_charges
 from stocksense.execution.fill_model import simulate_fill
-from stocksense.labels.intraday_labels import first_touch_label
+from stocksense.labels.intraday_labels import first_touch_label, precompute_sessions
 from stocksense.models.ranker import CrossSectionalRanker, RankerConfig
 
 
@@ -132,9 +132,20 @@ def simulate_intraday_trades_for_fold(
     open position is skipped for new entries until its exit resolves --
     this is what makes 'top-N' a real capacity constraint instead of
     double-counting the same name.
+
+    PERFORMANCE FIX (found live 2026-08-20): this loop can call
+    first_touch_label hundreds of times in a single fold (once per
+    filled trade). It used to rebuild bars_1min's full session grouping
+    from scratch on every one of those calls -- O(n_trades x
+    fold_data_size), which stalled the real 244-symbol sweep for 6.5+
+    hours on its FIRST fold alone (confirmed alive via CPU time, not
+    hung -- just redoing the same expensive regroup repeatedly). Now
+    built once via labels.intraday_labels.precompute_sessions and reused
+    for every trade this fold considers.
     """
     bars_5min_test = bars_5min_test.sort_values(["symbol", "ts"]).reset_index(drop=True)
     bars_by_symbol = {sym: g.reset_index(drop=True) for sym, g in bars_5min_test.groupby("symbol")}
+    precomputed_sessions = precompute_sessions(bars_1min)
 
     open_until: dict[str, pd.Timestamp] = {}
     trades: list[IntradayTrade] = []
@@ -171,7 +182,7 @@ def simulate_intraday_trades_for_fold(
             entry_df = pd.DataFrame([{"symbol": symbol, "entry_ts": next_bar["ts"], "entry_price": fill.fill_price}])
             exit_row = first_touch_label(
                 bars_1min, entry_df, stop_pct=stop_pct, target_pct=target_pct,
-                max_holding_minutes=max_holding_minutes,
+                max_holding_minutes=max_holding_minutes, sessions=precomputed_sessions,
             ).iloc[0]
 
             if exit_row["outcome"] == "no_data":

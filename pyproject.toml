@@ -25,6 +25,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "httpx>=0.27"]
 
+[project.scripts]
+# Phase G/E1: lets `stocksense <command>` work as a bare command after
+# `pip install -e .`, instead of only `python -m stocksense.cli.main
+# <command>` (what server/jobs.py and desktop/main.js both still use
+# internally, unchanged -- this is an added convenience for direct
+# terminal use, not a replacement for the module-invocation path
+# everything else already depends on).
+stocksense = "stocksense.cli.main:app"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

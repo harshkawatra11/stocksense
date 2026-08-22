@@ -69,6 +69,42 @@ FEATURE_COLS = [
 ]
 
 
+SYMBOL_BATCH_SIZE = 25  # see resample_universe_in_batches' docstring
+
+
+def resample_universe_in_batches(store: Store, symbols: list[str], batch_size: int = SYMBOL_BATCH_SIZE) -> pd.DataFrame:
+    """MEMORY FIX (found live 2026-08-20): the original single-shot
+    `store.read_intraday_bars(symbols=symbols)` pulled all 91.2M 1-minute
+    rows into one pandas DataFrame before resampling -- confirmed to push
+    a 16GB machine down to ~267MB free physical memory and start heavy
+    paging (Get-Process showed most of the process's reported working set
+    had already been swapped to disk), which had to be killed rather than
+    risk an OOM crash or a frozen system.
+
+    Fix: resample SYMBOL_BATCH_SIZE symbols at a time -- each batch loads
+    only its own slice of 1-minute bars, resamples via the already-proven
+    resample_to_bars_sql (tests/unit/test_intraday_features.py proves it
+    identical to the pandas path), and only the much smaller 5-MINUTE
+    result (18.3M rows total vs 91.2M) is retained across batches. Peak
+    memory is bounded by one batch's 1-minute data, not the whole
+    history, regardless of how many symbols the universe grows to.
+    """
+    bars_5min_parts = []
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i + batch_size]
+        t0 = time.time()
+        bars_1min_batch = store.read_intraday_bars(symbols=batch, interval="1minute")
+        resampled_batch = resample_to_bars_sql(bars_1min_batch, interval="5min")
+        bars_5min_parts.append(resampled_batch)
+        log.info(
+            "resampled_batch", batch=i // batch_size + 1, n_batches=-(-len(symbols) // batch_size),
+            symbols_in_batch=len(batch), rows_1min=len(bars_1min_batch), rows_5min=len(resampled_batch),
+            elapsed_s=round(time.time() - t0, 1),
+        )
+        del bars_1min_batch  # explicit: don't hold this batch's 1-min data past its own resample
+    return pd.concat(bars_5min_parts, ignore_index=True)
+
+
 def main() -> None:
     settings = get_settings()
     store = Store(settings.duckdb_path)
@@ -79,13 +115,10 @@ def main() -> None:
     ).fetchdf()["symbol"].tolist()
     log.info("resolved_universe", n_symbols=len(symbols))
 
-    bars_1min = store.read_intraday_bars(symbols=symbols, interval="1minute")
-    store.close()
-    log.info("loaded_1min_bars", rows=len(bars_1min), elapsed_s=round(time.time() - t0, 1))
-
     t0 = time.time()
-    bars_5min = resample_to_bars_sql(bars_1min, interval="5min")
-    log.info("resampled_5min", rows=len(bars_5min), elapsed_s=round(time.time() - t0, 1))
+    bars_5min = resample_universe_in_batches(store, symbols)
+    store.close()
+    log.info("resampled_5min_total", rows=len(bars_5min), elapsed_s=round(time.time() - t0, 1))
 
     t0 = time.time()
     cache_key = f"{len(symbols)}syms_{bars_5min['ts'].min().date()}_{bars_5min['ts'].max().date()}"
@@ -110,6 +143,15 @@ def main() -> None:
     )
     log.info("session_folds_built", n_folds=len(folds))
 
+    # PERFORMANCE FIX: feats/labeled never change across folds, only the
+    # per-fold slice does -- merging fresh inside the loop recomputed the
+    # same ~18M-row join 45 times. Hoisted out; train_intraday_ranker
+    # still does its own internal merge against the TRAIN slice only
+    # (cheap, since it's already fold-sliced by then), so this doesn't
+    # change what any fold trains or tests on, only how many times the
+    # full-universe join happens.
+    merged_full = feats.merge(labeled, on=["symbol", "ts"], how="inner")
+
     fold_results = []
     for fold in folds:
         t0 = time.time()
@@ -118,8 +160,7 @@ def main() -> None:
             log.warning("fold_skipped_insufficient_train_rows", fold_id=fold.fold_id)
             continue
 
-        merged = feats.merge(labeled, on=["symbol", "ts"], how="inner")
-        _, test_df = session_split(merged, fold)
+        _, test_df = session_split(merged_full, fold)
         test_df = test_df.dropna(subset=FEATURE_COLS)
         if test_df.empty:
             log.warning("fold_skipped_empty_test", fold_id=fold.fold_id)
@@ -131,7 +172,23 @@ def main() -> None:
             scores_by_ts[ts] = preds
 
         _, bars_5min_test = session_split(bars_5min, fold)
-        _, bars_1min_test = session_split(bars_1min, fold)
+        # MEMORY FIX (see resample_universe_in_batches): 1-minute bars are
+        # only ever needed for the CURRENT fold's test window (~42
+        # sessions, a few weeks) to drive first_touch_label -- querying
+        # that slice on demand, rather than slicing a full 91.2M-row
+        # frame held for the whole run, is the other half of the fix that
+        # let this run complete on a 16GB machine.
+        # `end` must cover the FULL test_end calendar day: read_intraday_bars'
+        # start/end filters a TIMESTAMP column via BETWEEN, so passing the
+        # bare date "2024-03-15" would mean midnight (00:00:00) -- which
+        # excludes every actual trading bar that day (all after 09:15).
+        # Next-day midnight as the (inclusive) upper bound safely covers it.
+        test_store = Store(settings.duckdb_path)
+        bars_1min_test = test_store.read_intraday_bars(
+            symbols=symbols, start=str(fold.test_start.date()),
+            end=str((fold.test_end + pd.Timedelta(days=1)).date()), interval="1minute",
+        )
+        test_store.close()
         benchmark_by_ts = test_df.groupby("ts")["fwd_ret"].mean().to_dict()
 
         trades = simulate_intraday_trades_for_fold(

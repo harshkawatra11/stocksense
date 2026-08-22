@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stocksense.labels.intraday_labels import add_session_forward_return, first_touch_label
+from stocksense.labels.intraday_labels import add_session_forward_return, first_touch_label, precompute_sessions
 
 
 def _bar(symbol, ts, o, h, l, c, v=1000.0):
@@ -117,3 +117,48 @@ def test_no_data_for_a_session_with_no_bars_at_all() -> None:
     out = first_touch_label(bars, entries, stop_pct=0.015, target_pct=0.02)
     assert out.iloc[0]["outcome"] == "no_data"
     assert pd.isna(out.iloc[0]["ret"])
+
+
+# ---- PERFORMANCE FIX: precompute_sessions lets a caller with many
+# entries against the same bars_1min build the grouping once (see
+# module docstring on precompute_sessions for the real incident this
+# closes -- the E4 sweep's first fold ran 6.5+ hours before this fix). ----
+
+def test_precomputed_sessions_gives_identical_result_to_the_default_path() -> None:
+    bars = pd.DataFrame([
+        _bar("X", "2026-01-05 09:15", 100, 100.5, 99.5, 100),
+        _bar("X", "2026-01-05 09:16", 100, 103, 99.8, 102),
+        _bar("X", "2026-01-05 09:17", 102, 104, 101, 103),
+    ])
+    entries = pd.DataFrame([{"symbol": "X", "entry_ts": "2026-01-05 09:15", "entry_price": 100.0}])
+
+    default_result = first_touch_label(bars, entries, stop_pct=0.015, target_pct=0.02, max_holding_minutes=60)
+    sessions = precompute_sessions(bars)
+    precomputed_result = first_touch_label(
+        bars, entries, stop_pct=0.015, target_pct=0.02, max_holding_minutes=60, sessions=sessions,
+    )
+    pd.testing.assert_frame_equal(default_result, precomputed_result)
+
+
+def test_precomputed_sessions_reused_across_many_calls_stays_correct() -> None:
+    """The actual access pattern this fix targets: MANY separate
+    first_touch_label calls (one per trade, as
+    simulate_intraday_trades_for_fold does) against the SAME
+    precomputed sessions dict -- each call must still get the right
+    answer for its own entry, not bleed state from a previous call."""
+    bars = pd.DataFrame([
+        _bar("A", "2026-01-05 09:15", 100, 100.2, 99.8, 100),
+        _bar("A", "2026-01-05 09:16", 100, 103, 99.8, 102),  # A: target hit
+        _bar("B", "2026-01-05 09:15", 50, 50.1, 49.9, 50),
+        _bar("B", "2026-01-05 09:16", 50, 50.2, 48.0, 48.5),  # B: stop hit
+    ])
+    sessions = precompute_sessions(bars)
+
+    entry_a = pd.DataFrame([{"symbol": "A", "entry_ts": "2026-01-05 09:15", "entry_price": 100.0}])
+    entry_b = pd.DataFrame([{"symbol": "B", "entry_ts": "2026-01-05 09:15", "entry_price": 50.0}])
+
+    result_a = first_touch_label(bars, entry_a, stop_pct=0.02, target_pct=0.015, sessions=sessions)
+    result_b = first_touch_label(bars, entry_b, stop_pct=0.02, target_pct=0.015, sessions=sessions)
+
+    assert result_a.iloc[0]["outcome"] == "target"
+    assert result_b.iloc[0]["outcome"] == "stop"
