@@ -89,6 +89,36 @@ def test_bhavcopy_source_with_point_in_time_universe_drops_illiquid_rows(tmp_sto
     assert "THIN" not in set(out["symbol"])
 
 
+def test_bhavcopy_source_with_turnover_rank_band_selects_a_cap_slice(tmp_store, monkeypatch) -> None:
+    """turnover_rank_band must reach filter_to_point_in_time_universe
+    through _load_candles -- the actual wiring point Phase G's mid/
+    small-cap gate re-run depends on."""
+    monkeypatch.setenv("STOCKSENSE_PRICE_SOURCE", "bhavcopy")
+    monkeypatch.setenv("STOCKSENSE_USE_POINT_IN_TIME_UNIVERSE", "true")
+    rows = [_bhav_row(f"SYM{i}", date(2020, 1, 15)) for i in range(1, 6)]
+    df = pd.DataFrame(rows)
+    for i in range(1, 6):
+        df.loc[df["symbol"] == f"SYM{i}", "turnover_inr"] = 10_000_000.0 * i
+    tmp_store.write_bhavcopy_eq(df)
+
+    settings = get_settings()
+    out = _load_candles(settings, tmp_store, turnover_rank_band=(0.8, 1.0))
+    assert set(out["symbol"]) == {"SYM5"}  # top quintile by turnover only
+
+
+def test_bhavcopy_source_turnover_rank_band_ignored_without_pit_universe(tmp_store, monkeypatch) -> None:
+    """No point-in-time filter at all -> a rank band has nothing to
+    slice and must not silently drop rows."""
+    monkeypatch.setenv("STOCKSENSE_PRICE_SOURCE", "bhavcopy")
+    monkeypatch.setenv("STOCKSENSE_USE_POINT_IN_TIME_UNIVERSE", "false")
+    rows = [_bhav_row(f"SYM{i}", date(2020, 1, 15)) for i in range(1, 6)]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    settings = get_settings()
+    out = _load_candles(settings, tmp_store, turnover_rank_band=(0.8, 1.0))
+    assert set(out["symbol"]) == {f"SYM{i}" for i in range(1, 6)}
+
+
 def test_unknown_price_source_raises(tmp_store, monkeypatch) -> None:
     monkeypatch.setenv("STOCKSENSE_PRICE_SOURCE", "bogus")
     settings = get_settings()

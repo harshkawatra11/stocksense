@@ -149,3 +149,61 @@ def test_filter_to_point_in_time_universe_empty_input(tmp_store) -> None:
     frame = pd.DataFrame(columns=["symbol", "date", "value"])
     out = filter_to_point_in_time_universe(tmp_store, frame, lookback_days=60)
     assert out.empty
+
+
+def test_turnover_rank_band_selects_a_liquidity_slice(tmp_store) -> None:
+    """10 symbols with distinct turnover, all otherwise identical. The
+    top band (0.8, 1.0] must contain only the 2 highest-turnover names,
+    the bottom band (0.0, 0.2] only the 2 lowest -- proving the band is
+    a rank slice of the qualifying set, not an absolute threshold."""
+    rows = []
+    for i in range(1, 11):
+        rows.append(_bhavcopy_row(f"SYM{i:02d}", date(2020, 1, 15), turnover=10_000_000.0 * i))
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    top_band = universe_as_of(tmp_store, date(2020, 1, 20), lookback_days=60, turnover_rank_band=(0.8, 1.0))
+    assert set(top_band) == {"SYM09", "SYM10"}
+
+    bottom_band = universe_as_of(tmp_store, date(2020, 1, 20), lookback_days=60, turnover_rank_band=(0.0, 0.2))
+    assert set(bottom_band) == {"SYM01", "SYM02"}
+
+    mid_band = universe_as_of(tmp_store, date(2020, 1, 20), lookback_days=60, turnover_rank_band=(0.4, 0.6))
+    assert set(mid_band) == {"SYM05", "SYM06"}
+
+
+def test_turnover_rank_band_none_returns_full_liquidity_filtered_set(tmp_store) -> None:
+    rows = [_bhavcopy_row(f"SYM{i}", date(2020, 1, 15), turnover=10_000_000.0 * i) for i in range(1, 6)]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    full = universe_as_of(tmp_store, date(2020, 1, 20), lookback_days=60)
+    assert len(full) == 5
+
+
+def test_turnover_rank_band_is_point_in_time_safe(tmp_store) -> None:
+    """The band must rank only names/turnover known as of `d` -- a
+    future-only high-turnover name must not distort an earlier date's
+    band membership, the same invariant every other rule in this module
+    enforces."""
+    rows = []
+    for month in range(1, 13):
+        rows.append(_bhavcopy_row("EARLYLOW", date(2010, month, 15), turnover=10_000_000.0))
+        rows.append(_bhavcopy_row("EARLYHIGH", date(2010, month, 15), turnover=90_000_000.0))
+    for month in range(1, 13):
+        rows.append(_bhavcopy_row("FUTUREHUGE", date(2015, month, 15), turnover=500_000_000.0))
+
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+
+    top_band_2010 = universe_as_of(tmp_store, date(2010, 6, 20), lookback_days=60, turnover_rank_band=(0.5, 1.0))
+    assert top_band_2010 == ["EARLYHIGH"]
+    assert "FUTUREHUGE" not in top_band_2010
+
+
+def test_filter_to_point_in_time_universe_passes_through_turnover_rank_band(tmp_store) -> None:
+    rows = [_bhavcopy_row(f"SYM{i}", date(2020, 1, 15), turnover=10_000_000.0 * i) for i in range(1, 6)]
+    tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
+    frame = pd.DataFrame([
+        {"symbol": f"SYM{i}", "date": date(2020, 1, 20), "value": i} for i in range(1, 6)
+    ])
+
+    out = filter_to_point_in_time_universe(tmp_store, frame, lookback_days=60, turnover_rank_band=(0.8, 1.0))
+    assert set(out["symbol"]) == {"SYM5"}

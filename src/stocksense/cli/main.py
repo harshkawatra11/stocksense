@@ -83,7 +83,7 @@ def _emit_progress(current: int, total: int, force: bool = False) -> None:
     typer.echo(f"PROGRESS: {current}/{total} ({pct}%)")
 
 
-def _load_candles(settings, store) -> pd.DataFrame:
+def _load_candles(settings, store, turnover_rank_band: tuple[float, float] | None = None) -> pd.DataFrame:
     """Source switch (docs/17-data-spine.md, Phase D2): 'candles'
     preserves the exact Phase 0 path (yfinance, fixed 98-symbol
     universe) unchanged, so those numbers stay reproducible. 'bhavcopy'
@@ -91,7 +91,16 @@ def _load_candles(settings, store) -> pd.DataFrame:
     layer (data/adjust.py) -- the widest candidate symbol set is read
     first, then narrowed to the point-in-time-tradeable universe per
     date if use_point_in_time_universe is set, rather than narrowed to
-    a hardcoded list up front."""
+    a hardcoded list up front.
+
+    `turnover_rank_band`: passed straight through to
+    universe_pit.filter_to_point_in_time_universe when
+    use_point_in_time_universe is set -- a liquidity-rank-proxy cap band
+    (see universe_pit.universe_as_of's docstring) for restricting to
+    e.g. mid/small cap rather than the full point-in-time-tradeable set.
+    Ignored (with no effect) when use_point_in_time_universe is False,
+    since 'candles'/no-PIT-filter has no notion of a per-date rank band.
+    """
     if settings.price_source == "candles":
         return store.read_candles()
 
@@ -107,7 +116,8 @@ def _load_candles(settings, store) -> pd.DataFrame:
 
     if settings.use_point_in_time_universe:
         candles = filter_to_point_in_time_universe(
-            store, candles, min_turnover_inr=settings.min_avg_daily_turnover_inr, min_price_inr=settings.min_price_inr
+            store, candles, min_turnover_inr=settings.min_avg_daily_turnover_inr, min_price_inr=settings.min_price_inr,
+            turnover_rank_band=turnover_rank_band,
         )
     return candles
 
