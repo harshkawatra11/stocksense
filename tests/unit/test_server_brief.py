@@ -219,3 +219,57 @@ def test_brief_intermediate_day_shows_no_new_moves(client_with_store) -> None:
     # Actions still reflect the FIRST (only) rebalance point -- AAA/BBB entered then, nothing new today
     actions_by_symbol = {a["symbol"]: a["action"] for a in body["actions"]}
     assert actions_by_symbol == {"AAA": "enter", "BBB": "enter"}
+
+
+# ---- Phase H bug fix: price fallback to bhavcopy_eq for symbols never in `candles` ----
+
+def _insert_bhavcopy(db_path, prices: dict[str, float]) -> None:
+    store = Store(db_path)
+    rows = [
+        {"symbol": s, "series": "EQ", "date": date(2026, 8, 20), "open": p, "high": p,
+         "low": p, "close": p, "prev_close": p, "volume": 1000.0, "turnover_inr": p * 1000.0,
+         "era": "udiff"}
+        for s, p in prices.items()
+    ]
+    store.write_bhavcopy_eq(pd.DataFrame(rows))
+    store.close()
+
+
+def test_brief_falls_back_to_bhavcopy_for_prices_not_in_candles_table(client_with_store) -> None:
+    """A bhavcopy-point-in-time-trained model's picks are frequently
+    symbols NEVER present in the 98-symbol `candles` table at all
+    (e.g. SUMEETINDS, CUPID -- found live running Phase H against the
+    real promoted model). last_close/min_capital must still populate
+    from bhavcopy_eq directly, not silently come back None."""
+    client, db_path = client_with_store
+    _insert_live_model(db_path, "m1", horizon=10, top_n=2)
+    # deliberately NOT in the candles table -- only in bhavcopy_eq
+    _insert_bhavcopy(db_path, {"SUMEETINDS": 34.25, "CUPID": 200.0})
+    _insert_predictions(db_path, "m1", 10, [
+        {"symbol": "SUMEETINDS", "as_of_date": date(2026, 8, 21), "score": 0.05, "rank": 1},
+        {"symbol": "CUPID", "as_of_date": date(2026, 8, 21), "score": 0.03, "rank": 2},
+    ])
+
+    resp = client.get("/api/brief?horizon=10")
+    body = resp.json()
+    prices_by_symbol = {p["symbol"]: p["last_close"] for p in body["picks"]}
+    assert prices_by_symbol["SUMEETINDS"] == pytest.approx(34.25)
+    assert prices_by_symbol["CUPID"] == pytest.approx(200.0)
+    assert body["min_capital_for_full_positions_inr"] is not None
+
+
+def test_brief_prefers_candles_table_when_symbol_present_in_both(client_with_store) -> None:
+    """When a symbol IS in the 98-symbol candles table, that price is
+    used -- bhavcopy_eq is only a fallback for what's missing, not a
+    silent override of an already-known price."""
+    client, db_path = client_with_store
+    _insert_live_model(db_path, "m1", horizon=10, top_n=1)
+    _insert_candles(db_path, {"AAA": 100.0})
+    _insert_bhavcopy(db_path, {"AAA": 999.0})  # deliberately different -- must NOT win
+    _insert_predictions(db_path, "m1", 10, [
+        {"symbol": "AAA", "as_of_date": date(2026, 8, 21), "score": 0.05, "rank": 1},
+    ])
+
+    resp = client.get("/api/brief?horizon=10")
+    body = resp.json()
+    assert body["picks"][0]["last_close"] == pytest.approx(100.0)

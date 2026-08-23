@@ -275,6 +275,27 @@ def brief(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
             latest_close = candles.sort_values("date").groupby("symbol")["close"].last()
             latest_prices = {s: float(latest_close[s]) for s in weights.index if s in latest_close.index}
 
+        # Phase H bug fix, found running this endpoint against the real
+        # live model: a bhavcopy-point-in-time-trained model's picks
+        # (e.g. SUMEETINDS, CUPID -- never in the 98-symbol `candles`
+        # table at all) got last_close=None for every pick, because this
+        # lookup only ever checked `candles`. Falls back to bhavcopy_eq
+        # directly for whichever symbols the 98-symbol table didn't
+        # have -- a targeted price lookup for the SPECIFIC symbols
+        # already selected, not a full universe rebuild, so it's cheap
+        # and needs no cap-band/price-source parameter on this endpoint.
+        missing = [s for s in weights.index if s not in latest_prices]
+        if missing:
+            bhav = store.con.execute(
+                "SELECT symbol, date, close FROM bhavcopy_eq WHERE symbol = ANY(?) ORDER BY date",
+                [missing],
+            ).fetchdf()
+            if not bhav.empty:
+                bhav_latest = bhav.groupby("symbol")["close"].last()
+                for s in missing:
+                    if s in bhav_latest.index:
+                        latest_prices[s] = float(bhav_latest[s])
+
         picks = []
         for symbol, weight in weights.items():
             row = latest[latest["symbol"] == symbol].iloc[0]
