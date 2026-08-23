@@ -17,7 +17,7 @@ from stocksense.models.train_candidate import train_candidate_core
 
 def build_weekly_retrain_graph(
     store, horizon: int, top_n: int, cost_bps: float = 25.0,
-    turnover_rank_band: tuple[float, float] | None = None,
+    turnover_rank_band: tuple[float, float] | None = None, settings=None,
 ) -> Graph:
     """A single-node graph -- train_candidate_core already IS
     train -> gate -> register in one call, so there is no natural
@@ -32,12 +32,19 @@ def build_weekly_retrain_graph(
     (research/verdict_bhavcopy_rerun.md); this is the parameter that
     lets the weekly loop actually retrain on whichever cap band was
     chosen to run live, rather than only ever the unrestricted universe.
+
+    `settings`: must be threaded through explicitly (Phase H1's --cap-
+    band bug, found live: get_settings() constructs a fresh Settings()
+    from the process environment on every call, with no caching, so a
+    caller-mutated settings.price_source override has no effect unless
+    passed all the way down -- train_candidate_core already accepts it,
+    this was the missing link between this graph and that function).
     """
     iso_year, iso_week, _ = date.today().isocalendar()
     week_key = f"{iso_year}-W{iso_week:02d}"
 
     def _train(ctx: dict) -> dict:
-        result = train_candidate_core(horizon, top_n, cost_bps, store, turnover_rank_band=turnover_rank_band)
+        result = train_candidate_core(horizon, top_n, cost_bps, store, settings=settings, turnover_rank_band=turnover_rank_band)
         return {
             "model_id": result.model_id,
             "lifecycle_state": result.lifecycle_state,

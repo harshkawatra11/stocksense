@@ -75,7 +75,8 @@ def _feature_snapshot_hash(row: pd.Series, feature_names: list[str]) -> str:
 
 def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
                         model_type: str = "cross_sectional_ranker",
-                        turnover_rank_band: tuple[float, float] | None = None) -> RecordResult | None:
+                        turnover_rank_band: tuple[float, float] | None = None,
+                        settings=None) -> RecordResult | None:
     """Scores the most recent available cross-section with the
     registered `lifecycle` model for `horizon_bars` and writes one
     predictions row per symbol. Returns None (rather than raising) if no
@@ -93,7 +94,20 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
     it was never shown. `turnover_rank_band`: see universe_pit.py's
     docstring -- only meaningful when settings.use_point_in_time_universe
     is set; forwarded so the ledger can be restricted to a specific cap
-    band once Phase G1's re-run identifies which one to run live."""
+    band once Phase G1's re-run identifies which one to run live.
+
+    `settings`: optional override, threaded the same way train_candidate_
+    core's `settings` parameter is (Phase H1's --cap-band). Found live
+    running Phase H1's reconcile for real: this function used to call
+    get_settings() unconditionally, ignoring any caller-mutated settings
+    object entirely -- get_settings() constructs a brand-new Settings()
+    from the process environment on EVERY call (no caching), so a CLI
+    command's local settings.price_source="bhavcopy" override had zero
+    effect here. The bug was caught because the first real reconcile run
+    against a bhavcopy-trained live model recorded 94 predictions -- the
+    98-symbol 'candles' count, not the thousands expected on the
+    full_pit universe that model was actually trained and gated on."""
+    settings = settings or get_settings()
     row = store.con.execute(
         "SELECT * FROM model_registry WHERE model_type = ? AND horizon_bars = ? AND lifecycle_state = ? "
         "ORDER BY created_at DESC LIMIT 1",
@@ -106,7 +120,6 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
     artifact_path = row.iloc[0]["artifact_path"]
     ranker = load_model(artifact_path)
 
-    settings = get_settings()
     candles = load_candles(settings, store, turnover_rank_band=turnover_rank_band)
     if candles.empty:
         return None
@@ -167,7 +180,8 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
 
 
 def grade_matured_predictions(store, horizon_bars: int, as_of_before: date | None = None,
-                               turnover_rank_band: tuple[float, float] | None = None) -> GradeResult:
+                               turnover_rank_band: tuple[float, float] | None = None,
+                               settings=None) -> GradeResult:
     """Finds predictions whose horizon has elapsed (as_of_date +
     horizon_bars trading bars <= as_of_before, defaulting to the latest
     available candle date) and grades them against realized relative
@@ -178,10 +192,14 @@ def grade_matured_predictions(store, horizon_bars: int, as_of_before: date | Non
     Loads candles via the same load_candles path as record_predictions
     (Phase G) -- a prediction recorded against the bhavcopy universe
     must be graded against the same universe's realized returns, not
-    silently re-scored against the 98-symbol candles table."""
+    silently re-scored against the 98-symbol candles table.
+
+    `settings`: see record_predictions' docstring -- same fix, same
+    reason (get_settings() ignores a caller's mutated settings object;
+    an explicit override must be threaded through)."""
     as_of_before = as_of_before or date.today()
 
-    settings = get_settings()
+    settings = settings or get_settings()
     candles = load_candles(settings, store, turnover_rank_band=turnover_rank_band)
     if candles.empty:
         return GradeResult(n_graded=0, n_correct_direction=0, mean_abs_error=None)
@@ -237,7 +255,7 @@ def grade_matured_predictions(store, horizon_bars: int, as_of_before: date | Non
 
 def build_reconcile_graph(store, horizon_bars: int, lifecycle: str = "live",
                            turnover_rank_band: tuple[float, float] | None = None,
-                           model_type: str = "cross_sectional_ranker") -> Graph:
+                           model_type: str = "cross_sectional_ranker", settings=None) -> Graph:
     """The reconcile loop as a harness.Graph, so it gets resumability,
     idempotency, and job_runs logging for free (harness/runner.py) --
     the loop engineering this whole module exists to demonstrate isn't a
@@ -262,7 +280,7 @@ def build_reconcile_graph(store, horizon_bars: int, lifecycle: str = "live",
     today_key = date.today().isoformat()
 
     def _grade(ctx: dict) -> dict:
-        result = grade_matured_predictions(store, horizon_bars=horizon_bars, turnover_rank_band=turnover_rank_band)
+        result = grade_matured_predictions(store, horizon_bars=horizon_bars, turnover_rank_band=turnover_rank_band, settings=settings)
         return {"n_graded": result.n_graded, "n_correct_direction": result.n_correct_direction, "mean_abs_error": result.mean_abs_error}
 
     def _check_forward_record(ctx: dict) -> dict:
@@ -279,7 +297,7 @@ def build_reconcile_graph(store, horizon_bars: int, lifecycle: str = "live",
 
     def _record(ctx: dict) -> dict:
         result = record_predictions(store, horizon_bars=horizon_bars, lifecycle=lifecycle,
-                                     model_type=model_type, turnover_rank_band=turnover_rank_band)
+                                     model_type=model_type, turnover_rank_band=turnover_rank_band, settings=settings)
         if result is None:
             return {"recorded": False}
         return {"recorded": True, "run_id": result.run_id, "n_predictions": result.n_predictions}

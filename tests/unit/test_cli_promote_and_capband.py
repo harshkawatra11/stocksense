@@ -162,3 +162,96 @@ def test_train_candidate_no_cap_band_leaves_settings_untouched(cli_env, monkeypa
 
     assert captured["turnover_rank_band"] is None
     assert captured["settings"].price_source == "candles"  # untouched default
+
+
+# ---- Phase H1 (bug fix): --cap-band on reconcile/retrain-weekly must actually reach the scoring path ----
+
+def test_reconcile_cap_band_forces_bhavcopy_and_threads_settings(cli_env, monkeypatch) -> None:
+    """Regression test for a real bug found running Phase H1 live: the
+    first real reconcile run against a bhavcopy-trained live model
+    recorded predictions against the WRONG universe (98-symbol
+    'candles', not bhavcopy) because grade_matured_predictions/
+    record_predictions called get_settings() internally, ignoring the
+    CLI's mutated settings object entirely. Checks the fix: the SAME
+    settings instance the CLI resolved --cap-band against must be the
+    one build_reconcile_graph receives and its nodes actually use."""
+    captured = {}
+
+    def fake_grade(store, horizon_bars, as_of_before=None, turnover_rank_band=None, settings=None):
+        captured["grade_settings"] = settings
+        captured["grade_band"] = turnover_rank_band
+        from stocksense.harness.loops import GradeResult
+        return GradeResult(n_graded=0, n_correct_direction=0, mean_abs_error=None)
+
+    def fake_record(store, horizon_bars, lifecycle="live", model_type="cross_sectional_ranker",
+                     turnover_rank_band=None, settings=None):
+        captured["record_settings"] = settings
+        captured["record_band"] = turnover_rank_band
+        return None
+
+    import stocksense.harness.loops as loops_mod
+    monkeypatch.setattr(loops_mod, "grade_matured_predictions", fake_grade)
+    monkeypatch.setattr(loops_mod, "record_predictions", fake_record)
+
+    runner, db_path = cli_env
+    from stocksense.cli.main import app
+    runner.invoke(app, ["reconcile", "--horizon", "10", "--cap-band", "mid"])
+
+    assert captured["grade_band"] == (0.5, 0.8)
+    assert captured["record_band"] == (0.5, 0.8)
+    assert captured["grade_settings"] is captured["record_settings"]  # same mutated instance, not two fresh ones
+    assert captured["grade_settings"].price_source == "bhavcopy"
+    assert captured["grade_settings"].use_point_in_time_universe is True
+
+
+def test_retrain_weekly_cap_band_threads_settings_to_train_candidate_core(cli_env, monkeypatch) -> None:
+    captured = {}
+
+    def fake_train_candidate_core(horizon, top_n, cost_bps, store, settings=None, turnover_rank_band=None):
+        captured["settings"] = settings
+        captured["turnover_rank_band"] = turnover_rank_band
+        from stocksense.models.train_candidate import TrainCandidateResult
+        return TrainCandidateResult(model_id=None, verdict=None, lifecycle_state=None, n_fold_results=0)
+
+    # harness/retrain.py imports train_candidate_core at MODULE level
+    # (`from stocksense.models.train_candidate import train_candidate_core`),
+    # unlike cli.main's train_candidate command which imports it locally
+    # inside the function body -- so the name to patch is the one bound
+    # in retrain.py's own namespace, not train_candidate's.
+    import stocksense.harness.retrain as retrain_mod
+    monkeypatch.setattr(retrain_mod, "train_candidate_core", fake_train_candidate_core)
+
+    runner, db_path = cli_env
+    from stocksense.cli.main import app
+    runner.invoke(app, ["retrain-weekly", "--horizon", "10", "--cap-band", "small"])
+
+    assert captured["turnover_rank_band"] == (0.15, 0.5)
+    assert captured["settings"].price_source == "bhavcopy"
+    assert captured["settings"].use_point_in_time_universe is True
+
+
+def test_reconcile_without_cap_band_leaves_settings_at_defaults(cli_env, monkeypatch) -> None:
+    """Regression: omitting --cap-band must be byte-for-byte the pre-
+    Phase-H behavior."""
+    captured = {}
+
+    def fake_grade(store, horizon_bars, as_of_before=None, turnover_rank_band=None, settings=None):
+        captured["settings"] = settings
+        captured["band"] = turnover_rank_band
+        from stocksense.harness.loops import GradeResult
+        return GradeResult(n_graded=0, n_correct_direction=0, mean_abs_error=None)
+
+    def fake_record(store, horizon_bars, lifecycle="live", model_type="cross_sectional_ranker",
+                     turnover_rank_band=None, settings=None):
+        return None
+
+    import stocksense.harness.loops as loops_mod
+    monkeypatch.setattr(loops_mod, "grade_matured_predictions", fake_grade)
+    monkeypatch.setattr(loops_mod, "record_predictions", fake_record)
+
+    runner, db_path = cli_env
+    from stocksense.cli.main import app
+    runner.invoke(app, ["reconcile", "--horizon", "10"])
+
+    assert captured["band"] is None
+    assert captured["settings"].price_source == "candles"

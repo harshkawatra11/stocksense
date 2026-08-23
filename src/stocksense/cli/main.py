@@ -45,7 +45,7 @@ from stocksense.rag.embed import embeddings_available
 from stocksense.rag.index import index_document, rebuild_fts_index
 from stocksense.data.nse_archive import fetch_range
 from stocksense.data.corporate_actions import fetch_ca_range, parse_ca_frame
-from stocksense.data.universe_pit import universe_as_of
+from stocksense.data.universe_pit import CAP_BANDS, universe_as_of
 from stocksense.data.upstox_intraday import resolve_symbol_map, fetch_range as fetch_intraday_range
 from stocksense.server.run import run as run_server
 
@@ -87,6 +87,35 @@ _load_candles = load_candles
 _load_features_and_labels = load_features_and_labels
 
 
+def _resolve_cap_band(cap_band: Optional[str], settings) -> tuple[float, float] | None:
+    """Shared by train-candidate/reconcile/retrain-weekly's --cap-band
+    option: validates against universe_pit.CAP_BANDS, mutates `settings`
+    in place to force the point-in-time bhavcopy path (a cap band means
+    nothing on the yfinance 'candles' path -- silently ignoring it would
+    be worse than an explicit, logged override), and returns the
+    resolved turnover_rank_band tuple (or None for 'full_pit'/when no
+    --cap-band was given at all).
+
+    Exits the process (typer.Exit) on an unknown cap_band value rather
+    than raising, matching every other CLI-level validation error in
+    this module."""
+    if cap_band is None:
+        return None
+    if cap_band not in CAP_BANDS:
+        typer.echo(f"Unknown --cap-band {cap_band!r}. Valid values: {sorted(CAP_BANDS)}")
+        raise typer.Exit(code=1)
+    if settings.price_source != "bhavcopy" or not settings.use_point_in_time_universe:
+        typer.echo(
+            f"--cap-band {cap_band!r} given: forcing price_source=bhavcopy, "
+            f"use_point_in_time_universe=True for this run (was "
+            f"price_source={settings.price_source!r}, "
+            f"use_point_in_time_universe={settings.use_point_in_time_universe})."
+        )
+    settings.price_source = "bhavcopy"
+    settings.use_point_in_time_universe = True
+    return CAP_BANDS[cap_band]
+
+
 @app.command()
 def train_candidate(
     horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
@@ -119,30 +148,10 @@ def train_candidate(
     predictions. This command's behavior is unchanged when --cap-band is
     omitted.
     """
-    from stocksense.data.universe_pit import CAP_BANDS
     from stocksense.models.train_candidate import train_candidate_core
 
     settings = get_settings()
-
-    turnover_rank_band = None
-    if cap_band is not None:
-        if cap_band not in CAP_BANDS:
-            typer.echo(f"Unknown --cap-band {cap_band!r}. Valid values: {sorted(CAP_BANDS)}")
-            raise typer.Exit(code=1)
-        turnover_rank_band = CAP_BANDS[cap_band]
-        # A cap band only means anything on the point-in-time bhavcopy
-        # path -- silently ignoring it on the yfinance 'candles' path
-        # would be a worse failure than an explicit, logged override.
-        if settings.price_source != "bhavcopy" or not settings.use_point_in_time_universe:
-            typer.echo(
-                f"--cap-band {cap_band!r} given: forcing price_source=bhavcopy, "
-                f"use_point_in_time_universe=True for this run (was "
-                f"price_source={settings.price_source!r}, "
-                f"use_point_in_time_universe={settings.use_point_in_time_universe})."
-            )
-        settings.price_source = "bhavcopy"
-        settings.use_point_in_time_universe = True
-
+    turnover_rank_band = _resolve_cap_band(cap_band, settings)
     store = Store(settings.duckdb_path)
 
     result = train_candidate_core(horizon, top_n, cost_bps, store, settings=settings, turnover_rank_band=turnover_rank_band)
@@ -666,14 +675,22 @@ def tax_summary_cmd(
 def reconcile_cmd(
     horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
     lifecycle: str = typer.Option("live", help="Which model to score with: 'live' or 'shadow'"),
+    cap_band: Optional[str] = typer.Option(
+        None, "--cap-band",
+        help="MUST match the cap band the target model was trained with (train-candidate's own "
+             "--cap-band) -- otherwise the ledger silently scores/grades against a different "
+             "universe than the model was trained and gated on. See data/universe_pit.py's CAP_BANDS.",
+    ),
 ) -> None:
     """The reconcile loop, run as a harness graph: grade matured
     predictions, then record today's. Idempotency-keyed by calendar
     date, so running this twice in one day is a no-op the second time --
     the property docs/05-nightly-pipeline.md requires of every step."""
     settings = get_settings()
+    turnover_rank_band = _resolve_cap_band(cap_band, settings)
     store = Store(settings.duckdb_path)
-    graph = build_reconcile_graph(store, horizon_bars=horizon, lifecycle=lifecycle)
+    graph = build_reconcile_graph(store, horizon_bars=horizon, lifecycle=lifecycle,
+                                   turnover_rank_band=turnover_rank_band, settings=settings)
     result = run_graph(graph, store)
     store.close()
 
@@ -696,6 +713,12 @@ def retrain_weekly_cmd(
     horizon: int = typer.Option(10, help="Prediction horizon in trading bars"),
     top_n: int = typer.Option(10, help="Portfolio size (top-N by rank)"),
     cost_bps: float = typer.Option(25.0, help="Round-trip cost assumption for gate evaluation, bps"),
+    cap_band: Optional[str] = typer.Option(
+        None, "--cap-band",
+        help="Should match the cap band the live model this feeds runs on (see train-candidate's "
+             "--cap-band) -- a freshly retrained candidate on the WRONG universe would still "
+             "register and gate, just against evidence that doesn't match what's live.",
+    ),
 ) -> None:
     """The weekly retrain loop (Phase G4), run as a harness graph:
     walk-forward evaluate, gate, and register a fresh candidate.
@@ -703,8 +726,10 @@ def retrain_weekly_cmd(
     the same week is a no-op after the first success -- the weekly
     analogue of `reconcile`'s daily idempotency."""
     settings = get_settings()
+    turnover_rank_band = _resolve_cap_band(cap_band, settings)
     store = Store(settings.duckdb_path)
-    graph = build_weekly_retrain_graph(store, horizon=horizon, top_n=top_n, cost_bps=cost_bps)
+    graph = build_weekly_retrain_graph(store, horizon=horizon, top_n=top_n, cost_bps=cost_bps,
+                                        turnover_rank_band=turnover_rank_band, settings=settings)
     result = run_graph(graph, store)
     store.close()
 
