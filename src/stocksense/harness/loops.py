@@ -29,8 +29,10 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pandas as pd
+import structlog
 
 from stocksense.core.config import get_settings
 from stocksense.data.adjust import quarantine_unexplained_jumps
@@ -41,6 +43,9 @@ from stocksense.features.engine import build_features
 from stocksense.harness.graph import Graph, Node
 from stocksense.labels.forward_return import add_forward_return_labels, add_relative_forward_return
 from stocksense.models.registry import load_model
+from stocksense.models.train_candidate import QUANTILE_ARTIFACT_NAME
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,25 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
     scores = ranker.predict(today_rows[ranker.feature_names_])
     ranks = pd.Series(scores).rank(ascending=False, method="first").astype(int)
 
+    # Phase H2: a sibling QuantileRanker artifact (models/train_
+    # candidate.py's _fit_and_save_quantile_ranker, Phase G3's class)
+    # gives a real expected-move band instead of the point ranker's
+    # raw score doubling as "predicted_return" with confidence always
+    # NULL. Only models trained after Phase H2 have this sibling file --
+    # falls back to exactly the pre-H2 behavior when it's absent, so an
+    # older registered model keeps scoring correctly.
+    predicted_return = scores
+    confidence = pd.Series(None, index=today_rows.index, dtype=object)
+    quantile_artifact_path = Path(artifact_path).parent / QUANTILE_ARTIFACT_NAME
+    if quantile_artifact_path.exists():
+        try:
+            quantile_ranker = load_model(str(quantile_artifact_path))
+            bands = quantile_ranker.predict_bands(today_rows[quantile_ranker.feature_names_])
+            predicted_return = bands["predicted_return"].to_numpy()
+            confidence = bands["confidence"]
+        except Exception:
+            log.warning("quantile_ranker_load_failed", model_id=model_id, exc_info=True)
+
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     pred_rows = pd.DataFrame(
@@ -131,8 +155,8 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
             "rank": ranks.values,
             "model_version": model_id,
             "horizon_type": "monthly" if horizon_bars >= 10 else "short",
-            "predicted_return": scores,  # ranker.predict() IS the predicted relative forward return
-            "confidence": None,
+            "predicted_return": predicted_return,
+            "confidence": confidence.to_numpy(),
             "feature_snapshot_hash": [
                 _feature_snapshot_hash(today_rows.iloc[i], ranker.feature_names_) for i in range(len(today_rows))
             ],

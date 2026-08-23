@@ -110,3 +110,42 @@ def test_train_candidate_core_reads_the_live_incumbent_before_gating(tmp_store) 
         assert second.verdict.metrics["incumbent_mean_alpha_net"] is not None
     else:
         assert "insufficient folds" in second.verdict.reason
+
+
+# ---- Phase H2: QuantileRanker sibling artifact ----
+
+def test_train_candidate_core_writes_a_loadable_quantile_sibling_artifact(tmp_store, tmp_path, monkeypatch) -> None:
+    """The load-bearing property: after training, a sibling
+    quantile_model.joblib exists next to the point model's artifact,
+    and it is a real, loadable QuantileRanker whose predict_bands()
+    works on the same feature columns the point model uses."""
+    from stocksense.core import config as config_mod
+    monkeypatch.setattr(config_mod, "DATA_STORE", tmp_path / "data_store")
+
+    from stocksense.models.train_candidate import QUANTILE_ARTIFACT_NAME
+    from stocksense.core.config import get_settings
+    from pathlib import Path
+    import joblib
+
+    candles = _synthetic_candles()
+    tmp_store.upsert_candles(candles)
+
+    result = train_candidate_core(horizon=20, top_n=5, cost_bps=25.0, store=tmp_store)
+    assert result.model_id is not None
+
+    settings = get_settings()
+    model_dir = settings.parquet_dir.parent / "models" / result.model_id
+    quantile_path = model_dir / QUANTILE_ARTIFACT_NAME
+    assert quantile_path.exists()
+
+    quantile_ranker = joblib.load(quantile_path)
+    assert quantile_ranker.feature_names_ is not None
+
+    # sanity: it actually predicts a real band on real feature rows
+    import pandas as pd
+    from stocksense.features.engine import build_features
+    feats = build_features(candles)
+    row = feats.dropna(subset=quantile_ranker.feature_names_).head(3)
+    bands = quantile_ranker.predict_bands(row[quantile_ranker.feature_names_])
+    assert bands["predicted_return"].notna().all()
+    assert (bands["confidence"] >= 0).all()

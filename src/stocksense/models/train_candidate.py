@@ -15,6 +15,7 @@ CLI tests continuing to pass unmodified.
 
 from __future__ import annotations
 
+import structlog
 from dataclasses import dataclass
 
 from stocksense.core.config import get_settings
@@ -23,9 +24,35 @@ from stocksense.data.store import Store
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
 from stocksense.evaluation.gate import GateCriteria, GateVerdict, apply_gate_decision, evaluate_gate
 from stocksense.evaluation.walkforward import make_folds
-from stocksense.models.ranker import CrossSectionalRanker, RankerConfig
+from stocksense.models.ranker import CrossSectionalRanker, QuantileRanker, RankerConfig
 
 MODEL_TYPE = "cross_sectional_ranker"
+QUANTILE_ARTIFACT_NAME = "quantile_model.joblib"
+
+log = structlog.get_logger(__name__)
+
+
+def _fit_and_save_quantile_ranker(model_id: str, ranker_config: RankerConfig, full_merged, fcols, horizon: int, settings) -> None:
+    """Phase H2: a QuantileRanker (models/ranker.py, Phase G3), fit on
+    the SAME full-history data as the point CrossSectionalRanker above,
+    saved as a sibling artifact next to it -- never fed into the gate.
+    Every PASS in research/verdict_bhavcopy_rerun.md was earned by
+    CrossSectionalRanker's walk-forward folds; this is purely additive,
+    so record_predictions (harness/loops.py) can populate a real
+    predicted_return/confidence band instead of leaving confidence
+    permanently NULL. Failure here (e.g. too little data) is logged and
+    swallowed -- the point model and gate verdict already registered
+    successfully are the load-bearing outputs; a missing quantile band
+    degrades to today's NULL-confidence behavior, not a failed run."""
+    import joblib
+
+    try:
+        quantile_ranker = QuantileRanker(ranker_config)
+        quantile_ranker.fit(full_merged[fcols], full_merged[f"fwd_ret_{horizon}b_rel"])
+        model_dir = settings.parquet_dir.parent / "models" / model_id
+        joblib.dump(quantile_ranker, model_dir / QUANTILE_ARTIFACT_NAME)
+    except Exception:
+        log.warning("quantile_ranker_fit_failed", model_id=model_id, exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -128,6 +155,7 @@ def train_candidate_core(
         store=store,
     )
     apply_gate_decision(model_id, verdict, store)
+    _fit_and_save_quantile_ranker(model_id, ranker_config, full_merged, fcols, horizon, settings)
 
     return TrainCandidateResult(
         model_id=model_id, verdict=verdict,

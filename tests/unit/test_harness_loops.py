@@ -283,3 +283,62 @@ def test_reconcile_graph_demotes_underperforming_live_model_before_recording(sto
 
     row = store.con.execute("SELECT lifecycle_state FROM model_registry WHERE model_id = ?", [model_id]).fetchdf().iloc[0]
     assert row["lifecycle_state"] == "shadow"
+
+
+# ---- Phase H2: QuantileRanker sibling artifact consumption ----
+
+@pytest.fixture()
+def store_with_live_model_and_quantile(store_with_live_model):
+    """Same live model as store_with_live_model, plus a real sibling
+    quantile_model.joblib fit on the same data -- simulates a model
+    trained after Phase H2 (train_candidate_core._fit_and_save_
+    quantile_ranker), without paying the cost of a full walk-forward
+    gate run."""
+    import joblib
+    from stocksense.core.config import get_settings
+    from stocksense.models.ranker import QuantileRanker, RankerConfig
+    from stocksense.models.train_candidate import QUANTILE_ARTIFACT_NAME
+
+    store, horizon, model_id = store_with_live_model
+
+    candles = _synthetic_candles()
+    feats = build_features(candles)
+    fcols = [c for c in feature_columns(feats) if c != "mkt_ret_1b"]
+    labeled = add_forward_return_labels(candles, horizon_bars=horizon)
+    labeled = add_relative_forward_return(labeled, horizon_bars=horizon)
+    merged = feats.merge(labeled[["symbol", "date", f"fwd_ret_{horizon}b_rel"]], on=["symbol", "date"], how="inner")
+    merged = merged.dropna(subset=[f"fwd_ret_{horizon}b_rel"])
+
+    quantile_ranker = QuantileRanker(RankerConfig(random_state=42))
+    quantile_ranker.fit(merged[fcols], merged[f"fwd_ret_{horizon}b_rel"])
+
+    settings = get_settings()
+    model_dir = settings.parquet_dir.parent / "models" / model_id
+    joblib.dump(quantile_ranker, model_dir / QUANTILE_ARTIFACT_NAME)
+
+    return store, horizon, model_id
+
+
+def test_record_predictions_populates_confidence_when_quantile_sibling_exists(store_with_live_model_and_quantile) -> None:
+    store, horizon, model_id = store_with_live_model_and_quantile
+    result = record_predictions(store, horizon_bars=horizon, lifecycle="live")
+    assert result is not None
+
+    predictions = store.read_predictions()
+    assert predictions["confidence"].notna().all()
+    assert (predictions["confidence"] >= 0).all()
+    assert predictions["predicted_return"].notna().all()
+
+
+def test_record_predictions_confidence_stays_null_without_quantile_sibling(store_with_live_model) -> None:
+    """The fallback path -- a model registered without Phase H2's
+    sibling artifact (e.g. trained before this phase) must keep scoring
+    exactly as before: predicted_return from the point ranker's raw
+    score, confidence NULL."""
+    store, horizon, model_id = store_with_live_model
+    result = record_predictions(store, horizon_bars=horizon, lifecycle="live")
+    assert result is not None
+
+    predictions = store.read_predictions()
+    assert predictions["confidence"].isna().all()
+    assert predictions["predicted_return"].notna().all()  # still populated from the point ranker's score
