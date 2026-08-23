@@ -45,6 +45,31 @@
       .join("");
   }
 
+  function renderMoves(actions, nextRebalanceInTradingDays) {
+    // Phase H4: actions reflect the LAST actual rebalance point (every
+    // `horizon` trading days), never re-ranked into a fresh move list
+    // every day -- that daily-churn behavior is exactly what turned
+    // the user's own real account gross-positive into net-negative
+    // (docs/STATUS.md's Phase E4 entry). next_rebalance_in_trading_days
+    // is 0 only when today's own run IS the rebalance point.
+    const dueLine = nextRebalanceInTradingDays === 0
+      ? `<div class="usage-label sev-ok">Today IS a rebalance point -- the moves below are new as of today.</div>`
+      : `<div class="usage-label">Next rebalance in ${nextRebalanceInTradingDays} trading day${nextRebalanceInTradingDays === 1 ? "" : "s"}. The moves below are still the ones from the last rebalance point -- nothing new to act on today, by design (re-ranking daily would churn on noise the backtest never paid for).</div>`;
+
+    if (!actions || actions.length === 0) {
+      return dueLine + `<div class="empty-state">No moves -- current holdings already match target.</div>`;
+    }
+    const actionClass = { enter: "sev-ok", add: "sev-ok", exit: "sev-critical", trim: "sev-critical" };
+    const rows = actions
+      .map((a) => {
+        const cls = actionClass[a.action] || "muted";
+        const costPct = (a.estimated_cost_fraction * 100).toFixed(3);
+        return `<div class="row"><span>${a.action.toUpperCase()} ${a.symbol}</span><span class="${cls}">${formatPct(a.target_weight)} target · cost ${costPct}% of position</span></div>`;
+      })
+      .join("");
+    return dueLine + rows;
+  }
+
   function renderRevision(rows) {
     if (rows.length === 0) {
       return `<div class="empty-state">No graded predictions yet -- run RECONCILE from the RESEARCH tab, then check back once horizons have matured.</div>`;
@@ -66,6 +91,7 @@
 
     const statusEl = document.getElementById("brief-status");
     const picksEl = document.getElementById("brief-picks");
+    const movesEl = document.getElementById("brief-moves");
     const revisionEl = document.getElementById("brief-revision");
     const notesEl = document.getElementById("brief-notes");
 
@@ -79,6 +105,7 @@
         statusEl.textContent = `No live model yet for horizon=${horizon}. Train and promote one from the RESEARCH tab first.`;
         statusEl.className = "sev-critical";
         picksEl.innerHTML = `<div class="empty-state">Nothing to show yet.</div>`;
+        movesEl.innerHTML = "";
         revisionEl.innerHTML = "";
         notesEl.innerHTML = "";
         return;
@@ -87,6 +114,7 @@
         statusEl.textContent = `A live model exists (${body.model_id.slice(0, 12)}...) but nothing has been recorded yet. Run RECONCILE from the RESEARCH tab.`;
         statusEl.className = "sev-critical";
         picksEl.innerHTML = `<div class="empty-state">Nothing recorded yet.</div>`;
+        movesEl.innerHTML = "";
         revisionEl.innerHTML = "";
         notesEl.innerHTML = "";
         return;
@@ -96,6 +124,7 @@
       statusEl.className = "muted";
 
       picksEl.innerHTML = renderPicks(body.picks, capital);
+      movesEl.innerHTML = renderMoves(body.actions, body.next_rebalance_in_trading_days);
       revisionEl.innerHTML = renderRevision(body.yesterdays_revision);
 
       const minCapLine = body.min_capital_for_full_positions_inr !== null

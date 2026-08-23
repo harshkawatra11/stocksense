@@ -244,6 +244,7 @@ def brief(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
     live for this horizon yet), 'no_predictions' (a live model exists
     but the reconcile loop hasn't recorded anything for it), or 'ok'.
     """
+    from stocksense.optimizer.rebalance import recommend_todays_actions
     from stocksense.optimizer.sizing import min_capital_for_full_positions, round_trip_cost_bps
     from stocksense.portfolio.construct import target_weights_top_n
 
@@ -304,6 +305,29 @@ def brief(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
 
         min_capital = min_capital_for_full_positions(latest_prices, weights.to_dict()) if latest_prices else None
 
+        # Phase H4: actual buy/sell/hold moves, at the cadence the gate
+        # was actually measured on (every `horizon` TRADING DAYS) --
+        # NOT re-ranked into a fresh move list every day, which would
+        # generate real churn nothing in research/verdict_bhavcopy_
+        # rerun.md's PASS numbers ever paid for. next_rebalance_in_
+        # trading_days is 0 exactly when today's own prediction run IS
+        # the rebalance point; otherwise it's how many trading days
+        # remain until the next one, and `actions` still reflects the
+        # LAST real rebalance point's moves (unchanged since then).
+        todays = recommend_todays_actions(store, model_id, horizon_bars=horizon, top_n=top_n)
+        actions = None
+        next_rebalance_in_trading_days = None
+        if todays is not None:
+            actions = [
+                {
+                    "symbol": a.symbol, "action": a.action,
+                    "current_weight": a.current_weight, "target_weight": a.target_weight,
+                    "estimated_cost_fraction": a.estimated_cost_inr,  # portfolio_value_inr=1.0 -- a fraction, not rupees
+                }
+                for a in todays.actions if a.action != "hold"
+            ]
+            next_rebalance_in_trading_days = todays.next_rebalance_in_trading_days
+
         return {
             "status": "ok",
             "horizon_bars": horizon,
@@ -313,6 +337,8 @@ def brief(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
             "yesterdays_revision": revision,
             "min_capital_for_full_positions_inr": min_capital,
             "round_trip_cost_bps_equity_delivery": round_trip_cost_bps("equity_delivery"),
+            "actions": actions,
+            "next_rebalance_in_trading_days": next_rebalance_in_trading_days,
         }
     finally:
         store.close()

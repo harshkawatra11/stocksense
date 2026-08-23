@@ -174,3 +174,48 @@ def test_brief_no_nan_leaks(client_with_store) -> None:
     resp = client.get("/api/brief?horizon=10")
     assert "NaN" not in resp.text
     assert "Infinity" not in resp.text
+
+
+# ---- Phase H4: buy/sell/hold moves at the rebalance cadence ----
+
+def test_brief_first_run_shows_actions_as_all_enters(client_with_store) -> None:
+    client, db_path = client_with_store
+    _insert_live_model(db_path, "m1", horizon=10, top_n=2)
+    _insert_candles(db_path, {"AAA": 100.0, "BBB": 50.0})
+    _insert_predictions(db_path, "m1", 10, [
+        {"symbol": "AAA", "as_of_date": date(2026, 8, 21), "score": 0.05, "rank": 1},
+        {"symbol": "BBB", "as_of_date": date(2026, 8, 21), "score": 0.03, "rank": 2},
+    ])
+
+    resp = client.get("/api/brief?horizon=10")
+    body = resp.json()
+    assert body["next_rebalance_in_trading_days"] == 0  # the only recorded day IS the rebalance point
+    actions_by_symbol = {a["symbol"]: a["action"] for a in body["actions"]}
+    assert actions_by_symbol == {"AAA": "enter", "BBB": "enter"}
+    for a in body["actions"]:
+        assert 0 < a["estimated_cost_fraction"] < 0.01  # a fraction, not a rupee figure
+
+
+def test_brief_intermediate_day_shows_no_new_moves(client_with_store) -> None:
+    """A day between rebalance points must not show fresh enter/exit
+    actions -- the exact churn-prevention property this phase exists
+    for."""
+    client, db_path = client_with_store
+    _insert_live_model(db_path, "m1", horizon=10, top_n=2)
+    _insert_candles(db_path, {"AAA": 100.0, "BBB": 50.0, "CCC": 30.0})
+
+    dates = pd.bdate_range("2026-08-10", periods=5)
+    for i, d in enumerate(dates):
+        # scores drift slightly day to day but AAA/BBB stay top-2 throughout this short window
+        _insert_predictions(db_path, "m1", 10, [
+            {"symbol": "AAA", "as_of_date": d.date(), "score": 0.05 + i * 0.001, "rank": 1, "run_id": f"r{i}"},
+            {"symbol": "BBB", "as_of_date": d.date(), "score": 0.03, "rank": 2, "run_id": f"r{i}"},
+            {"symbol": "CCC", "as_of_date": d.date(), "score": 0.01, "rank": 3, "run_id": f"r{i}"},
+        ])
+
+    resp = client.get("/api/brief?horizon=10")
+    body = resp.json()
+    assert body["next_rebalance_in_trading_days"] == 10 - 4  # day index 4, last rebalance at index 0
+    # Actions still reflect the FIRST (only) rebalance point -- AAA/BBB entered then, nothing new today
+    actions_by_symbol = {a["symbol"]: a["action"] for a in body["actions"]}
+    assert actions_by_symbol == {"AAA": "enter", "BBB": "enter"}

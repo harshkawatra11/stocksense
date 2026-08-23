@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from stocksense.execution.cost_model import compute_charges
-from stocksense.portfolio.construct import apply_no_trade_band, one_way_turnover
+from stocksense.portfolio.construct import apply_no_trade_band, one_way_turnover, target_weights_top_n
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,88 @@ def filter_cost_justified(actions: list[RebalanceAction], min_benefit_inr: float
     plan: never recommend a trade whose expected benefit is smaller than
     its round-trip cost."""
     return [a for a in actions if a.action == "hold" or a.estimated_cost_inr <= min_benefit_inr]
+
+
+@dataclass(frozen=True)
+class TodaysActions:
+    is_rebalance_point: bool  # True if today's own prediction run IS a rebalance point
+    as_of_date: str  # the date the returned actions were actually computed as of (today's, or the last rebalance point's)
+    actions: list[RebalanceAction]
+    next_rebalance_in_trading_days: int  # 0 when is_rebalance_point is True
+
+
+def _weights_at(preds: pd.DataFrame, as_of_date, top_n: int) -> pd.Series:
+    scores = preds[preds["as_of_date"] == as_of_date].set_index("symbol")["score"]
+    return target_weights_top_n(scores, top_n)
+
+
+def recommend_todays_actions(
+    store, model_id: str, horizon_bars: int, top_n: int, band: float = 0.02, segment: str = "equity_delivery",
+) -> TodaysActions | None:
+    """Phase H4: the fix for a real bug -- record_predictions computes a
+    fresh top-N ranking every day the reconcile loop runs (correct: more
+    graded ledger rows is strictly better), but every PASS in
+    research/verdict_bhavcopy_rerun.md was earned rebalancing every
+    `horizon_bars` TRADING DAYS, not daily. Showing "today's top-N" as
+    an actionable move list every morning would generate real buy/sell
+    churn nothing in the backtest ever paid for or validated -- the
+    exact mechanism (docs/STATUS.md's Phase E4 entry, the user's own
+    real account: gross +Rs2,492, net -Rs1,293 over 441 round trips)
+    that turns a genuinely positive selection into a net-negative one.
+
+    Derives "current holdings" from the last actual REBALANCE POINT
+    (Rebalances at index 0, then every subsequent date that is >=
+    `horizon_bars` recorded trading days after the previous rebalance
+    point -- using the predictions ledger's OWN distinct as_of_dates as
+    the trading calendar, since record_predictions only ever writes a
+    row for `feats["date"].max()`, a real candle date, so each entry
+    already IS one observed trading day; no separate calendar lookup
+    needed), never from yesterday's prediction.
+
+    Returns None if nothing has been recorded for this model yet (the
+    caller -- /api/brief -- already handles "no_predictions" before
+    reaching here; this is a graceful non-crash for a direct caller).
+    """
+    preds = store.read_predictions()
+    preds = preds[preds["model_version"] == model_id]
+    if preds.empty:
+        return None
+
+    dates = sorted(preds["as_of_date"].unique())
+
+    rebalance_points = [dates[0]]
+    last_idx = 0
+    for i, d in enumerate(dates[1:], start=1):
+        if i - last_idx >= horizon_bars:
+            rebalance_points.append(d)
+            last_idx = i
+
+    latest_date = dates[-1]
+    # The most recent rebalance point that has actually occurred (<= latest_date by construction)
+    point = rebalance_points[-1]
+    point_idx = rebalance_points.index(point)
+    prev_point = rebalance_points[point_idx - 1] if point_idx > 0 else None
+
+    target = _weights_at(preds, point, top_n)
+    current = _weights_at(preds, prev_point, top_n) if prev_point is not None else pd.Series(dtype=float)
+
+    # portfolio_value_inr=1.0 is deliberate, not a placeholder: equity_
+    # delivery costs are exactly proportional to trade value
+    # (optimizer/sizing.py), so running the cost computation at a
+    # notional Rs1 keeps every estimated_cost_inr output as a FRACTION
+    # of portfolio, comparable directly to alpha -- no capital figure
+    # enters this calculation at all.
+    actions = recommend_rebalance(target, current, portfolio_value_inr=1.0, band=band, segment=segment)
+
+    is_rebalance_point = point == latest_date
+    next_in = 0 if is_rebalance_point else horizon_bars - (dates.index(latest_date) - dates.index(point))
+
+    return TodaysActions(
+        is_rebalance_point=is_rebalance_point,
+        as_of_date=str(point),
+        actions=actions,
+        next_rebalance_in_trading_days=next_in,
+    )
 
 
 def summarize_actions(actions: list[RebalanceAction]) -> dict:
