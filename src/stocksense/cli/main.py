@@ -92,6 +92,13 @@ def train_candidate(
     horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
     top_n: int = typer.Option(20, help="Portfolio size (top-N by rank)"),
     cost_bps: float = typer.Option(25.0, help="Round-trip cost assumption for gate evaluation, bps"),
+    cap_band: Optional[str] = typer.Option(
+        None, "--cap-band",
+        help="Restrict to a liquidity-rank cap band on the point-in-time bhavcopy universe: "
+             "'full_pit' (no restriction), 'large', 'mid', or 'small'. See data/universe_pit.py's "
+             "CAP_BANDS -- research/verdict_bhavcopy_rerun.md is the evidence behind these bands. "
+             "Forces price_source=bhavcopy + use_point_in_time_universe=True for this run.",
+    ),
 ) -> None:
     """Walk-forward evaluate a candidate, run it through the gate, train
     the final full-history artifact, and register the outcome — win or
@@ -109,14 +116,36 @@ def train_candidate(
     (Phase G4) — the actual logic is factored out so harness/retrain.py's
     weekly retrain graph can call it as a plain function, the same
     extraction Phase G2 did for record_predictions/grade_matured_
-    predictions. This command's behavior is unchanged.
+    predictions. This command's behavior is unchanged when --cap-band is
+    omitted.
     """
+    from stocksense.data.universe_pit import CAP_BANDS
     from stocksense.models.train_candidate import train_candidate_core
 
     settings = get_settings()
+
+    turnover_rank_band = None
+    if cap_band is not None:
+        if cap_band not in CAP_BANDS:
+            typer.echo(f"Unknown --cap-band {cap_band!r}. Valid values: {sorted(CAP_BANDS)}")
+            raise typer.Exit(code=1)
+        turnover_rank_band = CAP_BANDS[cap_band]
+        # A cap band only means anything on the point-in-time bhavcopy
+        # path -- silently ignoring it on the yfinance 'candles' path
+        # would be a worse failure than an explicit, logged override.
+        if settings.price_source != "bhavcopy" or not settings.use_point_in_time_universe:
+            typer.echo(
+                f"--cap-band {cap_band!r} given: forcing price_source=bhavcopy, "
+                f"use_point_in_time_universe=True for this run (was "
+                f"price_source={settings.price_source!r}, "
+                f"use_point_in_time_universe={settings.use_point_in_time_universe})."
+            )
+        settings.price_source = "bhavcopy"
+        settings.use_point_in_time_universe = True
+
     store = Store(settings.duckdb_path)
 
-    result = train_candidate_core(horizon, top_n, cost_bps, store, settings=settings)
+    result = train_candidate_core(horizon, top_n, cost_bps, store, settings=settings, turnover_rank_band=turnover_rank_band)
 
     if result.lifecycle_state is None:
         typer.echo("No fold results produced — insufficient data for this horizon/universe.")
@@ -129,6 +158,46 @@ def train_candidate(
     typer.echo(f"\nRegistered: {result.model_id}")
     typer.echo(f"Lifecycle state: {result.lifecycle_state}")
     store.close()
+
+
+@app.command("promote-model")
+def promote_model_cmd(model_id: str = typer.Argument(..., help="Model ID to promote to 'live'")) -> None:
+    """Promotes a 'shadow' model to 'live' -- the missing half of docs/06's
+    stated design ("the gate and the shadow trial are two different
+    things a model must earn separately"). No code path has ever set a
+    model to 'live' before this command: apply_gate_decision only ever
+    produces 'shadow' (pass) or 'archived' (fail); apply_forward_record_
+    decision (Phase G2) only ever demotes 'live' back to 'shadow'.
+
+    Deliberately manual and human-triggered -- there is no automatic
+    shadow-trial-passed criterion in this codebase yet, so promoting
+    here is a judgment call the operator makes after reviewing the
+    gate's own verdict/metrics (`stocksense registry`), not something
+    this command decides on its own.
+    """
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+
+    row = store.con.execute(
+        "SELECT lifecycle_state FROM model_registry WHERE model_id = ?", [model_id],
+    ).fetchdf()
+    if row.empty:
+        typer.echo(f"No model with id {model_id!r} in the registry.")
+        store.close()
+        raise typer.Exit(code=1)
+
+    current_state = row.iloc[0]["lifecycle_state"]
+    if current_state != "shadow":
+        typer.echo(
+            f"Model {model_id!r} is in state {current_state!r}, not 'shadow' -- refusing to promote. "
+            "Only a model that has already passed the gate (state='shadow') can be promoted to 'live'."
+        )
+        store.close()
+        raise typer.Exit(code=1)
+
+    store.update_model_lifecycle(model_id, "live", promoted_at=datetime.now(timezone.utc))
+    store.close()
+    typer.echo(f"Promoted {model_id!r}: shadow -> live")
 
 
 @app.command()

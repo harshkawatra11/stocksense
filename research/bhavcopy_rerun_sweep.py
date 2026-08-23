@@ -32,6 +32,7 @@ from stocksense.data.adjust import quarantine_unexplained_jumps
 from stocksense.data.liquidity import segment_symbols_by_trading_gap
 from stocksense.data.loader import load_candles
 from stocksense.data.store import Store
+from stocksense.data.universe_pit import CAP_BANDS as UNIVERSE_PIT_CAP_BANDS
 from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_fold
 from stocksense.evaluation.gate import GateCriteria, evaluate_gate
 from stocksense.evaluation.walkforward import make_folds
@@ -50,13 +51,10 @@ COST_GRID_BPS = (10.0, 15.0, 25.0, 35.0)
 
 # (label, turnover_rank_band) -- None is the full point-in-time
 # universe, the direct comparison against Run 4 isolating the
-# survivorship fix from the cap-band restriction.
-CAP_BANDS = (
-    ("full_pit", None),
-    ("large", (0.8, 1.0)),
-    ("mid", (0.5, 0.8)),
-    ("small", (0.15, 0.5)),
-)
+# survivorship fix from the cap-band restriction. Phase H1: hoisted into
+# data/universe_pit.py's CAP_BANDS so this script and cli/main.py's
+# train-candidate --cap-band share one definition, not two that can drift.
+CAP_BANDS = tuple(UNIVERSE_PIT_CAP_BANDS.items())
 
 GATE_CRITERIA = GateCriteria()  # research/gate_criteria_preregistration.md defaults, unmodified
 

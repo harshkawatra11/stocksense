@@ -20,6 +20,26 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+# Phase H1: hoisted out of research/bhavcopy_rerun_sweep.py (where these
+# bands were first defined and pre-registered, research/
+# preregistration_bhavcopy_rerun.md) so the sweep script and any
+# production caller (cli/main.py's train-candidate --cap-band) share
+# exactly one definition of what "mid cap" means -- two independent
+# definitions is exactly the kind of drift that would quietly make a
+# live model's universe stop matching the evidence that justified it.
+# None (full_pit) means no cap restriction at all, the direct
+# apples-to-apples PIT-universe-only comparison research/
+# verdict_bhavcopy_rerun.md reports alongside the three real bands.
+CAP_BAND_LARGE: tuple[float, float] = (0.8, 1.0)
+CAP_BAND_MID: tuple[float, float] = (0.5, 0.8)
+CAP_BAND_SMALL: tuple[float, float] = (0.15, 0.5)
+CAP_BANDS: dict[str, tuple[float, float] | None] = {
+    "full_pit": None,
+    "large": CAP_BAND_LARGE,
+    "mid": CAP_BAND_MID,
+    "small": CAP_BAND_SMALL,
+}
+
 
 def universe_as_of(
     store, d: date, min_turnover_inr: float = 5_000_000.0, min_price_inr: float = 5.0,
