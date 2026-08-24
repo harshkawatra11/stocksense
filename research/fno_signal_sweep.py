@@ -44,7 +44,6 @@ from stocksense.evaluation.backtest import simulate_portfolio, train_and_score_f
 from stocksense.evaluation.gate import GateCriteria, evaluate_gate
 from stocksense.evaluation.walkforward import make_folds
 from stocksense.features.engine import build_features, feature_columns
-from stocksense.features.fno import build_oi_features, build_put_call_ratio, days_to_expiry
 from stocksense.labels.forward_return import add_forward_return_labels, add_relative_forward_return
 from stocksense.models.ranker import RankerConfig
 
@@ -88,23 +87,91 @@ def _restrict_to_fo_universe(candles: pd.DataFrame, fo_windows: pd.DataFrame) ->
     return merged.loc[mask].drop(columns=["fo_first_date", "fo_last_date"])
 
 
-def _build_fo_daily_features(store: Store) -> pd.DataFrame:
-    """One row per (symbol, date) present in bhavcopy_fo, using
-    features/fno.py's existing, previously-unwired functions
-    unmodified. `days_to_expiry` is row-level (per contract); grouped
-    down to the nearest expiry across all of that symbol's contracts on
-    that date, matching how a trader would actually read "how close is
-    the nearest expiry" as a single number, not one-per-contract."""
-    fo = store.read_bhavcopy_fo()
-    if fo.empty:
+def _build_fo_daily_features(store: Store, symbols: list[str], start: str, end: str) -> pd.DataFrame:
+    """One row per (symbol, date) present in bhavcopy_fo. Even after the
+    symbol/date restriction, pulling raw per-contract rows into pandas
+    still crashed with a MemoryError -- the F&O-eligible universe is
+    exactly the liquid names that carry the deepest option chains (found
+    live: ~150M of bhavcopy_fo's ~158M rows are option rows, and most of
+    those belong to precisely this restricted symbol set). So the
+    aggregation itself is pushed into DuckDB via SQL, replicating
+    features/fno.py's build_oi_features/build_put_call_ratio/
+    days_to_expiry arithmetic exactly (same filters: instrument LIKE
+    '%FUT%' for OI, option_type IN ('CE','PE') for PCR, nearest expiry
+    per symbol/date) -- only the small per-(symbol,date) aggregated
+    result crosses into pandas, not the ~150M raw rows behind it."""
+    if not symbols:
         return pd.DataFrame(columns=["symbol", "date"])
+    placeholders = ", ".join("?" for _ in symbols)
+    base_params = [*symbols, start, end]
 
-    oi = build_oi_features(fo)  # symbol, date, total_oi, total_chg_in_oi, futures_close, oi_pct_change
-    pcr = build_put_call_ratio(fo)  # symbol, date, put_oi, call_oi, pcr_oi
+    oi = store.con.execute(
+        f"""
+        SELECT symbol, date,
+               SUM(open_interest) AS total_oi,
+               SUM(chg_in_oi) AS total_chg_in_oi,
+               AVG(close) AS futures_close
+        FROM bhavcopy_fo
+        WHERE symbol IN ({placeholders}) AND date BETWEEN ? AND ?
+          AND instrument LIKE '%FUT%'
+        GROUP BY symbol, date
+        """,
+        base_params,
+    ).fetchdf()
+    # replace(0, pd.NA) on a float column upcasts it to object dtype,
+    # which LightGBM's _check_for_bad_pandas_dtypes rejects outright --
+    # found live, the treatment run crashed with "pandas dtypes must be
+    # int, float or bool" after the baseline run had already completed.
+    # np.nan keeps the column float64 throughout.
+    denom = (oi["total_oi"] - oi["total_chg_in_oi"]).replace(0, float("nan"))
+    oi["oi_pct_change"] = (oi["total_chg_in_oi"] / denom).astype("float64")
 
-    fo = fo.copy()
-    fo["dte"] = days_to_expiry(fo)
-    dte = fo.groupby(["symbol", "date"])["dte"].min().reset_index(name="days_to_nearest_expiry")
+    pcr_raw = store.con.execute(
+        f"""
+        SELECT symbol, date, option_type, SUM(open_interest) AS oi
+        FROM bhavcopy_fo
+        WHERE symbol IN ({placeholders}) AND date BETWEEN ? AND ?
+          AND option_type IN ('CE', 'PE')
+        GROUP BY symbol, date, option_type
+        """,
+        base_params,
+    ).fetchdf()
+    if pcr_raw.empty:
+        pcr = pd.DataFrame(columns=["symbol", "date", "put_oi", "call_oi", "pcr_oi"])
+    else:
+        pivot = pcr_raw.pivot_table(index=["symbol", "date"], columns="option_type", values="oi", fill_value=0.0)
+        pcr = pd.DataFrame(index=pivot.index)
+        pcr["put_oi"] = pivot.get("PE", 0.0)
+        pcr["call_oi"] = pivot.get("CE", 0.0)
+        pcr_denom = pcr["call_oi"].replace(0, float("nan"))
+        pcr["pcr_oi"] = (pcr["put_oi"] / pcr_denom).astype("float64")
+        pcr = pcr.reset_index()
+
+    # Same era-dependent expiry formats nse_archive.py normalizes on
+    # ingest: "DD-Mon-YYYY" (legacy) and ISO "YYYY-MM-DD" (UDiFF) --
+    # TRY_STRPTIME on each, COALESCE to whichever parses.
+    dte = store.con.execute(
+        f"""
+        SELECT symbol, date,
+               MIN(DATE_DIFF('day', date,
+                   COALESCE(TRY_STRPTIME(expiry_date, '%d-%b-%Y')::DATE,
+                            TRY_STRPTIME(expiry_date, '%Y-%m-%d')::DATE)
+               )) AS days_to_nearest_expiry
+        FROM bhavcopy_fo
+        WHERE symbol IN ({placeholders}) AND date BETWEEN ? AND ?
+        GROUP BY symbol, date
+        """,
+        base_params,
+    ).fetchdf()
+    # DuckDB's DATE_DIFF over a column with NULLs (unparseable expiry,
+    # essentially none expected but not guaranteed) round-trips into
+    # pandas as nullable Int64, another dtype LightGBM's pandas-dtype
+    # check rejects -- cast to plain float64 for the same reason as
+    # oi_pct_change/pcr_oi above.
+    dte["days_to_nearest_expiry"] = dte["days_to_nearest_expiry"].astype("float64")
+
+    if oi.empty and pcr.empty and dte.empty:
+        return pd.DataFrame(columns=["symbol", "date"])
 
     merged = oi.merge(pcr, on=["symbol", "date"], how="outer").merge(dte, on=["symbol", "date"], how="outer")
     merged["date"] = pd.to_datetime(merged["date"])
@@ -127,9 +194,18 @@ def _attach_fo_features_point_in_time_safe(feats: pd.DataFrame, fo_daily: pd.Dat
     feats["date"] = pd.to_datetime(feats["date"])
     fo_daily = fo_daily.sort_values(["symbol", "date"])
 
+    # feats' `symbol` column holds halt-SEGMENTED names (e.g.
+    # "RELIANCE__seg0", from segment_symbols_by_trading_gap upstream);
+    # fo_daily holds real symbol names from bhavcopy_fo, which has no
+    # concept of segments. Matching the segmented name directly against
+    # fo_daily would never hit -- found before this sweep's first real
+    # run: every symbol would silently fall into the "no F&O data"
+    # branch below, making feature set B collapse to feature set A on
+    # every F&O column (all NaN) without ever raising an error.
     parts = []
     for symbol, g in feats.groupby("symbol", group_keys=False):
-        fo_g = fo_daily[fo_daily["symbol"] == symbol]
+        base_symbol = symbol.split("__seg")[0]
+        fo_g = fo_daily[fo_daily["symbol"] == base_symbol]
         if fo_g.empty:
             parts.append(g)
             continue
@@ -163,7 +239,10 @@ def _load_and_prepare(settings, store: Store):
     feats_a = build_features(candles)
     fcols_a = [c for c in feature_columns(feats_a) if c != "mkt_ret_1b"]
 
-    fo_daily = _build_fo_daily_features(store)
+    fo_symbols = sorted(candles["symbol"].astype(str).str.split("__seg").str[0].unique())
+    start_str = pd.to_datetime(candles["date"]).min().strftime("%Y-%m-%d")
+    end_str = pd.to_datetime(candles["date"]).max().strftime("%Y-%m-%d")
+    fo_daily = _build_fo_daily_features(store, fo_symbols, start_str, end_str)
     feats_b = _attach_fo_features_point_in_time_safe(feats_a, fo_daily)
     fo_cols = ["total_oi", "total_chg_in_oi", "oi_pct_change", "put_oi", "call_oi", "pcr_oi", "days_to_nearest_expiry"]
     fcols_b = fcols_a + fo_cols
