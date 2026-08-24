@@ -177,6 +177,29 @@ def test_fetch_fo_bhavcopy_legacy_extracts_open_interest(mock_get, cache_dir) ->
 
 
 @patch("stocksense.data.nse_archive.requests.get")
+def test_fetch_fo_bhavcopy_legacy_drops_footer_annotation_row(mock_get, cache_dir) -> None:
+    """Regression: found live backfilling Phase I's F&O data --
+    2012-05-14's real file carries a trailing row reading '*Updated ...'
+    with every other field blank, which crashed the whole backfill on
+    bhavcopy_fo's NOT NULL(symbol) constraint partway through a multi-
+    hour run. A real data row and a null-symbol footer row, mixed in
+    the same file."""
+    raw = pd.DataFrame({
+        "INSTRUMENT": ["FUTSTK", "*Updated"], "SYMBOL": ["RELIANCE", None],
+        "EXPIRY_DT": ["26-Feb-2015", None], "STRIKE_PR": [0.0, None], "OPTION_TYP": ["XX", None],
+        "OPEN": [1.0, None], "HIGH": [1.0, None], "LOW": [1.0, None], "CLOSE": [1.0, None],
+        "SETTLE_PR": [1.0, None], "CONTRACTS": [1, None], "VAL_INLAKH": [1.0, None],
+        "OPEN_INT": [2215900, None], "CHG_IN_OI": [19275, None], "TIMESTAMP": ["16-Feb-2015", None],
+    })
+    mock_get.return_value = _mock_response(200, _zip_csv(raw))
+
+    result = fetch_fo_bhavcopy(date(2015, 2, 16))
+    assert len(result) == 1  # the footer row is dropped, not just left with a null symbol
+    assert result["symbol"].notna().all()
+    assert result.iloc[0]["symbol"] == "RELIANCE"
+
+
+@patch("stocksense.data.nse_archive.requests.get")
 def test_fetch_range_skips_weekends_without_requesting(mock_get, cache_dir) -> None:
     mock_get.return_value = _mock_response(404)  # every weekday attempt is a "holiday"
     # 2024-01-06 (Sat) to 2024-01-07 (Sun) -- a pure weekend range

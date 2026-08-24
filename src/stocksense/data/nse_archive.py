@@ -188,6 +188,16 @@ def _fetch_fo_legacy(d: date) -> pd.DataFrame | None:
     if content is None:
         return None
     raw = _unzip_single_csv(content)
+    # Some legacy F&O bhavcopy files carry a trailing footer annotation
+    # row (observed: 2012-05-14, a row reading "*Updated ..." with every
+    # other field blank) that is not a real data row -- .astype(str) on
+    # a NaN SYMBOL would silently produce the literal string "nan"
+    # rather than a genuinely missing value, so this filter must run on
+    # the RAW column before any string coercion, or it can't tell a
+    # real blank apart from one. Found live: an un-filtered NaN symbol
+    # violates bhavcopy_fo's NOT NULL constraint and crashed the
+    # backfill partway through Phase I's F&O ingestion.
+    raw = raw[raw["SYMBOL"].notna()]
     return pd.DataFrame({
         "symbol": raw["SYMBOL"].astype(str).str.strip(),
         "instrument": raw["INSTRUMENT"].astype(str).str.strip(),
@@ -212,6 +222,12 @@ def _fetch_fo_udiff(d: date) -> pd.DataFrame | None:
     if content is None:
         return None
     raw = _unzip_single_csv(content)
+    # Same defensive filter as _fetch_fo_legacy -- the UDiFF format is
+    # more rigidly structured and hasn't been observed to carry a
+    # footer row, but the cost of checking is negligible next to the
+    # cost of a NOT NULL constraint crash partway through a multi-hour
+    # backfill.
+    raw = raw[raw["TckrSymb"].notna()]
     return pd.DataFrame({
         "symbol": raw["TckrSymb"].astype(str).str.strip(),
         "instrument": raw["FinInstrmTp"].astype(str).str.strip(),
