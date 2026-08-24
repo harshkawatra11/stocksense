@@ -105,6 +105,32 @@ def test_record_predictions_returns_none_when_no_live_model(tmp_store) -> None:
     assert result is None
 
 
+def test_record_predictions_is_idempotent_per_data_date_not_calendar_date(store_with_live_model) -> None:
+    """Found live: two reconcile runs on two different CALENDAR days
+    both scored the same DATA date (bhavcopy ingestion hadn't pulled
+    anything newer) and each inserted a fresh run_id, doubling every
+    row and breaking /api/brief downstream (duplicate-indexed Series).
+    record_predictions must skip entirely once this exact (model,
+    as_of_date, horizon) combination is already recorded, regardless of
+    how many times or on how many different days it's called."""
+    store, horizon, model_id = store_with_live_model
+
+    first = record_predictions(store, horizon_bars=horizon, lifecycle="live")
+    assert first is not None
+    n_after_first = len(store.read_predictions())
+
+    second = record_predictions(store, horizon_bars=horizon, lifecycle="live")
+    assert second is None  # nothing new to record -- same data date as before
+
+    n_after_second = len(store.read_predictions())
+    assert n_after_second == n_after_first  # not doubled
+
+    dupes = store.con.execute(
+        "SELECT COUNT(*) FROM (SELECT symbol, as_of_date FROM predictions GROUP BY symbol, as_of_date HAVING COUNT(*) > 1)"
+    ).fetchone()[0]
+    assert dupes == 0
+
+
 def test_grade_matured_predictions_grades_real_outcomes(store_with_live_model) -> None:
     store, horizon, model_id = store_with_live_model
 

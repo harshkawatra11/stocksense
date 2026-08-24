@@ -263,7 +263,12 @@ def brief(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
             return {"status": "no_predictions", "horizon_bars": horizon, "model_id": model_id}
 
         latest_date = preds["as_of_date"].max()
-        latest = preds[preds["as_of_date"] == latest_date].copy()
+        # Defensive dedup -- see optimizer/rebalance.py's _weights_at
+        # for the full story: record_predictions is idempotent per
+        # (model, as_of_date, horizon) at the source now, but a
+        # duplicate-run_id row from before that fix can still exist in
+        # an already-populated database.
+        latest = preds[preds["as_of_date"] == latest_date].drop_duplicates(subset=["symbol"], keep="last").copy()
 
         scores = latest.set_index("symbol")["score"]
         weights = target_weights_top_n(scores, top_n)

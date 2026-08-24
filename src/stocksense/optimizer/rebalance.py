@@ -99,7 +99,15 @@ class TodaysActions:
 
 
 def _weights_at(preds: pd.DataFrame, as_of_date, top_n: int) -> pd.Series:
-    scores = preds[preds["as_of_date"] == as_of_date].set_index("symbol")["score"]
+    # Defensive: record_predictions is now idempotent per (model,
+    # as_of_date, horizon) at the source (harness/loops.py), but a
+    # duplicate-run_id row from before that fix can still exist in an
+    # already-populated database -- drop_duplicates keeps this function
+    # correct either way rather than crashing on a duplicate-indexed
+    # Series (found live: float(c[symbol]) raised TypeError once two
+    # run_ids had both recorded the same symbol/date).
+    day = preds[preds["as_of_date"] == as_of_date].drop_duplicates(subset=["symbol"], keep="last")
+    scores = day.set_index("symbol")["score"]
     return target_weights_top_n(scores, top_n)
 
 

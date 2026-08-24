@@ -130,6 +130,29 @@ def record_predictions(store, horizon_bars: int, lifecycle: str = "live",
     feats = build_features(candles)
 
     latest_date = feats["date"].max()
+
+    # Idempotent per DATA date, not per calendar date. Found live: the
+    # reconcile graph's own idempotency (harness/loops.py's
+    # build_reconcile_graph) is keyed by calendar date, on the
+    # assumption a new trading day's data is available whenever the job
+    # runs again -- true only if bhavcopy ingestion has actually pulled
+    # that new day. When it hasn't (real gap: no daily bhavcopy backfill
+    # was scheduled alongside reconcile), "the most recent available
+    # cross-section" is STILL yesterday's, so a second run inserts a
+    # second run_id for the exact same (symbol, as_of_date) pairs --
+    # confirmed live, 1,732 duplicated rows across two run_ids, both
+    # dated 2026-08-20, which then broke /api/brief (duplicate index
+    # entries turn a scalar lookup into a Series). Skip re-recording
+    # entirely when this exact (model, as_of_date, horizon) has already
+    # been written, regardless of which run_id or which calendar day
+    # this call happens on.
+    already_recorded = store.con.execute(
+        "SELECT COUNT(*) FROM predictions WHERE model_version = ? AND as_of_date = ? AND horizon_bars = ?",
+        [model_id, latest_date, horizon_bars],
+    ).fetchone()[0]
+    if already_recorded > 0:
+        return None
+
     today_rows = feats[feats["date"] == latest_date].dropna(subset=ranker.feature_names_, how="any")
     if today_rows.empty:
         return None
