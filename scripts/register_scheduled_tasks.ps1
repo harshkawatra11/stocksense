@@ -1,7 +1,21 @@
 <#
-Phase H3: registers two Windows Scheduled Tasks so the daily brief
-actually populates every morning without anyone clicking a button.
+Phase H3 (+ a fix found running this live on 2026-08-24): registers
+three Windows Scheduled Tasks so the daily brief actually populates
+every morning without anyone clicking a button.
 
+  StockSense-DailyBackfill  daily  07:30  -- pulls fresh NSE bhavcopy
+                                             data (rolling 7-day window,
+                                             self-healing -- see
+                                             daily_backfill.ps1). MUST
+                                             run before reconcile: found
+                                             live that without this,
+                                             reconcile silently kept
+                                             scoring a stale data date
+                                             every day, which then
+                                             duplicated every prediction
+                                             row (see the commit that
+                                             made record_predictions
+                                             idempotent per DATA date).
   StockSense-Reconcile      daily  08:00  -- grade matured predictions,
                                              record today's, for the
                                              LIVE model. Runs before
@@ -23,7 +37,7 @@ that is a deliberate choice this script does not make for you.
 
 This registers PERSISTENT, UNATTENDED AUTOMATION on this machine. To
 inspect: Get-ScheduledTask -TaskName "StockSense-*"
-To remove:  Unregister-ScheduledTask -TaskName "StockSense-Reconcile","StockSense-RetrainWeekly" -Confirm:$false
+To remove:  Unregister-ScheduledTask -TaskName "StockSense-DailyBackfill","StockSense-Reconcile","StockSense-RetrainWeekly" -Confirm:$false
 
 Usage: powershell -ExecutionPolicy Bypass -File scripts\register_scheduled_tasks.ps1
 #>
@@ -41,7 +55,7 @@ Write-Host "Repo root:    $RepoRoot"
 function Register-StockSenseTask {
     param(
         [string]$TaskName,
-        [string]$Arguments,
+        [string]$Command,        # the full command line to run, e.g. "`"$PythonPath`" -m stocksense.cli.main ..."
         [Microsoft.Management.Infrastructure.CimInstance]$Trigger,
         [string]$LogFileStem
     )
@@ -52,17 +66,33 @@ function Register-StockSenseTask {
     # than the small extra indirection of a cmd /c wrapper. One rolling
     # log per task (not per-day) -- simple, and each run's own output is
     # still timestamped by the CLI's own structlog lines.
-    $cmdArgs = "/c `"`"$PythonPath`" $Arguments >> `"$LogDir\$LogFileStem.log`" 2>&1`""
+    $cmdArgs = "/c `"$Command >> `"$LogDir\$LogFileStem.log`" 2>&1`""
 
     $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $cmdArgs -WorkingDirectory $RepoRoot
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    # DisallowStartIfOnBatteries/StopIfGoingOnBatteries default to TRUE
+    # on New-ScheduledTaskSettingsSet -- found live: the first real run
+    # of this task sat in "Queued" state indefinitely and never actually
+    # executed, on a LAPTOP, because it wasn't plugged in. Explicitly
+    # disabled -- this machine is a laptop, not a server, and the whole
+    # point of this automation is that it runs unattended regardless of
+    # whether it happens to be on AC power at 7:30/8:00 AM.
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $Trigger `
         -Principal $principal -Settings $settings -Force | Out-Null
 
     Write-Host "Registered: $TaskName"
 }
+
+# Must run BEFORE reconcile -- see daily_backfill.ps1's own docstring
+# for why this was missing and what it broke.
+$backfillTrigger = New-ScheduledTaskTrigger -Daily -At 7:30AM
+Register-StockSenseTask -TaskName "StockSense-DailyBackfill" `
+    -Command "powershell.exe -ExecutionPolicy Bypass -File `"$RepoRoot\scripts\daily_backfill.ps1`"" `
+    -Trigger $backfillTrigger -LogFileStem "daily_backfill"
 
 # --cap-band full_pit MUST match the cap band the live model was
 # actually trained with (Phase H1: cross_sectional_ranker_h10_n10_...,
@@ -73,12 +103,12 @@ function Register-StockSenseTask {
 # promoted to live instead, update BOTH lines below to match it.
 $reconcileTrigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
 Register-StockSenseTask -TaskName "StockSense-Reconcile" `
-    -Arguments "-m stocksense.cli.main reconcile --horizon 10 --lifecycle live --cap-band full_pit" `
+    -Command "`"$PythonPath`" -m stocksense.cli.main reconcile --horizon 10 --lifecycle live --cap-band full_pit" `
     -Trigger $reconcileTrigger -LogFileStem "reconcile"
 
 $retrainTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 6:00AM
 Register-StockSenseTask -TaskName "StockSense-RetrainWeekly" `
-    -Arguments "-m stocksense.cli.main retrain-weekly --horizon 10 --top-n 10 --cost-bps 25.0 --cap-band full_pit" `
+    -Command "`"$PythonPath`" -m stocksense.cli.main retrain-weekly --horizon 10 --top-n 10 --cost-bps 25.0 --cap-band full_pit" `
     -Trigger $retrainTrigger -LogFileStem "retrain_weekly"
 
 Write-Host ""
