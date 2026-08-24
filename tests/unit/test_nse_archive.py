@@ -200,6 +200,26 @@ def test_fetch_fo_bhavcopy_legacy_drops_footer_annotation_row(mock_get, cache_di
 
 
 @patch("stocksense.data.nse_archive.requests.get")
+def test_fetch_fo_bhavcopy_legacy_blank_strike_on_futures_row_becomes_zero(mock_get, cache_dir) -> None:
+    """Regression: found live at day 3750/4342 of the Phase I F&O
+    backfill -- a real FUTSTK row with a blank (not '0') STRIKE_PR
+    coerced to NaN via pd.to_numeric, which then violated
+    bhavcopy_fo's NOT NULL(strike) constraint. A future genuinely has
+    no strike; 0 is the correct value, not a placeholder."""
+    raw = pd.DataFrame({
+        "INSTRUMENT": ["FUTSTK"], "SYMBOL": ["RELIANCE"], "EXPIRY_DT": ["26-Feb-2015"],
+        "STRIKE_PR": [None], "OPTION_TYP": ["XX"], "OPEN": [1.0], "HIGH": [1.0], "LOW": [1.0],
+        "CLOSE": [1.0], "SETTLE_PR": [1.0], "CONTRACTS": [1], "VAL_INLAKH": [1.0],
+        "OPEN_INT": [2215900], "CHG_IN_OI": [19275], "TIMESTAMP": ["16-Feb-2015"],
+    })
+    mock_get.return_value = _mock_response(200, _zip_csv(raw))
+
+    result = fetch_fo_bhavcopy(date(2015, 2, 16))
+    assert result["strike"].notna().all()
+    assert result.iloc[0]["strike"] == 0.0
+
+
+@patch("stocksense.data.nse_archive.requests.get")
 def test_fetch_range_skips_weekends_without_requesting(mock_get, cache_dir) -> None:
     mock_get.return_value = _mock_response(404)  # every weekday attempt is a "holiday"
     # 2024-01-06 (Sat) to 2024-01-07 (Sun) -- a pure weekend range

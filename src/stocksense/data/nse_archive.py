@@ -202,7 +202,13 @@ def _fetch_fo_legacy(d: date) -> pd.DataFrame | None:
         "symbol": raw["SYMBOL"].astype(str).str.strip(),
         "instrument": raw["INSTRUMENT"].astype(str).str.strip(),
         "expiry_date": raw["EXPIRY_DT"].astype(str).str.strip(),
-        "strike": pd.to_numeric(raw["STRIKE_PR"], errors="coerce"),
+        # Futures rows (FUTSTK/FUTIDX) carry a blank STRIKE_PR in some
+        # legacy files (observed live, day 3750/4342 of the Phase I
+        # backfill) rather than the usual literal 0 -- coerce leaves
+        # those as NaN, which violates bhavcopy_fo's NOT NULL(strike).
+        # 0 is the correct, meaningful value for "no strike" (a future),
+        # not a placeholder -- options rows always carry a real strike.
+        "strike": pd.to_numeric(raw["STRIKE_PR"], errors="coerce").fillna(0.0),
         "option_type": raw["OPTION_TYP"].astype(str).str.strip(),
         "open": raw["OPEN"].astype(float),
         "high": raw["HIGH"].astype(float),
@@ -232,7 +238,8 @@ def _fetch_fo_udiff(d: date) -> pd.DataFrame | None:
         "symbol": raw["TckrSymb"].astype(str).str.strip(),
         "instrument": raw["FinInstrmTp"].astype(str).str.strip(),
         "expiry_date": raw["XpryDt"].astype(str).str.strip(),
-        "strike": pd.to_numeric(raw["StrkPric"], errors="coerce"),
+        # Same blank-strike-on-futures-rows defense as _fetch_fo_legacy.
+        "strike": pd.to_numeric(raw["StrkPric"], errors="coerce").fillna(0.0),
         "option_type": raw["OptnTp"].astype(str).str.strip(),
         "open": raw["OpnPric"].astype(float),
         "high": raw["HghPric"].astype(float),
