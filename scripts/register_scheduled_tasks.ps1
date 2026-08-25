@@ -77,9 +77,22 @@ function Register-StockSenseTask {
     # disabled -- this machine is a laptop, not a server, and the whole
     # point of this automation is that it runs unattended regardless of
     # whether it happens to be on AC power at 7:30/8:00 AM.
+    #
+    # -WakeToRun: found live a second time, 2026-08-25 -- neither task
+    # fired at all that morning (no log entry, LastTaskResult showed
+    # "has not run") even though registration itself looked healthy.
+    # Root cause: Windows' default scheduler will not start a task on a
+    # machine that's asleep, only queue it for next time the machine
+    # happens to be awake -- StartWhenAvailable covers "missed while the
+    # machine was briefly busy," not "machine was asleep at trigger
+    # time." WakeToRun asks the machine to actually wake from sleep for
+    # this trigger (requires wake-timer support in the hardware/BIOS;
+    # does nothing for a fully powered-off machine, which is a separate,
+    # unaddressed gap -- the user still needs to leave the laptop
+    # sleeping, not shut down, overnight for this to help).
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd `
         -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
-        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -WakeToRun
 
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $Trigger `
         -Principal $principal -Settings $settings -Force | Out-Null
