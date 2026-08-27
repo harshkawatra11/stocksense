@@ -767,6 +767,36 @@ def paper_run_cmd(account_id: str = typer.Argument(...)) -> None:
         typer.echo(f"Dates: {run_out['rebalance_dates']}")
 
 
+@app.command("paper-run-all")
+def paper_run_all_cmd() -> None:
+    """Steps every ACTIVE paper account forward -- the scheduled-task
+    entry point, so a new account opened later is picked up automatically
+    without editing scripts/register_scheduled_tasks.ps1 again. One
+    connect_with_retry-backed Store for the whole run, same reasoning as
+    the other three scheduled commands."""
+    settings = get_settings()
+    store = connect_with_retry(settings.duckdb_path)
+    accounts = list_accounts(store)
+    active = accounts[accounts["status"] == "active"] if not accounts.empty else accounts
+    if active.empty:
+        typer.echo("No active paper accounts.")
+        store.close()
+        return
+
+    any_failed = False
+    for _, row in active.iterrows():
+        account_id = row["account_id"]
+        graph = build_paper_graph(store, account_id)
+        result = run_graph(graph, store)
+        run_out = result.context.get("run_pending_rebalances", {})
+        typer.echo(f"{account_id} ({row['name']}): {'OK' if result.all_succeeded else 'FAILED'}, "
+                    f"rebalances processed={run_out.get('n_rebalances_processed', 0)}")
+        any_failed = any_failed or not result.all_succeeded
+    store.close()
+    if any_failed:
+        raise typer.Exit(code=1)
+
+
 @app.command("paper-scorecard")
 def paper_scorecard_cmd(account_id: str = typer.Argument(...)) -> None:
     """The scorecard plus the real-capital readiness verdict (all six

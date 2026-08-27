@@ -154,6 +154,56 @@ def test_scorecard_empty_account_reports_zero_not_crash(tmp_store) -> None:
     assert card["n_rebalances"] == 0
 
 
+def test_paper_run_all_steps_every_active_account(tmp_path, monkeypatch) -> None:
+    """The scheduled-task entry point: paper-run-all must pick up every
+    ACTIVE account without the caller naming any account_id, and must
+    skip closed ones."""
+    db_path = tmp_path / "test.duckdb"
+    monkeypatch.setenv("STOCKSENSE_DUCKDB_PATH", str(db_path))
+    from typer.testing import CliRunner
+
+    from stocksense.cli.main import app
+
+    store = Store(db_path)
+    _register_model(store, "m1", horizon_bars=2)
+    dates = [date(2026, 1, d) for d in (5, 6, 7)]
+    _write_bhavcopy(store, [("AAA", dates[0], 100.0), ("AAA", dates[2], 110.0)])
+    _write_predictions(store, "m1", [
+        (str(dates[0]), "AAA", 0.9), (str(dates[1]), "AAA", 0.9), (str(dates[2]), "AAA", 0.9),
+    ], horizon_bars=2)
+    active = open_paper_account(store, name="Active", model_id="m1", model_type="cross_sectional_ranker", horizon_bars=2, top_n=1)
+    closed = open_paper_account(store, name="Closed", model_id="m1", model_type="cross_sectional_ranker", horizon_bars=2, top_n=1)
+    close_account(store, closed.account_id)
+    store.close()
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["paper-run-all"])
+
+    assert result.exit_code == 0, result.output
+    assert active.account_id in result.output
+    assert closed.account_id not in result.output
+
+    store2 = Store(db_path)
+    nav_active = store2.read_paper_daily_nav(active.account_id)
+    nav_closed = store2.read_paper_daily_nav(closed.account_id)
+    store2.close()
+    assert len(nav_active) == 2
+    assert len(nav_closed) == 0
+
+
+def test_paper_run_all_reports_no_active_accounts(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "test.duckdb"
+    monkeypatch.setenv("STOCKSENSE_DUCKDB_PATH", str(db_path))
+    Store(db_path).close()
+    from typer.testing import CliRunner
+
+    from stocksense.cli.main import app
+
+    result = CliRunner().invoke(app, ["paper-run-all"])
+    assert result.exit_code == 0
+    assert "No active paper accounts" in result.output
+
+
 def test_readiness_reports_not_ready_with_reasons_when_insufficient(tmp_store) -> None:
     """A handful of rebalances must never yield ready=True -- the module
     docstring's promise: falling short means the record continues."""

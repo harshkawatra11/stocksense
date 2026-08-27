@@ -20,6 +20,15 @@ every morning without anyone clicking a button.
                                              record today's, for the
                                              LIVE model. Runs before
                                              NSE's 09:15 open.
+  StockSense-PaperRun       daily  08:05  -- Phase J2: steps every
+                                             ACTIVE paper account
+                                             forward. Runs AFTER
+                                             reconcile so a paper account
+                                             always acts on a ledger that
+                                             already reflects today's
+                                             predictions, never a stale
+                                             one from before this
+                                             morning's run.
   StockSense-RetrainWeekly  weekly Sun 06:00 -- walk-forward retrain,
                                              gate, register a fresh
                                              candidate. Never touches
@@ -37,7 +46,7 @@ that is a deliberate choice this script does not make for you.
 
 This registers PERSISTENT, UNATTENDED AUTOMATION on this machine. To
 inspect: Get-ScheduledTask -TaskName "StockSense-*"
-To remove:  Unregister-ScheduledTask -TaskName "StockSense-DailyBackfill","StockSense-Reconcile","StockSense-RetrainWeekly" -Confirm:$false
+To remove:  Unregister-ScheduledTask -TaskName "StockSense-DailyBackfill","StockSense-Reconcile","StockSense-PaperRun","StockSense-RetrainWeekly" -Confirm:$false
 
 Usage: powershell -ExecutionPolicy Bypass -File scripts\register_scheduled_tasks.ps1
 #>
@@ -118,6 +127,13 @@ $reconcileTrigger = New-ScheduledTaskTrigger -Daily -At 8:00AM
 Register-StockSenseTask -TaskName "StockSense-Reconcile" `
     -Command "`"$PythonPath`" -m stocksense.cli.main reconcile --horizon 10 --lifecycle live --cap-band full_pit" `
     -Trigger $reconcileTrigger -LogFileStem "reconcile"
+
+# Phase J2: paper-run-all steps every ACTIVE paper account forward, so
+# opening a new account later never requires touching this script again.
+$paperRunTrigger = New-ScheduledTaskTrigger -Daily -At 8:05AM
+Register-StockSenseTask -TaskName "StockSense-PaperRun" `
+    -Command "`"$PythonPath`" -m stocksense.cli.main paper-run-all" `
+    -Trigger $paperRunTrigger -LogFileStem "paper_run"
 
 $retrainTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 6:00AM
 Register-StockSenseTask -TaskName "StockSense-RetrainWeekly" `
