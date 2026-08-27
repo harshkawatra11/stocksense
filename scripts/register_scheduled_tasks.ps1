@@ -46,7 +46,7 @@ that is a deliberate choice this script does not make for you.
 
 This registers PERSISTENT, UNATTENDED AUTOMATION on this machine. To
 inspect: Get-ScheduledTask -TaskName "StockSense-*"
-To remove:  Unregister-ScheduledTask -TaskName "StockSense-DailyBackfill","StockSense-Reconcile","StockSense-PaperRun","StockSense-RetrainWeekly" -Confirm:$false
+To remove:  Unregister-ScheduledTask -TaskName "StockSense-DailyBackfill","StockSense-Reconcile","StockSense-PaperRun","StockSense-RetrainWeekly","StockSense-BrokerSync" -Confirm:$false
 
 Usage: powershell -ExecutionPolicy Bypass -File scripts\register_scheduled_tasks.ps1
 #>
@@ -139,6 +139,15 @@ $retrainTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 6:00AM
 Register-StockSenseTask -TaskName "StockSense-RetrainWeekly" `
     -Command "`"$PythonPath`" -m stocksense.cli.main retrain-weekly --horizon 10 --top-n 10 --cost-bps 25.0 --cap-band full_pit" `
     -Trigger $retrainTrigger -LogFileStem "retrain_weekly"
+
+# Phase J1: post-market-close, holdings + positions only (this pass does
+# not ingest trades/orders into the canonical `trades` table -- see
+# brokers/angel_sync.py's module docstring). 16:30 gives NSE's 15:30
+# close time to settle before syncing.
+$brokerSyncTrigger = New-ScheduledTaskTrigger -Daily -At 4:30PM
+Register-StockSenseTask -TaskName "StockSense-BrokerSync" `
+    -Command "`"$PythonPath`" -m stocksense.cli.main broker-sync" `
+    -Trigger $brokerSyncTrigger -LogFileStem "broker_sync"
 
 Write-Host ""
 Write-Host "Done. Verify with:  Get-ScheduledTask -TaskName 'StockSense-*'"
