@@ -118,6 +118,18 @@ def test_registry_empty_when_no_models(client_with_store) -> None:
     assert resp.json()["models"] == []
 
 
+def test_ledger_status_reports_no_live_model_when_none_registered(client_with_store) -> None:
+    """Phase J0.2: the honest progress bar endpoint must degrade to
+    has_live_model=false rather than 404/500 when nothing is promoted
+    yet -- the fixture store here registers no model_registry rows."""
+    resp = client_with_store.get("/api/ledger-status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["has_live_model"] is False
+    assert data["n_recorded"] == 0
+    assert data["n_graded"] == 0
+
+
 def test_agent_runs_flags_unverified_numbers(client_with_store) -> None:
     resp = client_with_store.get("/api/agent-runs")
     data = resp.json()
