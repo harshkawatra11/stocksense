@@ -1,4 +1,4 @@
-﻿"""
+"""
 Local JSON API for the desktop control room (docs/18-desktop-app.md).
 Bound to 127.0.0.1 ONLY, never 0.0.0.0 -- this serves the user's private
 trading data (P&L, positions, tax exposure) and must not be reachable
@@ -238,6 +238,37 @@ def ask_rag(payload: dict):
         return rag_ask(question, store)
     finally:
         store.close()
+
+
+@app.get("/api/broker/status")
+def broker_status_endpoint(broker: str = "angelone"):
+    """Read-only: last sync run + holdings/positions counts. Never
+    triggers a sync itself (that's a job, via /api/jobs/broker-sync) and
+    never returns a token -- session state stays inside brokers/
+    angel_session.py's own on-disk cache, not this response."""
+    store = _store()
+    try:
+        runs = store.read_broker_sync_runs(broker, limit=1)
+        holdings = store.read_broker_holdings(broker)
+        positions = store.read_broker_positions_snapshot(broker)
+    finally:
+        store.close()
+    return {
+        "broker": broker,
+        "last_run": _df_to_records(runs)[0] if not runs.empty else None,
+        "n_holdings_rows": int(len(holdings)),
+        "n_positions_rows": int(len(positions)),
+    }
+
+
+@app.get("/api/broker/holdings")
+def broker_holdings_endpoint(broker: str = "angelone"):
+    store = _store()
+    try:
+        df = store.read_broker_holdings(broker)
+    finally:
+        store.close()
+    return {"holdings": _df_to_records(df)}
 
 
 @app.get("/api/paper/accounts")

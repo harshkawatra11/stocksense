@@ -132,6 +132,14 @@ COMMANDS: dict[str, JobCommandSpec] = {
         cli_args=("reconcile",),
         param_flags={"horizon": "--horizon", "lifecycle": "--lifecycle"},
     ),
+    "broker-sync": JobCommandSpec(
+        # Phase J1: read-only sync (see brokers/angel_readonly.py's
+        # allowlist -- no order-placement path exists to trigger here
+        # even if the params were somehow abused).
+        name="broker-sync",
+        cli_args=("broker-sync",),
+        param_flags={"broker": "--broker", "scopes": "--scopes"},
+    ),
     "paper-run": JobCommandSpec(
         # Phase J2: steps a paper account forward through every
         # rebalance point the ledger has produced since it was last run.

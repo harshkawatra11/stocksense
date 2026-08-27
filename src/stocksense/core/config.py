@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     upstox_api_secret: str | None = None
     upstox_access_token: str | None = None
 
+    # Phase J1: Angel One SmartAPI, READ-ONLY sync (holdings/positions/
+    # orders/trades). angel_client_code is the user's Angel One login ID
+    # (NOT the SmartAPI app's own id); angel_password is the account
+    # MPIN. No order-placement code path may ever read these -- enforced
+    # by tests/unit/test_angel_readonly.py's AST scan of src/, not just
+    # by convention.
+    angel_api_key: str | None = None
+    angel_client_code: str | None = None
+    angel_password: str | None = None
+    angel_totp_secret: str | None = None
+
     # cost sweep grid (round-trip, in basis points)
     cost_grid_bps: tuple[float, ...] = (10.0, 15.0, 25.0, 35.0)
 

@@ -516,6 +516,61 @@ CREATE TABLE IF NOT EXISTS evaluation_attempts (
     UNIQUE (hypothesis_id, holdout_id, preregistration_hash)
 );
 
+-- Phase J1: Angel One SmartAPI read-only sync. `broker_sync_runs` is the
+-- durability/audit record (was this transient or an auth failure? did
+-- reconciliation agree with the FIFO reconstruction?); `broker_holdings`
+-- and `broker_positions_snapshot` are point-in-time snapshots (one row
+-- per (broker, as_of_date, symbol) -- re-syncing the same day overwrites,
+-- it does not accumulate duplicates). Trade/order-level sync (which
+-- feeds `trades`/`positions` directly) is a deliberate follow-up, not
+-- built in this pass -- see angel_sync.py's module docstring.
+CREATE TABLE IF NOT EXISTS broker_sync_runs (
+    sync_id          VARCHAR NOT NULL PRIMARY KEY,
+    broker           VARCHAR NOT NULL,
+    started_at       TIMESTAMP NOT NULL,
+    finished_at      TIMESTAMP,
+    status           VARCHAR NOT NULL,  -- 'ok' | 'partial' | 'transient_failure' | 'auth_failure'
+    scopes_json      VARCHAR NOT NULL,
+    n_holdings       INTEGER,
+    n_positions      INTEGER,
+    session_source   VARCHAR,           -- 'cached' | 'fresh_login'
+    error            VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS broker_holdings (
+    broker              VARCHAR NOT NULL,
+    as_of_date          DATE NOT NULL,
+    symbol              VARCHAR NOT NULL,
+    exchange            VARCHAR,
+    isin                VARCHAR,
+    quantity            DOUBLE,
+    t1_quantity         DOUBLE,
+    avg_price           DOUBLE,
+    ltp                 DOUBLE,
+    close_price         DOUBLE,
+    pnl                 DOUBLE,
+    synced_at           TIMESTAMP NOT NULL,
+    PRIMARY KEY (broker, as_of_date, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS broker_positions_snapshot (
+    broker              VARCHAR NOT NULL,
+    as_of_date          DATE NOT NULL,
+    symbol              VARCHAR NOT NULL,
+    exchange            VARCHAR,
+    product             VARCHAR NOT NULL,
+    net_qty             DOUBLE,
+    buy_qty             DOUBLE,
+    buy_avg             DOUBLE,
+    sell_qty            DOUBLE,
+    sell_avg            DOUBLE,
+    ltp                 DOUBLE,
+    realised            DOUBLE,
+    unrealised           DOUBLE,
+    synced_at            TIMESTAMP NOT NULL,
+    PRIMARY KEY (broker, as_of_date, symbol, product)
+);
+
 CREATE TABLE IF NOT EXISTS paper_daily_nav (
     account_id             VARCHAR NOT NULL,
     date                   DATE NOT NULL,
@@ -1350,6 +1405,86 @@ class Store:
             """,
             [status, gate_alpha_used, result_verdict, result_metrics_json, attempt_id],
         )
+
+    # ---- Phase J1: Angel One broker sync ----
+
+    def insert_broker_sync_run(self, row: dict) -> None:
+        cols = [
+            "sync_id", "broker", "started_at", "finished_at", "status", "scopes_json",
+            "n_holdings", "n_positions", "session_source", "error",
+        ]
+        self.con.execute(
+            f"INSERT INTO broker_sync_runs ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row.get(c) for c in cols],
+        )
+
+    def read_broker_sync_runs(self, broker: str | None = None, limit: int = 50) -> pd.DataFrame:
+        if broker is not None:
+            return self.con.execute(
+                "SELECT * FROM broker_sync_runs WHERE broker = ? ORDER BY started_at DESC LIMIT ?", [broker, limit]
+            ).fetchdf()
+        return self.con.execute("SELECT * FROM broker_sync_runs ORDER BY started_at DESC LIMIT ?", [limit]).fetchdf()
+
+    def upsert_broker_holdings(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        cols = [
+            "broker", "as_of_date", "symbol", "exchange", "isin", "quantity", "t1_quantity",
+            "avg_price", "ltp", "close_price", "pnl", "synced_at",
+        ]
+        self.con.register("_bhold", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO broker_holdings ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _bhold
+            ON CONFLICT (broker, as_of_date, symbol) DO UPDATE SET
+                exchange = excluded.exchange, isin = excluded.isin, quantity = excluded.quantity,
+                t1_quantity = excluded.t1_quantity, avg_price = excluded.avg_price, ltp = excluded.ltp,
+                close_price = excluded.close_price, pnl = excluded.pnl, synced_at = excluded.synced_at
+            """
+        )
+        self.con.unregister("_bhold")
+        return len(df)
+
+    def read_broker_holdings(self, broker: str, as_of_date=None) -> pd.DataFrame:
+        if as_of_date is not None:
+            return self.con.execute(
+                "SELECT * FROM broker_holdings WHERE broker = ? AND as_of_date = ? ORDER BY symbol",
+                [broker, as_of_date],
+            ).fetchdf()
+        return self.con.execute(
+            "SELECT * FROM broker_holdings WHERE broker = ? ORDER BY as_of_date DESC, symbol", [broker]
+        ).fetchdf()
+
+    def upsert_broker_positions_snapshot(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        cols = [
+            "broker", "as_of_date", "symbol", "exchange", "product", "net_qty", "buy_qty",
+            "buy_avg", "sell_qty", "sell_avg", "ltp", "realised", "unrealised", "synced_at",
+        ]
+        self.con.register("_bpos", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO broker_positions_snapshot ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _bpos
+            ON CONFLICT (broker, as_of_date, symbol, product) DO UPDATE SET
+                exchange = excluded.exchange, net_qty = excluded.net_qty, buy_qty = excluded.buy_qty,
+                buy_avg = excluded.buy_avg, sell_qty = excluded.sell_qty, sell_avg = excluded.sell_avg,
+                ltp = excluded.ltp, realised = excluded.realised, unrealised = excluded.unrealised,
+                synced_at = excluded.synced_at
+            """
+        )
+        self.con.unregister("_bpos")
+        return len(df)
+
+    def read_broker_positions_snapshot(self, broker: str, as_of_date=None) -> pd.DataFrame:
+        if as_of_date is not None:
+            return self.con.execute(
+                "SELECT * FROM broker_positions_snapshot WHERE broker = ? AND as_of_date = ? ORDER BY symbol",
+                [broker, as_of_date],
+            ).fetchdf()
+        return self.con.execute(
+            "SELECT * FROM broker_positions_snapshot WHERE broker = ? ORDER BY as_of_date DESC, symbol", [broker]
+        ).fetchdf()
 
     def close(self) -> None:
         self.con.close()

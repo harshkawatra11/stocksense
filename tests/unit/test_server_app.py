@@ -118,6 +118,14 @@ def test_registry_empty_when_no_models(client_with_store) -> None:
     assert resp.json()["models"] == []
 
 
+def test_broker_status_reports_no_run_when_never_synced(client_with_store) -> None:
+    resp = client_with_store.get("/api/broker/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["last_run"] is None
+    assert data["n_holdings_rows"] == 0
+
+
 def test_paper_accounts_empty_when_none_opened(client_with_store) -> None:
     resp = client_with_store.get("/api/paper/accounts")
     assert resp.status_code == 200

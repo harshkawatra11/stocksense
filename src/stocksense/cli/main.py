@@ -44,6 +44,7 @@ from stocksense.paper.account import close_account, get_account, list_accounts, 
 from stocksense.paper.engine import run_pending_rebalances
 from stocksense.paper.scorecard import paper_scorecard, real_capital_readiness
 from stocksense.harness.paper import build_paper_graph
+from stocksense.brokers.angel_sync import sync_angel
 from stocksense.optimizer.tax import compute_tax_liability
 from stocksense.rag.agent import ask as rag_ask
 from stocksense.rag.embed import embeddings_available
@@ -719,6 +720,35 @@ def ledger_status_cmd(
         typer.echo(f"Estimated first maturity date (earliest as_of_date + {horizon} trading bars): {status.estimated_first_maturity_date}")
     if status.latest_calendar_date:
         typer.echo(f"Latest known trading calendar date: {status.latest_calendar_date}")
+
+
+@app.command("broker-sync")
+def broker_sync_cmd(
+    broker: str = typer.Option("angelone", help="Only 'angelone' is supported today"),
+    scopes: str = typer.Option("holdings,positions", help="Comma-separated: holdings,positions"),
+) -> None:
+    """Phase J1: read-only broker sync. Never places, modifies, or
+    cancels an order -- enforced by brokers/angel_readonly.py plus
+    tests/unit/test_angel_readonly.py's AST scan of the whole codebase.
+    Logs in fresh every run (see brokers/angel_session.py's docstring
+    for why session reuse across processes doesn't actually work on
+    this SDK)."""
+    if broker != "angelone":
+        typer.echo(f"unsupported broker: {broker!r}")
+        raise typer.Exit(code=1)
+
+    settings = get_settings()
+    store = connect_with_retry(settings.duckdb_path)
+    result = sync_angel(store, settings, scopes=tuple(s.strip() for s in scopes.split(",") if s.strip()))
+    store.close()
+
+    typer.echo(f"sync_id={result.sync_id} status={result.status}")
+    typer.echo(f"holdings synced: {result.n_holdings}")
+    typer.echo(f"positions synced: {result.n_positions}")
+    if result.error:
+        typer.echo(f"errors: {result.error}")
+    if result.status in ("auth_failure", "transient_failure"):
+        raise typer.Exit(code=1)
 
 
 @app.command("paper-open")

@@ -37,6 +37,8 @@ PROTECTED_PATTERNS: tuple[str, ...] = (
     "tests/unit/test_gate.py",
     "research/*preregistration*.md",
     "src/stocksense/evaluation/attempts.py",
+    "src/stocksense/brokers/angel_readonly.py",
+    "tests/unit/test_angel_readonly.py",
     "src/stocksense/foreman/policy.py",
     ".github/workflows/*",
 )
