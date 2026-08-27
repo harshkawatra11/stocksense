@@ -44,6 +44,14 @@ def test_policy_file_protects_itself() -> None:
     assert is_protected("src/stocksense/foreman/policy.py")
 
 
+def test_evaluation_attempts_registry_is_protected() -> None:
+    """Phase J4c: the evaluation-attempt registry can only tighten
+    evaluate_gate's significance threshold, never loosen it -- that
+    property must go through human review to change, same as gate.py
+    itself."""
+    assert is_protected("src/stocksense/evaluation/attempts.py")
+
+
 def test_ci_workflow_is_protected() -> None:
     assert is_protected(".github/workflows/verify.yml")
     assert is_protected(".github/workflows/anything.yml")

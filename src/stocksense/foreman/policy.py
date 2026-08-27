@@ -36,6 +36,7 @@ PROTECTED_PATTERNS: tuple[str, ...] = (
     "tests/unit/test_determinism.py",
     "tests/unit/test_gate.py",
     "research/*preregistration*.md",
+    "src/stocksense/evaluation/attempts.py",
     "src/stocksense/foreman/policy.py",
     ".github/workflows/*",
 )

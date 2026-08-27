@@ -485,6 +485,37 @@ CREATE TABLE IF NOT EXISTS paper_positions (
     PRIMARY KEY (account_id, symbol, open_date)
 );
 
+-- Phase J4c (docs/09-open-questions.md's OQ-11, finally built): the
+-- evaluation-attempt counter. This gate has been run against ~40+
+-- distinct configurations across this project's history with no
+-- multiplicity correction anywhere -- research/gate_criteria_
+-- preregistration.md names this exact gap as the thing it does NOT
+-- close ("if this exact gate is run repeatedly against re-tunings of
+-- the model... until one clears it, the gate becomes an overfitting
+-- instrument again"). evaluation/attempts.py is the enforcement layer;
+-- this table is just the append-only record it writes to. Deliberately
+-- does NOT touch evaluation/gate.py -- evaluate_gate already accepts an
+-- injected `criteria` parameter, so a stricter GateCriteria is
+-- CONSTRUCTED and passed in, never hand-edited into the protected file.
+CREATE TABLE IF NOT EXISTS evaluation_attempts (
+    attempt_id              VARCHAR NOT NULL PRIMARY KEY,
+    hypothesis_id            VARCHAR NOT NULL,
+    preregistration_path      VARCHAR NOT NULL,
+    preregistration_hash       VARCHAR NOT NULL,
+    holdout_id                  VARCHAR NOT NULL,
+    holdout_spec_json            VARCHAR NOT NULL,
+    attempt_index                 INTEGER NOT NULL,  -- assigned by the DB, never caller-supplied
+    registered_at                  TIMESTAMP NOT NULL,
+    registered_by                   VARCHAR NOT NULL,  -- 'user' | 'foreman'
+    status                           VARCHAR NOT NULL,  -- 'registered' | 'run' | 'abandoned'
+    base_alpha                       DOUBLE NOT NULL,
+    gate_alpha_used                   DOUBLE,
+    result_verdict                     VARCHAR,          -- 'pass' | 'fail' | 'inconclusive'
+    result_metrics_json                 VARCHAR,
+    notes                                 VARCHAR,
+    UNIQUE (hypothesis_id, holdout_id, preregistration_hash)
+);
+
 CREATE TABLE IF NOT EXISTS paper_daily_nav (
     account_id             VARCHAR NOT NULL,
     date                   DATE NOT NULL,
@@ -1270,6 +1301,55 @@ class Store:
         return self.con.execute(
             "SELECT * FROM paper_daily_nav WHERE account_id = ? ORDER BY date", [account_id]
         ).fetchdf()
+
+    # ---- Phase J4c: the evaluation-attempt registry ----
+
+    def register_evaluation_attempt(self, row: dict) -> int:
+        """Assigns attempt_index inside the SAME transaction as the
+        insert -- computed here, never accepted as a caller-supplied
+        value, so it cannot be spoofed or raced. Returns the assigned
+        index."""
+        existing = self.con.execute(
+            "SELECT COALESCE(MAX(attempt_index), 0) FROM evaluation_attempts WHERE holdout_id = ?",
+            [row["holdout_id"]],
+        ).fetchone()[0]
+        attempt_index = int(existing) + 1
+        cols = [
+            "attempt_id", "hypothesis_id", "preregistration_path", "preregistration_hash",
+            "holdout_id", "holdout_spec_json", "attempt_index", "registered_at", "registered_by",
+            "status", "base_alpha", "gate_alpha_used", "result_verdict", "result_metrics_json", "notes",
+        ]
+        payload = dict(row)
+        payload["attempt_index"] = attempt_index
+        self.con.execute(
+            f"INSERT INTO evaluation_attempts ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [payload.get(c) for c in cols],
+        )
+        return attempt_index
+
+    def count_evaluation_attempts(self, holdout_id: str) -> int:
+        return int(self.con.execute(
+            "SELECT COUNT(*) FROM evaluation_attempts WHERE holdout_id = ?", [holdout_id]
+        ).fetchone()[0])
+
+    def read_evaluation_attempts(self, holdout_id: str | None = None) -> pd.DataFrame:
+        if holdout_id is not None:
+            return self.con.execute(
+                "SELECT * FROM evaluation_attempts WHERE holdout_id = ? ORDER BY attempt_index", [holdout_id]
+            ).fetchdf()
+        return self.con.execute("SELECT * FROM evaluation_attempts ORDER BY registered_at").fetchdf()
+
+    def update_evaluation_attempt_result(
+        self, attempt_id: str, status: str, gate_alpha_used: float | None,
+        result_verdict: str | None, result_metrics_json: str | None,
+    ) -> None:
+        self.con.execute(
+            """
+            UPDATE evaluation_attempts SET status = ?, gate_alpha_used = ?,
+                result_verdict = ?, result_metrics_json = ? WHERE attempt_id = ?
+            """,
+            [status, gate_alpha_used, result_verdict, result_metrics_json, attempt_id],
+        )
 
     def close(self) -> None:
         self.con.close()
