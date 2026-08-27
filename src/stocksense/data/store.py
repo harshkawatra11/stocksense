@@ -9,6 +9,7 @@ ingestion twice for the same date must not duplicate rows
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import duckdb
@@ -436,6 +437,40 @@ _PREDICTIONS_MIGRATION_COLUMNS = {
 }
 
 
+def connect_with_retry(
+    path: Path, *, read_only: bool = False, attempts: int = 5, delay_s: float = 60.0,
+) -> "Store":
+    """Phase J0.1: the real fix for the nightly scheduled jobs dying
+    outright on a single momentary lock collision. Found live:
+    `reconcile.log`/`daily_backfill.log` both terminated their ENTIRE
+    run on one `duckdb.IOException` the first time the desktop API (or
+    another job) happened to hold the file open at the exact instant the
+    scheduled task started -- no retry existed anywhere. Verified
+    two-process before writing this: this DuckDB build's locking is
+    fully exclusive between any two connections except reader-vs-reader
+    (see `Store.__init__`'s docstring), so contention is expected and
+    normal, not a sign anything is broken -- a request-scoped `Store` in
+    the desktop API holds its lock for milliseconds, so a short retry
+    loop resolves the overwhelming majority of collisions without the
+    scheduled job needing to abandon its run.
+
+    Retries on `duckdb.IOException` specifically (the exception this
+    project has twice observed for a locked file) — any other exception
+    propagates immediately, since retrying a real error (bad SQL, a
+    corrupt file) would just waste `attempts * delay_s` before failing
+    anyway."""
+    last_error: duckdb.IOException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return Store(path, read_only=read_only)
+        except duckdb.IOException as e:
+            last_error = e
+            if attempt < attempts:
+                time.sleep(delay_s)
+    assert last_error is not None
+    raise last_error
+
+
 class Store:
     """Thin wrapper around a DuckDB file. One instance = one connection.
 
@@ -444,9 +479,45 @@ class Store:
     not open concurrent writable connections to the same file.
     """
 
-    def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: Path, read_only: bool = False):
+        """`read_only=True` opens a read-only DuckDB connection instead of
+        the default read-write one.
+
+        MEASURED, not assumed (Phase J0, verified live on this Windows +
+        DuckDB 1.5.5 setup with a two-process test before trusting it):
+        this file's locking is NOT "single writer, many concurrent
+        readers." It is fully mutually exclusive between ANY two
+        connections except reader-vs-reader -- a read-only connection
+        blocks a writer trying to open the same file, and a writer blocks
+        a read-only connection, exactly as read-write-vs-read-write does.
+        Only two simultaneously-open read-only connections coexist. So
+        `read_only=True` does NOT, by itself, stop a GET request from
+        blocking a scheduled write job (or vice versa) -- the actual fix
+        for that is holding every connection as briefly as possible
+        (already the pattern: open, query, close, per request) plus
+        retry-with-backoff on the writer side (see `connect_with_retry`
+        below), which is what closes the real bug found live:
+        `reconcile.log`/`daily_backfill.log` both died outright on a
+        single `IOException: ... already open in ... python.exe`
+        because neither the CLI nor the scheduled-task wrapper ever
+        retried a momentary lock collision.
+
+        What `read_only=True` DOES still buy: multiple simultaneous
+        read-only connections (several desktop-app requests in flight,
+        or a read-only connection alongside another read-only one) no
+        longer need to serialize behind DuckDB's exclusive-writer lock,
+        and a caller that only ever reads can no longer accidentally
+        run the schema-creation/migration DDL below. Schema creation and
+        the predictions migration are both write operations, so both are
+        skipped for a read-only connection -- opening read-only against a
+        database that doesn't exist yet correctly fails, rather than
+        silently creating one."""
         self.path = path
+        self.read_only = read_only
+        if read_only:
+            self.con = duckdb.connect(str(path), read_only=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
         self.con = duckdb.connect(str(path))
         self.con.execute(SCHEMA)
         self._migrate_predictions_columns()

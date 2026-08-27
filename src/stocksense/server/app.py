@@ -1,4 +1,4 @@
-"""
+﻿"""
 Local JSON API for the desktop control room (docs/18-desktop-app.md).
 Bound to 127.0.0.1 ONLY, never 0.0.0.0 -- this serves the user's private
 trading data (P&L, positions, tax exposure) and must not be reachable
@@ -89,17 +89,40 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
     return [{k: _clean(v) for k, v in row.items()} for row in df.to_dict(orient="records")]
 
 
-def _store() -> Store:
+def _store(read_only: bool = False) -> Store:
     """Every endpoint below calls this first. DuckDB gives whichever
     process holds a read-write connection an EXCLUSIVE file lock -- while
     a triggered job (a backfill, foreman run, etc.) is running, its
-    subprocess holds that lock for its entire duration, and this call
-    will fail here. Caught once, at this single choke point, rather than
-    duplicated in every endpoint: surfaced as a 503 with a clear reason,
-    not an unhandled 500 that looks like a real bug."""
+    subprocess holds that lock for its entire duration, and a read-write
+    call here will fail. Caught once, at this single choke point, rather
+    than duplicated in every endpoint: surfaced as a 503 with a clear
+    reason, not an unhandled 500 that looks like a real bug.
+
+    Phase J0: `read_only` exists on `Store` and IS used by the separate-
+    process `ledger-status` CLI command, but every endpoint in THIS
+    module deliberately stays on the read-write default. Two things were
+    verified live before deciding that, not assumed: (1) a read-only
+    connection here would NOT stop this server from blocking, or being
+    blocked by, the nightly scheduled backfill/reconcile jobs anyway --
+    this DuckDB build's file locking is fully exclusive between any two
+    connections except reader-vs-reader (see `Store.__init__`'s
+    docstring for the two-process test); and (2) worse, mixing
+    read_only=True and the default read-write `Store` calls THIS SAME
+    long-running process makes elsewhere (`JobRegistry._store()`,
+    server/jobs.py:211, opened read-write for start_job_run/
+    finish_job_run) hits DuckDB's Python client refusing "a connection
+    to same database file with a different configuration than existing
+    connections" -- caught by `test_get_log_of_finished_job_reads_from_
+    disk` failing outright once two of these endpoints briefly used
+    read_only=True. So the real fix for `reconcile.log`'s repeated
+    `IOException: ... already open in ... python.exe` failures is
+    retry-with-backoff on the scheduled jobs themselves
+    (`data.store.connect_with_retry`, wired into the three scheduled CLI
+    commands) plus keeping every connection here open only for the
+    duration of one request -- not a read_only flag on this server."""
     settings = get_settings()
     try:
-        return Store(settings.duckdb_path)
+        return Store(settings.duckdb_path, read_only=read_only)
     except duckdb.IOException as e:
         raise HTTPException(
             status_code=503,
@@ -215,6 +238,25 @@ def ask_rag(payload: dict):
         return rag_ask(question, store)
     finally:
         store.close()
+
+
+@app.get("/api/ledger-status")
+def ledger_status_endpoint(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
+    """Phase J0.2: the honest progress bar toward this project's first
+    real forward track record -- see evaluation.ledger_status's module
+    docstring. Read-only; returns `has_live_model: false` rather than a
+    404 when no live model exists for the requested horizon, so the UI
+    can render that state explicitly instead of erroring."""
+    from dataclasses import asdict
+
+    from stocksense.evaluation.ledger_status import ledger_status
+
+    store = _store()
+    try:
+        status = ledger_status(store, model_type=model_type, horizon_bars=horizon)
+    finally:
+        store.close()
+    return asdict(status)
 
 
 @app.get("/api/registry")

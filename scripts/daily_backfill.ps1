@@ -33,7 +33,20 @@ $End = (Get-Date).ToString("yyyy-MM-dd")
 
 Push-Location $RepoRoot
 try {
-    & $PythonPath -m stocksense.cli.main backfill-nse-archive --start $Start --end $End --kind cm
+    # Phase J0.1: backfill-nse-archive itself now retries a DuckDB lock
+    # collision internally (connect_with_retry, 5 attempts / 60s apart)
+    # -- this outer loop is defense in depth for a collision so
+    # persistent it outlasts even that (e.g. a multi-minute UI-triggered
+    # job holding the write lock), so the scheduled task exits non-zero
+    # only after genuinely giving up, not on the first bad second.
+    $maxAttempts = 3
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        & $PythonPath -m stocksense.cli.main backfill-nse-archive --start $Start --end $End --kind cm
+        if ($LASTEXITCODE -eq 0) { break }
+        Write-Host "backfill-nse-archive exited $LASTEXITCODE (attempt $attempt/$maxAttempts)"
+        if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 120 }
+    }
+    exit $LASTEXITCODE
 } finally {
     Pop-Location
 }

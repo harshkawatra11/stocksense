@@ -23,7 +23,7 @@ import structlog
 import typer
 
 from stocksense.core.config import REPO_ROOT, get_settings
-from stocksense.data.store import Store
+from stocksense.data.store import Store, connect_with_retry
 from stocksense.data.loader import load_candles, load_features_and_labels
 from stocksense.data.validate import quarantine_symbols
 from stocksense.features.engine import build_features
@@ -39,6 +39,7 @@ from stocksense.foreman.executor import execute_goal, record_goal_result, record
 from stocksense.harness.loops import build_reconcile_graph, grade_matured_predictions, record_predictions
 from stocksense.harness.retrain import build_weekly_retrain_graph
 from stocksense.harness.runner import run_graph
+from stocksense.evaluation.ledger_status import ledger_status
 from stocksense.optimizer.tax import compute_tax_liability
 from stocksense.rag.agent import ask as rag_ask
 from stocksense.rag.embed import embeddings_available
@@ -423,7 +424,13 @@ def backfill_nse_archive_cmd(
     end_d = _dt.strptime(end, "%Y-%m-%d").date()
 
     settings = get_settings()
-    store = Store(settings.duckdb_path)
+    # Phase J0.1: this command is one of the three run unattended by
+    # Windows Scheduled Tasks (scripts/daily_backfill.ps1, 07:30 daily).
+    # A single momentary lock collision with the desktop API used to kill
+    # the entire run outright (confirmed live: daily_backfill.log's last
+    # line was one IOException, zero retry). connect_with_retry absorbs
+    # that instead of propagating it.
+    store = connect_with_retry(settings.duckdb_path)
 
     total_days = max(1, len(pd.bdate_range(start_d, end_d)))  # business days as the progress denominator; a few public holidays inside it don't materially skew a progress percentage
     results = fetch_range(start_d, end_d, kind=kind)
@@ -671,6 +678,45 @@ def tax_summary_cmd(
     typer.echo("\n(Statutory rates only, not tax advice. Excludes F&O/intraday business income and other income heads.)")
 
 
+@app.command("ledger-status")
+def ledger_status_cmd(
+    horizon: int = typer.Option(10, help="Prediction horizon in trading bars -- must match the live model's"),
+    model_type: str = typer.Option(MODEL_TYPE, help="Model type to check the ledger for"),
+) -> None:
+    """Phase J0.2: the honest progress bar toward this project's first
+    real forward track record. Reports how many predictions have been
+    recorded vs graded, and how far that is from the ≥30-graded
+    threshold evaluate_forward_record needs before a live model's own
+    forward hit rate can even be tested for significant underperformance
+    -- as of this command's introduction, that count is 0."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path, read_only=True)
+    try:
+        status = ledger_status(store, model_type=model_type, horizon_bars=horizon)
+    finally:
+        store.close()
+
+    if not status.has_live_model:
+        typer.echo(f"No live model for model_type={model_type!r} horizon_bars={horizon}.")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Live model: {status.model_id}")
+    typer.echo(f"Predictions recorded: {status.n_recorded}")
+    typer.echo(f"Predictions graded:   {status.n_graded}")
+    typer.echo(f"Still ungraded:       {status.n_ungraded}")
+    typer.echo(f"Graded predictions needed for the forward-record check: {status.min_graded_required}")
+    if status.predictions_until_threshold > 0:
+        typer.echo(f"  -> {status.predictions_until_threshold} more graded predictions needed.")
+    else:
+        typer.echo("  -> threshold met; evaluate_forward_record can now produce a meaningful verdict.")
+    if status.earliest_as_of_date:
+        typer.echo(f"Earliest recorded as_of_date: {status.earliest_as_of_date}")
+    if status.estimated_first_maturity_date:
+        typer.echo(f"Estimated first maturity date (earliest as_of_date + {horizon} trading bars): {status.estimated_first_maturity_date}")
+    if status.latest_calendar_date:
+        typer.echo(f"Latest known trading calendar date: {status.latest_calendar_date}")
+
+
 @app.command("reconcile")
 def reconcile_cmd(
     horizon: int = typer.Option(20, help="Prediction horizon in trading bars"),
@@ -688,7 +734,10 @@ def reconcile_cmd(
     the property docs/05-nightly-pipeline.md requires of every step."""
     settings = get_settings()
     turnover_rank_band = _resolve_cap_band(cap_band, settings)
-    store = Store(settings.duckdb_path)
+    # Phase J0.1: run unattended daily at 08:00 by Windows Scheduled
+    # Tasks -- see backfill_nse_archive_cmd's comment above for why this
+    # must retry rather than die on the first lock collision.
+    store = connect_with_retry(settings.duckdb_path)
     graph = build_reconcile_graph(store, horizon_bars=horizon, lifecycle=lifecycle,
                                    turnover_rank_band=turnover_rank_band, settings=settings)
     result = run_graph(graph, store)
@@ -727,7 +776,10 @@ def retrain_weekly_cmd(
     analogue of `reconcile`'s daily idempotency."""
     settings = get_settings()
     turnover_rank_band = _resolve_cap_band(cap_band, settings)
-    store = Store(settings.duckdb_path)
+    # Phase J0.1: run unattended weekly (Sunday 06:00) by Windows
+    # Scheduled Tasks -- same retry reasoning as the other two scheduled
+    # commands above.
+    store = connect_with_retry(settings.duckdb_path)
     graph = build_weekly_retrain_graph(store, horizon=horizon, top_n=top_n, cost_bps=cost_bps,
                                         turnover_rank_band=turnover_rank_band, settings=settings)
     result = run_graph(graph, store)
