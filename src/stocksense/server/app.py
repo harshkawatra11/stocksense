@@ -240,6 +240,58 @@ def ask_rag(payload: dict):
         store.close()
 
 
+@app.get("/api/paper/accounts")
+def paper_accounts_endpoint():
+    from stocksense.paper.account import list_accounts
+
+    store = _store()
+    try:
+        df = list_accounts(store)
+    finally:
+        store.close()
+    return {"accounts": _df_to_records(df)}
+
+
+@app.get("/api/paper/nav")
+def paper_nav_endpoint(account_id: str):
+    store = _store()
+    try:
+        df = store.read_paper_daily_nav(account_id)
+    finally:
+        store.close()
+    return {"nav": _df_to_records(df)}
+
+
+@app.get("/api/paper/orders")
+def paper_orders_endpoint(account_id: str):
+    store = _store()
+    try:
+        df = store.read_paper_orders(account_id)
+    finally:
+        store.close()
+    return {"orders": _df_to_records(df)}
+
+
+@app.get("/api/paper/scorecard")
+def paper_scorecard_endpoint(account_id: str):
+    from stocksense.paper.account import get_account
+    from stocksense.paper.scorecard import paper_scorecard, real_capital_readiness
+
+    store = _store()
+    try:
+        account = get_account(store, account_id)
+        card = paper_scorecard(store, account_id)
+        readiness = real_capital_readiness(store, account_id, account.model_id)
+    finally:
+        store.close()
+    return {
+        "scorecard": {k: _clean(v) for k, v in card.items()},
+        "real_capital_ready": readiness.ready,
+        "criteria": readiness.criteria,
+        "reasons_not_ready": readiness.reasons_not_ready,
+    }
+
+
 @app.get("/api/ledger-status")
 def ledger_status_endpoint(horizon: int = 10, model_type: str = "cross_sectional_ranker"):
     """Phase J0.2: the honest progress bar toward this project's first

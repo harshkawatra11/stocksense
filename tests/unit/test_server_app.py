@@ -118,6 +118,12 @@ def test_registry_empty_when_no_models(client_with_store) -> None:
     assert resp.json()["models"] == []
 
 
+def test_paper_accounts_empty_when_none_opened(client_with_store) -> None:
+    resp = client_with_store.get("/api/paper/accounts")
+    assert resp.status_code == 200
+    assert resp.json()["accounts"] == []
+
+
 def test_ledger_status_reports_no_live_model_when_none_registered(client_with_store) -> None:
     """Phase J0.2: the honest progress bar endpoint must degrade to
     has_live_model=false rather than 404/500 when nothing is promoted

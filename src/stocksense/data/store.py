@@ -420,6 +420,84 @@ CREATE TABLE IF NOT EXISTS claude_usage_events (
     cache_creation_tokens  BIGINT NOT NULL DEFAULT 0,
     cache_read_tokens      BIGINT NOT NULL DEFAULT 0
 );
+
+-- Phase J2: paper trading. Deliberately a UNIT book, not a rupee one --
+-- no capital-denominated column exists anywhere below. This preserves
+-- the invariant Phase G established (docs/STATUS.md: "no capital, real
+-- or paper, has been committed... no account size lives in config, a
+-- model, the gate, or the prediction ledger") and matches
+-- research/verdict_intraday.md's own precedent: EXPOSURE_INR lives only
+-- inside a retired, non-live research script, never in a table a live
+-- system reads. Whole-share divisibility is answered on demand via
+-- optimizer.sizing.min_capital_for_full_positions, computed the same
+-- way /api/brief already does -- never stored.
+CREATE TABLE IF NOT EXISTS paper_accounts (
+    account_id         VARCHAR NOT NULL PRIMARY KEY,
+    name               VARCHAR NOT NULL,
+    model_id           VARCHAR NOT NULL,
+    model_type         VARCHAR NOT NULL,
+    horizon_bars       INTEGER NOT NULL,
+    top_n              INTEGER NOT NULL,
+    cap_band           VARCHAR,
+    fill_rule          VARCHAR NOT NULL,  -- 'rebalance_date_close' today; a future validated
+                                           -- entry-timing rule (Phase J4a) is a NEW value here,
+                                           -- never a silent redefinition of an existing one.
+    no_trade_band      DOUBLE NOT NULL DEFAULT 0.02,
+    created_at         TIMESTAMP NOT NULL,
+    closed_at          TIMESTAMP,
+    status             VARCHAR NOT NULL,  -- 'active' | 'closed'
+    notes              VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS paper_orders (
+    order_id           VARCHAR NOT NULL PRIMARY KEY,
+    account_id         VARCHAR NOT NULL,
+    rebalance_date     DATE NOT NULL,
+    symbol             VARCHAR NOT NULL,
+    action             VARCHAR NOT NULL,  -- optimizer.rebalance.RebalanceAction.action
+    current_weight     DOUBLE NOT NULL,
+    target_weight      DOUBLE NOT NULL,
+    weight_delta       DOUBLE NOT NULL,
+    fill_rule          VARCHAR NOT NULL,
+    fill_price         DOUBLE,
+    fill_status        VARCHAR NOT NULL,  -- 'filled' | 'rejected'
+    rejection_reason   VARCHAR,
+    charges_fraction   DOUBLE NOT NULL,   -- execution.cost_model.compute_charges at notional 1.0,
+                                           -- same convention optimizer.rebalance already uses
+    model_id           VARCHAR NOT NULL,
+    created_at         TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_positions (
+    account_id         VARCHAR NOT NULL,
+    symbol             VARCHAR NOT NULL,
+    open_date          DATE NOT NULL,
+    close_date         DATE,
+    weight             DOUBLE NOT NULL,
+    entry_price        DOUBLE NOT NULL,
+    exit_price         DOUBLE,
+    gross_return       DOUBLE,
+    charges_fraction   DOUBLE,
+    net_return         DOUBLE,
+    status             VARCHAR NOT NULL,  -- 'open' | 'closed'
+    open_order_id      VARCHAR NOT NULL,
+    close_order_id     VARCHAR,
+    PRIMARY KEY (account_id, symbol, open_date)
+);
+
+CREATE TABLE IF NOT EXISTS paper_daily_nav (
+    account_id             VARCHAR NOT NULL,
+    date                   DATE NOT NULL,
+    nav_units              DOUBLE NOT NULL,
+    daily_return           DOUBLE,
+    cum_return             DOUBLE,
+    benchmark_nav_units    DOUBLE,
+    benchmark_daily_return DOUBLE,
+    benchmark_cum_return   DOUBLE,
+    n_positions            INTEGER NOT NULL,
+    drawdown               DOUBLE,
+    PRIMARY KEY (account_id, date)
+);
 """
 
 # AUDIT: predictions was created but never written to (CRITICAL-1). These
@@ -1090,6 +1168,108 @@ class Store:
         if since is not None:
             return self.con.execute("SELECT * FROM claude_usage_events WHERE ts >= ? ORDER BY ts", [since]).fetchdf()
         return self.con.execute("SELECT * FROM claude_usage_events ORDER BY ts").fetchdf()
+
+    # ---- Phase J2: paper trading (unit book, no capital column anywhere) ----
+
+    def insert_paper_account(self, row: dict) -> None:
+        cols = [
+            "account_id", "name", "model_id", "model_type", "horizon_bars", "top_n",
+            "cap_band", "fill_rule", "no_trade_band", "created_at", "closed_at", "status", "notes",
+        ]
+        self.con.execute(
+            f"INSERT INTO paper_accounts ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row.get(c) for c in cols],
+        )
+
+    def read_paper_accounts(self) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM paper_accounts ORDER BY created_at").fetchdf()
+
+    def get_paper_account(self, account_id: str) -> pd.DataFrame:
+        return self.con.execute("SELECT * FROM paper_accounts WHERE account_id = ?", [account_id]).fetchdf()
+
+    def close_paper_account(self, account_id: str, closed_at) -> None:
+        self.con.execute(
+            "UPDATE paper_accounts SET status = 'closed', closed_at = ? WHERE account_id = ?",
+            [closed_at, account_id],
+        )
+
+    def write_paper_orders(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        cols = [
+            "order_id", "account_id", "rebalance_date", "symbol", "action", "current_weight",
+            "target_weight", "weight_delta", "fill_rule", "fill_price", "fill_status",
+            "rejection_reason", "charges_fraction", "model_id", "created_at",
+        ]
+        self.con.register("_porders", df[cols])
+        self.con.execute(f"INSERT INTO paper_orders ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _porders")
+        self.con.unregister("_porders")
+        return len(df)
+
+    def read_paper_orders(self, account_id: str) -> pd.DataFrame:
+        return self.con.execute(
+            "SELECT * FROM paper_orders WHERE account_id = ? ORDER BY rebalance_date, symbol", [account_id]
+        ).fetchdf()
+
+    def rebalance_dates_recorded(self, account_id: str) -> list:
+        return self.con.execute(
+            "SELECT DISTINCT rebalance_date FROM paper_orders WHERE account_id = ? ORDER BY rebalance_date",
+            [account_id],
+        ).fetchdf()["rebalance_date"].tolist()
+
+    def upsert_paper_positions(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        cols = [
+            "account_id", "symbol", "open_date", "close_date", "weight", "entry_price", "exit_price",
+            "gross_return", "charges_fraction", "net_return", "status", "open_order_id", "close_order_id",
+        ]
+        self.con.register("_ppos", df[cols])
+        self.con.execute(
+            f"""
+            INSERT INTO paper_positions ({', '.join(cols)}) SELECT {', '.join(cols)} FROM _ppos
+            ON CONFLICT (account_id, symbol, open_date) DO UPDATE SET
+                close_date = excluded.close_date, exit_price = excluded.exit_price,
+                gross_return = excluded.gross_return, charges_fraction = excluded.charges_fraction,
+                net_return = excluded.net_return, status = excluded.status,
+                close_order_id = excluded.close_order_id
+            """
+        )
+        self.con.unregister("_ppos")
+        return len(df)
+
+    def read_paper_positions(self, account_id: str, status: str | None = None) -> pd.DataFrame:
+        if status is not None:
+            return self.con.execute(
+                "SELECT * FROM paper_positions WHERE account_id = ? AND status = ? ORDER BY open_date, symbol",
+                [account_id, status],
+            ).fetchdf()
+        return self.con.execute(
+            "SELECT * FROM paper_positions WHERE account_id = ? ORDER BY open_date, symbol", [account_id]
+        ).fetchdf()
+
+    def upsert_paper_daily_nav(self, row: dict) -> None:
+        cols = [
+            "account_id", "date", "nav_units", "daily_return", "cum_return", "benchmark_nav_units",
+            "benchmark_daily_return", "benchmark_cum_return", "n_positions", "drawdown",
+        ]
+        self.con.execute(
+            f"""
+            INSERT INTO paper_daily_nav ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})
+            ON CONFLICT (account_id, date) DO UPDATE SET
+                nav_units = excluded.nav_units, daily_return = excluded.daily_return,
+                cum_return = excluded.cum_return, benchmark_nav_units = excluded.benchmark_nav_units,
+                benchmark_daily_return = excluded.benchmark_daily_return,
+                benchmark_cum_return = excluded.benchmark_cum_return,
+                n_positions = excluded.n_positions, drawdown = excluded.drawdown
+            """,
+            [row.get(c) for c in cols],
+        )
+
+    def read_paper_daily_nav(self, account_id: str) -> pd.DataFrame:
+        return self.con.execute(
+            "SELECT * FROM paper_daily_nav WHERE account_id = ? ORDER BY date", [account_id]
+        ).fetchdf()
 
     def close(self) -> None:
         self.con.close()

@@ -40,6 +40,10 @@ from stocksense.harness.loops import build_reconcile_graph, grade_matured_predic
 from stocksense.harness.retrain import build_weekly_retrain_graph
 from stocksense.harness.runner import run_graph
 from stocksense.evaluation.ledger_status import ledger_status
+from stocksense.paper.account import close_account, get_account, list_accounts, open_paper_account
+from stocksense.paper.engine import run_pending_rebalances
+from stocksense.paper.scorecard import paper_scorecard, real_capital_readiness
+from stocksense.harness.paper import build_paper_graph
 from stocksense.optimizer.tax import compute_tax_liability
 from stocksense.rag.agent import ask as rag_ask
 from stocksense.rag.embed import embeddings_available
@@ -715,6 +719,75 @@ def ledger_status_cmd(
         typer.echo(f"Estimated first maturity date (earliest as_of_date + {horizon} trading bars): {status.estimated_first_maturity_date}")
     if status.latest_calendar_date:
         typer.echo(f"Latest known trading calendar date: {status.latest_calendar_date}")
+
+
+@app.command("paper-open")
+def paper_open_cmd(
+    name: str = typer.Option(..., help="Human-readable label for this paper account"),
+    model_id: str = typer.Option(..., help="Registered model_id to track"),
+    model_type: str = typer.Option(MODEL_TYPE),
+    horizon: int = typer.Option(10, help="Must match the model's own horizon_bars"),
+    top_n: int = typer.Option(10),
+    cap_band: Optional[str] = typer.Option(None, "--cap-band"),
+    no_trade_band: float = typer.Option(0.02),
+) -> None:
+    """Phase J2: open a paper account tracking a registered model. Unit
+    book -- no capital figure is ever asked for or stored."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path)
+    try:
+        account = open_paper_account(
+            store, name=name, model_id=model_id, model_type=model_type, horizon_bars=horizon,
+            top_n=top_n, cap_band=cap_band, no_trade_band=no_trade_band,
+        )
+    finally:
+        store.close()
+    typer.echo(f"Opened paper account {account.account_id} ({account.name!r}), tracking {account.model_id}.")
+
+
+@app.command("paper-run")
+def paper_run_cmd(account_id: str = typer.Argument(...)) -> None:
+    """Steps a paper account forward through every rebalance point the
+    ledger has produced since it was last run. Idempotent: nothing to do
+    is a normal, silent outcome."""
+    settings = get_settings()
+    store = connect_with_retry(settings.duckdb_path)
+    graph = build_paper_graph(store, account_id)
+    result = run_graph(graph, store)
+    store.close()
+
+    for outcome in result.outcomes:
+        typer.echo(f"  [{outcome.status:>9}] {outcome.name}")
+    if not result.all_succeeded:
+        typer.echo(f"Failed: {result.failed_nodes()}")
+        raise typer.Exit(code=1)
+    run_out = result.context.get("run_pending_rebalances", {})
+    typer.echo(f"Rebalances processed: {run_out.get('n_rebalances_processed', 0)}")
+    if run_out.get("rebalance_dates"):
+        typer.echo(f"Dates: {run_out['rebalance_dates']}")
+
+
+@app.command("paper-scorecard")
+def paper_scorecard_cmd(account_id: str = typer.Argument(...)) -> None:
+    """The scorecard plus the real-capital readiness verdict (all six
+    criteria must hold; falling short means the paper record continues,
+    never that a threshold gets revisited)."""
+    settings = get_settings()
+    store = Store(settings.duckdb_path, read_only=True)
+    try:
+        account = get_account(store, account_id)
+        card = paper_scorecard(store, account_id)
+        readiness = real_capital_readiness(store, account_id, account.model_id)
+    finally:
+        store.close()
+
+    typer.echo(f"Account: {account.name} ({account_id}), tracking {account.model_id}")
+    for k, v in card.items():
+        typer.echo(f"  {k}: {v}")
+    typer.echo("")
+    typer.echo(f"Real-capital ready: {readiness.ready}")
+    for name, c in readiness.criteria.items():
+        typer.echo(f"  [{'OK ' if c['met'] else 'NO '}] {name}: {c['detail']}")
 
 
 @app.command("reconcile")

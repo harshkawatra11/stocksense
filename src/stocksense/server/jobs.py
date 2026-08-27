@@ -132,6 +132,14 @@ COMMANDS: dict[str, JobCommandSpec] = {
         cli_args=("reconcile",),
         param_flags={"horizon": "--horizon", "lifecycle": "--lifecycle"},
     ),
+    "paper-run": JobCommandSpec(
+        # Phase J2: steps a paper account forward through every
+        # rebalance point the ledger has produced since it was last run.
+        name="paper-run",
+        cli_args=("paper-run",),
+        param_flags={"account_id": ""},  # positional argument -- see build_command's handling below
+        required_params=("account_id",),
+    ),
     "predict": JobCommandSpec(
         # Phase G/B2: previously unreachable from the UI entirely.
         name="predict",
