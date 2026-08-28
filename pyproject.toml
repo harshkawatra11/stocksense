@@ -10,6 +10,12 @@ dependencies = [
     "pyarrow>=16.0",
     "lightgbm>=4.3",
     "scikit-learn>=1.4",
+    # Phase K0: evaluation/robustness.py uses scipy.stats.norm directly (the
+    # Deflated Sharpe Ratio and its expected-maximum-Sharpe term). scipy was
+    # already installed here, but only TRANSITIVELY via scikit-learn -- the
+    # exact shape of the pyyaml gap this project already hit once, where a
+    # test passed locally and would have failed on a clean CI install.
+    "scipy>=1.11",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "typer>=0.12",
