@@ -20,6 +20,7 @@ from stocksense.data.adjust import quarantine_unexplained_jumps, read_adjusted_c
 from stocksense.data.liquidity import segment_symbols_by_trading_gap
 from stocksense.data.store import Store
 from stocksense.data.universe_pit import filter_to_point_in_time_universe
+from stocksense.data.vault import VAULT_SEAL_DATE, UnsealToken, apply_seal
 from stocksense.data.validate import quarantine_symbols
 from stocksense.features.engine import build_features, feature_columns
 from stocksense.labels.forward_return import add_forward_return_labels, add_relative_forward_return
@@ -27,7 +28,10 @@ from stocksense.labels.forward_return import add_forward_return_labels, add_rela
 log = structlog.get_logger(__name__)
 
 
-def load_candles(settings, store: Store, turnover_rank_band: tuple[float, float] | None = None) -> pd.DataFrame:
+def load_candles(
+    settings, store: Store, turnover_rank_band: tuple[float, float] | None = None,
+    *, unseal_token: UnsealToken | None = None,
+) -> pd.DataFrame:
     """Source switch (docs/17-data-spine.md, Phase D2): 'candles'
     preserves the exact Phase 0 path (yfinance, fixed 98-symbol
     universe) unchanged, so those numbers stay reproducible. 'bhavcopy'
@@ -44,9 +48,18 @@ def load_candles(settings, store: Store, turnover_rank_band: tuple[float, float]
     e.g. mid/small cap rather than the full point-in-time-tradeable set.
     Ignored (with no effect) when use_point_in_time_universe is False,
     since 'candles'/no-PIT-filter has no notion of a per-date rank band.
+
+    `unseal_token` (Phase K1): WITHOUT one -- the default, and what every
+    research script, the reconcile loop and train_candidate get -- rows dated
+    on or after data/vault.VAULT_SEAL_DATE are DROPPED before returning. That
+    period is the untouched out-of-sample holdout; a search loop that can see
+    it does not have a holdout at all. Obtaining a token requires a committed
+    pre-registration, a registered attempt, and no prior unseal for that
+    hypothesis (data/vault.unseal). This is the single enforcement point
+    precisely because every path already funnels through this function.
     """
     if settings.price_source == "candles":
-        return store.read_candles()
+        return _apply_vault_ceiling(store.read_candles(), unseal_token)
 
     if settings.price_source != "bhavcopy":
         raise ValueError(f"unknown price_source {settings.price_source!r}, expected 'candles' or 'bhavcopy'")
@@ -63,7 +76,28 @@ def load_candles(settings, store: Store, turnover_rank_band: tuple[float, float]
             store, candles, min_turnover_inr=settings.min_avg_daily_turnover_inr, min_price_inr=settings.min_price_inr,
             turnover_rank_band=turnover_rank_band,
         )
-    return candles
+    return _apply_vault_ceiling(candles, unseal_token)
+
+
+def _apply_vault_ceiling(candles: pd.DataFrame, unseal_token: UnsealToken | None) -> pd.DataFrame:
+    """Phase K1. Applied on EVERY return path out of load_candles, not just
+    one, so a future edit that adds another branch cannot silently bypass the
+    seal. An unseal is logged at WARNING rather than INFO -- looking at the
+    holdout is a rare, consequential act and should be visible in any log
+    anyone happens to be reading."""
+    if unseal_token is not None:
+        log.warning(
+            "vault_unsealed", unseal_id=unseal_token.unseal_id,
+            hypothesis_id=unseal_token.hypothesis_id, seal_date=str(VAULT_SEAL_DATE),
+        )
+        return candles
+
+    before = len(candles)
+    kept = apply_seal(candles)
+    dropped = before - len(kept)
+    if dropped:
+        log.info("vault_ceiling_applied", seal_date=str(VAULT_SEAL_DATE), rows_withheld=dropped)
+    return kept
 
 
 def load_features_and_labels(horizon: int, turnover_rank_band: tuple[float, float] | None = None, settings=None, store: Store | None = None):

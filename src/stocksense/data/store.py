@@ -516,6 +516,24 @@ CREATE TABLE IF NOT EXISTS evaluation_attempts (
     UNIQUE (hypothesis_id, holdout_id, preregistration_hash)
 );
 
+-- Phase K1: the sealed vault's audit log. Data from VAULT_SEAL_DATE onward is
+-- unreachable to research code (data/vault.py enforces the ceiling inside
+-- data/loader.py:load_candles, the single choke point every research script,
+-- the reconcile loop and train_candidate already funnel through). Every look
+-- at that holdout lands here, permanently and append-only. One unseal per
+-- hypothesis_id, ever -- looking twice and keeping the better answer is
+-- exactly the selection bias a holdout exists to measure.
+CREATE TABLE IF NOT EXISTS vault_unseals (
+    unseal_id             VARCHAR NOT NULL PRIMARY KEY,
+    attempt_id            VARCHAR NOT NULL,
+    hypothesis_id         VARCHAR NOT NULL,
+    preregistration_path  VARCHAR NOT NULL,
+    preregistration_hash  VARCHAR NOT NULL,
+    requested_at          TIMESTAMP NOT NULL,
+    requested_by          VARCHAR NOT NULL,
+    reason                VARCHAR NOT NULL
+);
+
 -- Phase J1: Angel One SmartAPI read-only sync. `broker_sync_runs` is the
 -- durability/audit record (was this transient or an auth failure? did
 -- reconciliation agree with the FIFO reconstruction?); `broker_holdings`
@@ -1485,6 +1503,28 @@ class Store:
         return self.con.execute(
             "SELECT * FROM broker_positions_snapshot WHERE broker = ? ORDER BY as_of_date DESC, symbol", [broker]
         ).fetchdf()
+
+    # ---- Phase K1: the sealed-vault audit log ----
+
+    def insert_vault_unseal(self, row: dict) -> None:
+        cols = [
+            "unseal_id", "attempt_id", "hypothesis_id", "preregistration_path",
+            "preregistration_hash", "requested_at", "requested_by", "reason",
+        ]
+        self.con.execute(
+            f"INSERT INTO vault_unseals ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            [row.get(c) for c in cols],
+        )
+
+    def read_vault_unseals(self, hypothesis_id: str | None = None) -> pd.DataFrame:
+        """Every look at the holdout, ever. `hypothesis_id` filters to one
+        hypothesis -- which is how data/vault.py enforces its one-unseal rule."""
+        if hypothesis_id is not None:
+            return self.con.execute(
+                "SELECT * FROM vault_unseals WHERE hypothesis_id = ? ORDER BY requested_at",
+                [hypothesis_id],
+            ).fetchdf()
+        return self.con.execute("SELECT * FROM vault_unseals ORDER BY requested_at").fetchdf()
 
     def close(self) -> None:
         self.con.close()

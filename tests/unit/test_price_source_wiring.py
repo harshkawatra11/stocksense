@@ -47,13 +47,19 @@ def test_candles_source_reads_the_candles_table_unchanged(tmp_store, monkeypatch
 def test_bhavcopy_source_routes_through_adjustment_layer(tmp_store, monkeypatch) -> None:
     monkeypatch.setenv("STOCKSENSE_PRICE_SOURCE", "bhavcopy")
     monkeypatch.setenv("STOCKSENSE_RETURN_BASIS", "price")
+    # Phase K1: dates must predate data/vault.VAULT_SEAL_DATE (2025-01-01) --
+    # this test exercises the adjustment-layer routing, not the vault, and
+    # load_candles now withholds anything on/after the seal by default. Using
+    # 2020 dates here (matching this file's other fixtures below) rather than
+    # threading an unseal token through a test that has nothing to do with
+    # the holdout.
     rows = [
-        _bhav_row("SPLITCO", date(2026, 1, 5), close=200.0),
-        _bhav_row("SPLITCO", date(2026, 1, 6), close=100.0, prev_close=200.0),  # ex-date, raw halved
+        _bhav_row("SPLITCO", date(2020, 1, 5), close=200.0),
+        _bhav_row("SPLITCO", date(2020, 1, 6), close=100.0, prev_close=200.0),  # ex-date, raw halved
     ]
     tmp_store.write_bhavcopy_eq(pd.DataFrame(rows))
     tmp_store.write_corporate_actions(pd.DataFrame([{
-        "symbol": "SPLITCO", "ex_date": date(2026, 1, 6), "action_type": "split",
+        "symbol": "SPLITCO", "ex_date": date(2020, 1, 6), "action_type": "split",
         "ratio_num": None, "ratio_den": None, "factor_price": 0.5, "dividend_amount": None,
         "face_before": None, "face_after": None, "subject_raw": "test", "parse_status": "ok",
     }]))
