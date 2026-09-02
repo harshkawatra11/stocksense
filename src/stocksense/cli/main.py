@@ -56,6 +56,79 @@ def doctor() -> None:
             typer.secho(f"  {k:<22} {v}", fg=colour)
 
 
+@app.command("backfill-daily")
+def backfill_daily_cmd(
+    start: str = typer.Option("2010-01-01", help="Start date YYYY-MM-DD"),
+    end: str = typer.Option(None, help="End date YYYY-MM-DD (default: today)"),
+    no_delivery: bool = typer.Option(False, "--no-delivery", help="Skip the delivery-% feed"),
+    no_resume: bool = typer.Option(False, "--no-resume", help="Re-fetch days already recorded ok"),
+) -> None:
+    """Backfill the daily NSE bhavcopy spine (and delivery-%) into the store.
+
+    Genuinely resumable: every day is fetched, written and recorded individually,
+    so interrupting this loses at most the day in flight. Re-running skips days
+    already recorded ok/empty without issuing a request. Fetches are cached to
+    disk, so a replay is fast rather than another few hours of network.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from stocksense.core.config import get_settings
+    from stocksense.data.nse_bhavcopy import backfill
+    from stocksense.data.store import Store
+
+    s = get_settings()
+    start_d = _dt.strptime(start, "%Y-%m-%d").date()
+    end_d = _dt.strptime(end, "%Y-%m-%d").date() if end else _date.today()
+
+    typer.echo(f"backfilling {start_d} -> {end_d}")
+    with Store(s.duckdb_path, s.parquet_root) as store:
+        stats = backfill(
+            store,
+            s.data_store / "cache",
+            start_d,
+            end_d,
+            with_delivery=not no_delivery,
+            resume=not no_resume,
+        )
+    typer.echo(
+        f"done: {stats['days_ok']} day(s) ingested, {stats['days_empty']} holiday/empty, "
+        f"{stats['days_failed']} failed, {stats['skipped']} skipped, "
+        f"{stats['rows']:,} rows, {stats['delivery_rows']:,} delivery rows"
+    )
+    if stats["days_failed"]:
+        typer.secho(
+            f"{stats['days_failed']} day(s) failed -- re-run this command to retry just those.",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@app.command("data-status")
+def data_status_cmd() -> None:
+    """What is actually ingested. Read-only: safe while a backfill is running."""
+    from stocksense.core.config import get_settings
+    from stocksense.data.store import Reader
+
+    s = get_settings()
+    with Reader(s.parquet_root) as r:
+        lo, hi = r.bhavcopy_bounds()
+        if lo is None:
+            typer.echo("bhavcopy: EMPTY -- run 'stocksense backfill-daily'")
+            return
+        n = r.sql("SELECT count(*) c FROM {bhavcopy_eq}").c.iloc[0]
+        days = r.sql("SELECT count(DISTINCT date) c FROM {bhavcopy_eq}").c.iloc[0]
+        syms = r.sql("SELECT count(DISTINCT symbol) c FROM {bhavcopy_eq}").c.iloc[0]
+        typer.echo(f"bhavcopy : {n:,} rows | {days:,} trading days | {syms:,} symbols | {lo} -> {hi}")
+        runs = r.ingest_runs(limit=100000)
+        if not runs.empty:
+            counts = runs.status.value_counts().to_dict()
+            typer.echo(f"ingest   : {counts}")
+            failed = runs[runs.status == "failed"]
+            if not failed.empty:
+                typer.secho(f"failed   : {len(failed)} unit(s), e.g. {failed.unit.head(5).tolist()}",
+                            fg=typer.colors.YELLOW)
+
+
 @probe_app.command("network")
 def probe_network() -> None:
     """Q0.1a/Q0.6 -- public IP stability and which data feeds this ISP can reach."""
