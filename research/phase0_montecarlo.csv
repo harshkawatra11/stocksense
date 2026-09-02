@@ -1,2 +1,0 @@
-n_rebalances,n_paths,mean_terminal_return,median_terminal_return,p5_terminal_return,p95_terminal_return,prob_terminal_negative,mean_max_drawdown,p5_max_drawdown,prob_drawdown_worse_than_10pct,prob_drawdown_worse_than_20pct
-132,5000,63.35099363691092,63.350993636910914,63.35099363691086,63.35099363691097,0.0,-0.30165482875061606,-0.38437208281024376,1.0,0.9946
