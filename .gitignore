@@ -29,3 +29,22 @@ Thumbs.db
 # desktop (Electron)
 desktop/node_modules/
 desktop/dist/
+
+# UI reference screen recordings (large binaries, kept locally under docs/reference/ui/)
+*.mp4
+*.mkv
+*.mov
+*.webm
+
+# data spine (regenerable via the backfill CLI)
+data_store/
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# probe outputs may contain account identifiers
+research/probes/*.local.md
+
+# node
+node_modules/
+dist/
