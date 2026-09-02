@@ -67,6 +67,12 @@ _HEADERS = {
 # blocked after ten minutes.
 POLITE_DELAY_S = 0.35
 
+# Bounded in-run retry for transient network failures. 3 attempts with
+# 2s/4s backoff absorbs a read timeout without turning one flaky second into
+# a permanent hole that only a whole re-run repairs.
+_MAX_FETCH_ATTEMPTS = 3
+_BACKOFF_BASE_S = 2.0
+
 # Normalised output schema. Everything downstream depends on exactly these names.
 CANON_COLS = [
     "symbol", "series", "date", "open", "high", "low", "close",
@@ -128,11 +134,35 @@ def _cached_or_fetch(cache_root: Path, kind: str, d: date, url: str, ext: str) -
     if path.exists():
         return path.read_bytes()
 
-    resp = requests.get(url, headers=_HEADERS, timeout=45)
-    time.sleep(POLITE_DELAY_S)
-    if resp.status_code == 404:
-        return None
-    resp.raise_for_status()
+    # Self-recovery: a read timeout or a 5xx is transient and must not cost the
+    # whole day. Retry with exponential backoff, but ONLY on transient classes --
+    # a 404 is a definitive "market holiday" and retrying it just wastes the
+    # politeness budget. Observed in a real backfill: exactly one day in ~330
+    # hit `ReadTimeout ... read timeout=45`, which this now absorbs.
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
+        try:
+            resp = requests.get(url, headers=_HEADERS, timeout=45)
+            time.sleep(POLITE_DELAY_S)
+            if resp.status_code == 404:
+                return None
+            if resp.status_code >= 500:
+                raise requests.HTTPError(f"HTTP {resp.status_code} from {url}")
+            resp.raise_for_status()
+            break
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
+            last_exc = exc
+            if attempt == _MAX_FETCH_ATTEMPTS:
+                raise
+            backoff = _BACKOFF_BASE_S * (2 ** (attempt - 1))
+            log_line = (
+                f"    retry {attempt}/{_MAX_FETCH_ATTEMPTS - 1} for {kind} {d} "
+                f"after {type(exc).__name__} -- backing off {backoff:.1f}s"
+            )
+            print(log_line, flush=True)
+            time.sleep(backoff)
+    else:  # pragma: no cover - the loop always breaks or raises
+        raise last_exc  # type: ignore[misc]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".{uuid.uuid4().hex}.tmp")

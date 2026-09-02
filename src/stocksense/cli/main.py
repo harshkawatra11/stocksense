@@ -119,14 +119,32 @@ def data_status_cmd() -> None:
         days = r.sql("SELECT count(DISTINCT date) c FROM {bhavcopy_eq}").c.iloc[0]
         syms = r.sql("SELECT count(DISTINCT symbol) c FROM {bhavcopy_eq}").c.iloc[0]
         typer.echo(f"bhavcopy : {n:,} rows | {days:,} trading days | {syms:,} symbols | {lo} -> {hi}")
-        runs = r.ingest_runs(limit=100000)
+        # ingest_runs is an APPEND-ONLY attempt log -- one row per attempt, so a
+        # unit that failed and was later repaired has BOTH rows. Counting rows
+        # naively reports long-fixed failures forever, which is a monitor that
+        # cries wolf. Report the LATEST status per unit instead, and show the
+        # retry history separately.
+        runs = r.ingest_runs(limit=1_000_000)
         if not runs.empty:
-            counts = runs.status.value_counts().to_dict()
-            typer.echo(f"ingest   : {counts}")
-            failed = runs[runs.status == "failed"]
-            if not failed.empty:
-                typer.secho(f"failed   : {len(failed)} unit(s), e.g. {failed.unit.head(5).tolist()}",
-                            fg=typer.colors.YELLOW)
+            latest = (
+                runs.sort_values("started_at")
+                .groupby(["source", "unit"], as_index=False)
+                .last()
+            )
+            typer.echo(f"units    : {latest.status.value_counts().to_dict()}")
+            retried = len(runs) - len(latest)
+            if retried:
+                typer.echo(f"retries  : {retried} superseded attempt(s) in the log")
+            still_failing = latest[latest.status == "failed"]
+            if not still_failing.empty:
+                typer.secho(
+                    f"FAILING  : {len(still_failing)} unit(s) still unresolved, "
+                    f"e.g. {still_failing.unit.head(5).tolist()} "
+                    f"-- re-run backfill-daily to retry just those.",
+                    fg=typer.colors.YELLOW,
+                )
+            else:
+                typer.secho("failing  : none", fg=typer.colors.GREEN)
 
 
 @probe_app.command("network")

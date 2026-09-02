@@ -283,3 +283,78 @@ def test_ingest_telemetry_is_visible_to_readers_during_a_long_run(fake_net, tmp_
         assert set(runs.status) <= {"ok", "empty", "failed"}
     finally:
         store.close()
+
+
+# ------------------------------------------------------------- self-recovery
+def test_a_transient_timeout_is_retried_and_recovers(monkeypatch, tmp_path):
+    """Observed in a real backfill: one day in ~330 hit a 45s ReadTimeout.
+
+    That is transient, so it must be absorbed in-run rather than left as a hole
+    that only a whole re-run repairs.
+    """
+    import requests
+
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        content = _zip_bytes("cm.csv", _LEGACY_CSV)
+
+        def raise_for_status(self):
+            return None
+
+    def flaky(url, headers=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise requests.Timeout("read timed out")
+        return _Resp()
+
+    monkeypatch.setattr(nb.requests, "get", flaky)
+    monkeypatch.setattr(nb.time, "sleep", lambda *_: None)  # no real backoff in tests
+
+    df = nb.fetch_day(tmp_path, date(2020, 1, 1))
+    assert calls["n"] == 3, "should have retried twice then succeeded"
+    assert len(df) == 2
+
+
+def test_a_404_is_not_retried(monkeypatch, tmp_path):
+    """A 404 is NSE saying "market holiday" -- definitive, not transient.
+    Retrying it wastes the politeness budget on every holiday in 16 years."""
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 404
+        content = b""
+
+        def raise_for_status(self):
+            return None
+
+    def counted(url, headers=None, timeout=None):
+        calls["n"] += 1
+        return _Resp()
+
+    monkeypatch.setattr(nb.requests, "get", counted)
+    monkeypatch.setattr(nb.time, "sleep", lambda *_: None)
+
+    assert nb.fetch_day(tmp_path, date(2026, 8, 15)) is None
+    assert calls["n"] == 1, "a holiday must not be retried"
+
+
+def test_persistent_failure_still_gives_up_and_is_recorded(monkeypatch, tmp_path):
+    """Retry must be BOUNDED. A genuinely dead endpoint has to surface as a
+    recorded failure, not an infinite loop."""
+    import requests
+
+    calls = {"n": 0}
+
+    def always_dead(url, headers=None, timeout=None):
+        calls["n"] += 1
+        raise requests.ConnectionError("nse is down")
+
+    monkeypatch.setattr(nb.requests, "get", always_dead)
+    monkeypatch.setattr(nb.time, "sleep", lambda *_: None)
+
+    with Store(tmp_path / "h.duckdb", tmp_path / "pq") as s:
+        stats = nb.backfill(s, tmp_path, date(2020, 1, 1), date(2020, 1, 1), progress=False)
+    assert stats["days_failed"] == 1
+    assert calls["n"] == nb._MAX_FETCH_ATTEMPTS
