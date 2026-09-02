@@ -228,3 +228,39 @@ def test_time_column_dtype_is_stable_across_ingest_and_reload(paths):
         lo, hi = r.bhavcopy_bounds()
         assert isinstance(lo, date) and not isinstance(lo, pd.Timestamp)
         assert (lo, hi) == (date(2026, 8, 28), date(2026, 8, 28))
+
+
+def test_a_second_writer_gets_an_actionable_error(tmp_path):
+    """DuckDB's raw message is "The process cannot access the file because it is
+    being used by another process", which reads like corruption rather than the
+    intended single-writer design. The previous build lost real time to exactly
+    that. StoreLocked says what happened and what to do about it.
+    """
+    from stocksense.data.store import StoreLocked
+
+    db, pq = tmp_path / "hot.duckdb", tmp_path / "parquet"
+    flag = tmp_path / "writer_up.flag"
+    script = tmp_path / "writer.py"
+    script.write_text(_WRITER_SRC, encoding="utf-8")
+
+    writer = subprocess.Popen([sys.executable, str(script), str(db), str(pq), str(flag)])
+    try:
+        deadline = datetime.now() + timedelta(seconds=45)
+        while not flag.exists() and datetime.now() < deadline:
+            if writer.poll() is not None:
+                pytest.fail("writer exited before signalling readiness")
+        assert flag.exists()
+
+        with pytest.raises(StoreLocked) as err:
+            Store(db, pq)
+        msg = str(err.value)
+        assert "BY DESIGN" in msg
+        assert "resumable" in msg
+        assert "Reads are never blocked" in msg
+
+        # and the promise in that message must actually hold
+        with Reader(pq) as r:
+            assert len(r.bhavcopy_eq()) == 1
+    finally:
+        writer.kill()
+        writer.wait(timeout=30)

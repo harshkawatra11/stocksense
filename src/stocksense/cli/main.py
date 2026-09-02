@@ -75,14 +75,19 @@ def backfill_daily_cmd(
 
     from stocksense.core.config import get_settings
     from stocksense.data.nse_bhavcopy import backfill
-    from stocksense.data.store import Store
+    from stocksense.data.store import Store, StoreLocked
 
     s = get_settings()
     start_d = _dt.strptime(start, "%Y-%m-%d").date()
     end_d = _dt.strptime(end, "%Y-%m-%d").date() if end else _date.today()
 
     typer.echo(f"backfilling {start_d} -> {end_d}")
-    with Store(s.duckdb_path, s.parquet_root) as store:
+    try:
+        store_cm = Store(s.duckdb_path, s.parquet_root)
+    except StoreLocked as exc:
+        typer.secho(str(exc), fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1) from None
+    with store_cm as store:
         stats = backfill(
             store,
             s.data_store / "cache",
@@ -119,14 +124,19 @@ def backfill_ca_cmd(
 
     from stocksense.core.config import get_settings
     from stocksense.data.corporate_actions import backfill
-    from stocksense.data.store import Store
+    from stocksense.data.store import Store, StoreLocked
 
     s = get_settings()
     start_d = _dt.strptime(start, "%Y-%m-%d").date()
     end_d = _dt.strptime(end, "%Y-%m-%d").date() if end else _date.today()
 
     typer.echo(f"backfilling corporate actions {start_d} -> {end_d}")
-    with Store(s.duckdb_path, s.parquet_root) as store:
+    try:
+        store_cm = Store(s.duckdb_path, s.parquet_root)
+    except StoreLocked as exc:
+        typer.secho(str(exc), fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1) from None
+    with store_cm as store:
         stats = backfill(store, s.data_store / "cache" / "corpact", start_d, end_d,
                          resume=not no_resume)
     typer.echo(

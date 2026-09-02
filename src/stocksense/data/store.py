@@ -115,6 +115,34 @@ def _partition_key(values: pd.Series) -> pd.Series:
     return pd.to_datetime(values).dt.strftime("%Y-%m")
 
 
+class StoreLocked(RuntimeError):
+    """Another process already holds the single write lock.
+
+    Raised instead of DuckDB's raw IOException, which says "The process cannot
+    access the file because it is being used by another process" and leaves the
+    reader to work out that this is by design, not corruption. The previous build
+    wasted real time on exactly that message.
+    """
+
+
+def _raise_if_locked(exc: Exception, path: Path) -> None:
+    text = str(exc)
+    if "already open" not in text and "being used by another process" not in text:
+        return
+    pid = ""
+    for token in text.replace("(", " ").replace(")", " ").split():
+        if token.isdigit() and len(token) >= 3:
+            pid = f" (PID {token})"
+    raise StoreLocked(
+        f"another StockSense writer already holds {path.name}{pid}.\n"
+        "This is BY DESIGN: exactly one process may write at a time.\n"
+        "  - Wait for the running job (check with: stocksense data-status), or\n"
+        "  - stop it, then re-run -- every backfill is resumable and loses nothing.\n"
+        "Reads are never blocked: data-status and the API use the lock-free "
+        "Parquet Reader and work fine right now."
+    ) from exc
+
+
 class Store:
     """The single writer. Nothing else may open the DuckDB file.
 
@@ -127,7 +155,11 @@ class Store:
         self.parquet_root = Path(parquet_root)
         self.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
         self.parquet_root.mkdir(parents=True, exist_ok=True)
-        self.con = duckdb.connect(str(self.duckdb_path))
+        try:
+            self.con = duckdb.connect(str(self.duckdb_path))
+        except Exception as exc:
+            _raise_if_locked(exc, self.duckdb_path)
+            raise
         self.con.execute(SCHEMA)
 
     # -------------------------------------------------------------- bulk I/O
