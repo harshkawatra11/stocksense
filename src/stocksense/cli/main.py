@@ -103,6 +103,39 @@ def backfill_daily_cmd(
         )
 
 
+@app.command("backfill-corporate-actions")
+def backfill_ca_cmd(
+    start: str = typer.Option("2010-01-01", help="Start date YYYY-MM-DD"),
+    end: str = typer.Option(None, help="End date YYYY-MM-DD (default: today)"),
+    no_resume: bool = typer.Option(False, "--no-resume", help="Re-fetch windows already recorded ok"),
+) -> None:
+    """Backfill NSE corporate actions (splits, bonuses, dividends).
+
+    Nothing downstream is valid without these: bhavcopy carries RAW prices, so a
+    1:10 split reads as a 90% crash unless it is adjusted away.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _dt
+
+    from stocksense.core.config import get_settings
+    from stocksense.data.corporate_actions import backfill
+    from stocksense.data.store import Store
+
+    s = get_settings()
+    start_d = _dt.strptime(start, "%Y-%m-%d").date()
+    end_d = _dt.strptime(end, "%Y-%m-%d").date() if end else _date.today()
+
+    typer.echo(f"backfilling corporate actions {start_d} -> {end_d}")
+    with Store(s.duckdb_path, s.parquet_root) as store:
+        stats = backfill(store, s.data_store / "cache" / "corpact", start_d, end_d,
+                         resume=not no_resume)
+    typer.echo(
+        f"done: {stats['actions']:,} action(s) across {stats['windows_ok']} window(s), "
+        f"{stats['unparsed']:,} unparsed, {stats['windows_failed']} failed, "
+        f"{stats['skipped']} skipped"
+    )
+
+
 @app.command("data-status")
 def data_status_cmd() -> None:
     """What is actually ingested. Read-only: safe while a backfill is running."""
