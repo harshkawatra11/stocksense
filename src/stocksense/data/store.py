@@ -80,6 +80,37 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
     error        VARCHAR
 );
 CREATE INDEX IF NOT EXISTS ix_ingest_runs_source_unit ON ingest_runs (source, unit);
+
+-- One row per unseal of evaluation.vault's sealed holdout. A hypothesis may
+-- appear at most once -- that is what makes the vault a holdout rather than a
+-- slower test set, and it is enforced in evaluation/vault.py, not here.
+CREATE TABLE IF NOT EXISTS vault_unseals (
+    unseal_id              VARCHAR   NOT NULL PRIMARY KEY,
+    attempt_id             VARCHAR   NOT NULL,
+    hypothesis_id          VARCHAR   NOT NULL,
+    preregistration_path   VARCHAR   NOT NULL,
+    preregistration_sha256 VARCHAR   NOT NULL,
+    issued_at              TIMESTAMP NOT NULL,
+    requested_by           VARCHAR   NOT NULL,
+    reason                 VARCHAR   NOT NULL
+);
+
+-- Append-only. EVERY evaluated strategy configuration registers here, not just
+-- the survivors -- that count IS the n_trials fed to
+-- evaluation.robustness.deflated_sharpe_ratio, which is what makes a wider
+-- search sweep raise its own bar instead of gaming itself.
+CREATE TABLE IF NOT EXISTS evaluation_attempts (
+    attempt_id    VARCHAR   NOT NULL PRIMARY KEY,
+    hypothesis_id VARCHAR   NOT NULL,
+    family        VARCHAR   NOT NULL,
+    config_hash   VARCHAR   NOT NULL,
+    config_json   VARCHAR   NOT NULL,
+    registered_at TIMESTAMP NOT NULL,
+    verdict       VARCHAR,
+    fail_reason   VARCHAR,
+    metrics_json  VARCHAR,
+    UNIQUE (hypothesis_id, config_hash)
+);
 """
 
 # ---------------------------------------------------------------- bulk datasets
@@ -108,7 +139,7 @@ BULK_SCHEMAS: dict[str, dict[str, Any]] = {
     },
 }
 
-SMALL_TABLES = ("corporate_actions", "ingest_runs")
+SMALL_TABLES = ("corporate_actions", "ingest_runs", "vault_unseals", "evaluation_attempts")
 
 
 def _partition_key(values: pd.Series) -> pd.Series:
@@ -263,6 +294,34 @@ class Store:
             [row.get(c) for c in self.INGEST_COLS],
         )
 
+    VAULT_UNSEAL_COLS = [
+        "unseal_id", "attempt_id", "hypothesis_id", "preregistration_path",
+        "preregistration_sha256", "issued_at", "requested_by", "reason",
+    ]
+
+    def record_vault_unseal(self, row: dict[str, Any]) -> None:
+        """Append-only: a hypothesis_id must never appear twice. That
+        uniqueness is enforced by the caller (evaluation.vault.unseal) BEFORE
+        this is called, by checking `vault_unseals_for` first -- there is no
+        UNIQUE constraint on hypothesis_id here because the same hypothesis
+        legitimately failing to unseal (and retrying the check) must not
+        collide with a real row."""
+        self.con.execute(
+            f"INSERT INTO vault_unseals ({', '.join(self.VAULT_UNSEAL_COLS)}) "
+            f"VALUES ({', '.join(['?'] * len(self.VAULT_UNSEAL_COLS))})",
+            [row.get(c) for c in self.VAULT_UNSEAL_COLS],
+        )
+
+    def vault_unseals_for(self, hypothesis_id: str) -> int:
+        """Count of prior unseals for this hypothesis. Queried against the
+        DuckDB table directly (not Parquet) because this check happens inside
+        the same write transaction that is about to insert the new row --
+        querying the writer's own uncommitted view, not a stale Parquet
+        snapshot from the last publish()."""
+        return self.con.execute(
+            "SELECT count(*) FROM vault_unseals WHERE hypothesis_id = ?", [hypothesis_id]
+        ).fetchone()[0]
+
     def completed_units(self, source: str) -> set[str]:
         """Units already ingested successfully -- the basis of resumability.
 
@@ -402,6 +461,16 @@ class Reader:
         if not self.exists("ingest_runs"):
             return pd.DataFrame(columns=Store.INGEST_COLS)
         return self.sql(f"SELECT * FROM {{ingest_runs}} ORDER BY started_at DESC LIMIT {int(limit)}")
+
+    def vault_unseals(self, hypothesis_id: str | None = None) -> pd.DataFrame:
+        if not self.exists("vault_unseals"):
+            return pd.DataFrame(columns=Store.VAULT_UNSEAL_COLS)
+        sql = "SELECT * FROM {vault_unseals}"
+        params: list[Any] = []
+        if hypothesis_id:
+            sql += " WHERE hypothesis_id = ?"
+            params.append(hypothesis_id)
+        return self.sql(sql + " ORDER BY issued_at", params)
 
     def close(self) -> None:
         self.con.close()
