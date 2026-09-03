@@ -67,11 +67,14 @@ _HEADERS = {
 # blocked after ten minutes.
 POLITE_DELAY_S = 0.35
 
-# Bounded in-run retry for transient network failures. 3 attempts with
-# 2s/4s backoff absorbs a read timeout without turning one flaky second into
-# a permanent hole that only a whole re-run repairs.
-_MAX_FETCH_ATTEMPTS = 3
-_BACKOFF_BASE_S = 2.0
+# Bounded in-run retry for transient network failures. Widened after a real
+# backfill hit a DNS-resolution outage that killed 285 CONSECUTIVE days --
+# the original 3 attempts / 2s+4s backoff (~6s span) could absorb one flaky
+# request but not a multi-minute connectivity drop. 5 attempts with
+# 3/6/12/24/48s backoff spans ~93s before giving up, which is what a home-ISP
+# blip actually needs.
+_MAX_FETCH_ATTEMPTS = 5
+_BACKOFF_BASE_S = 3.0
 
 # Normalised output schema. Everything downstream depends on exactly these names.
 CANON_COLS = [

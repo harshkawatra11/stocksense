@@ -329,8 +329,22 @@ class Reader:
         return d.is_dir() and any(d.glob("*.parquet"))
 
     def sql(self, query: str, params: list[Any] | None = None) -> pd.DataFrame:
-        """Run arbitrary SQL. Use `{dataset}` placeholders for Parquet globs."""
-        for name in list(BULK_SCHEMAS) + list(SMALL_TABLES):
+        """Run arbitrary SQL. Use `{dataset}` placeholders for Parquet globs.
+
+        On a store with no data yet, `read_parquet` on a glob matching nothing
+        raises IOException rather than returning zero rows -- DuckDB has no
+        schema to build an empty result from. Every caller of this method
+        would otherwise need its own `exists()` guard before every query, and
+        every future caller would rediscover the same bug. Guarded once, here:
+        if the query touches ONLY placeholder datasets and any of them is
+        missing, short-circuit to an empty frame rather than raising. The app
+        must open and be usable before the first backfill has ever run.
+        """
+        referenced = [name for name in list(BULK_SCHEMAS) + list(SMALL_TABLES)
+                      if f"{{{name}}}" in query]
+        if referenced and any(not self.exists(name) for name in referenced):
+            return pd.DataFrame()
+        for name in referenced:
             query = query.replace(f"{{{name}}}", f"read_parquet('{self._glob(name)}')")
         return self.con.execute(query, params or []).fetchdf()
 

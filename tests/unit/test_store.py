@@ -264,3 +264,35 @@ def test_a_second_writer_gets_an_actionable_error(tmp_path):
     finally:
         writer.kill()
         writer.wait(timeout=30)
+
+
+# ------------------------------------------------ Reader.sql() on empty data
+def test_sql_on_a_dataset_with_no_data_yet_returns_empty_not_raises(paths):
+    """Regression, found while building universe_pit.py: DuckDB's read_parquet
+    on a glob matching nothing raises IOException rather than returning zero
+    rows, because it has no schema to build an empty result from. Every direct
+    SQL caller would otherwise need its own exists() guard before every query
+    -- guarded once here instead. The app must open and be usable before the
+    first backfill has ever run."""
+    _, pq = paths
+    with Reader(pq) as r:
+        out = r.sql("SELECT * FROM {bhavcopy_eq} WHERE symbol = ?", ["X"])
+        assert out.empty
+
+
+def test_sql_still_works_normally_once_data_exists(paths):
+    db, pq = paths
+    with Store(db, pq) as s:
+        s.write_bhavcopy_eq(pd.DataFrame([_bhav_row("RELIANCE", date(2026, 8, 28))]))
+    with Reader(pq) as r:
+        out = r.sql("SELECT symbol FROM {bhavcopy_eq}")
+        assert list(out.symbol) == ["RELIANCE"]
+
+
+def test_sql_with_no_dataset_placeholder_is_unaffected(paths):
+    """A query touching no {dataset} placeholder must not be short-circuited
+    by the empty-data guard -- e.g. a literal SELECT."""
+    _, pq = paths
+    with Reader(pq) as r:
+        out = r.sql("SELECT 1 AS one")
+        assert out.iloc[0].one == 1

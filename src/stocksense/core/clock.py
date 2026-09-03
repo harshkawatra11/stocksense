@@ -50,15 +50,28 @@ def in_session(ts: datetime | None = None) -> bool:
     return SESSION_OPEN <= ts.timetz().replace(tzinfo=None) <= SESSION_CLOSE
 
 
-def trading_days(store, start: date, end: date) -> list[date]:
+def trading_days(reader, start: date, end: date) -> list[date]:
     """The REAL trading calendar, read from ingested bhavcopy dates.
 
     Deliberately derived from data rather than from a holiday list: a hardcoded
     holiday table drifts and is wrong for exactly the historical dates research
     depends on. If bhavcopy has rows for a date, the market traded that date.
+
+    Takes a lock-free `data.store.Reader`, not a `Store` -- this is a pure read
+    and must never compete for the single write lock. `bhavcopy_eq` is a
+    partitioned Parquet dataset, not a live DuckDB table, so the query goes
+    through `Reader.sql()`'s `{bhavcopy_eq}` placeholder rather than a raw
+    table reference.
+
+    Returns [] on a store with no data yet, rather than raising -- the app
+    must open and be usable before the first backfill has run.
     """
-    rows = store.con.execute(
-        "SELECT DISTINCT date FROM bhavcopy_eq WHERE date BETWEEN ? AND ? ORDER BY date",
+    if not reader.exists("bhavcopy_eq"):
+        return []
+    df = reader.sql(
+        "SELECT DISTINCT date FROM {bhavcopy_eq} WHERE date BETWEEN ? AND ? ORDER BY date",
         [start, end],
-    ).fetchall()
-    return [r[0] for r in rows]
+    )
+    if df.empty:
+        return []
+    return [d.date() if hasattr(d, "date") else d for d in df["date"]]
