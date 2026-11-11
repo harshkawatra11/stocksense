@@ -31,7 +31,7 @@ def eq_rows(
     opens: list[float] | None = None,
     prev_closes: list[float | None] | None = None,
     series: str | list[str] = "EQ",
-    volume: int = 100_000,
+    volume: int | list[int] = 100_000,
     isin: str | None = None,
     name: str | None = None,
 ) -> pl.DataFrame:
@@ -41,6 +41,7 @@ def eq_rows(
     if prev_closes is None:
         prev_closes = [opens[0]] + list(closes[:-1])
     ser = series if isinstance(series, list) else [series] * n
+    vols = volume if isinstance(volume, list) else [volume] * n
     return pl.DataFrame(
         {
             "symbol": [symbol] * n,
@@ -52,8 +53,8 @@ def eq_rows(
             "close": [float(x) for x in closes],
             "prev_close": prev_closes,
             "last_price": [float(x) for x in closes],
-            "volume": [volume] * n,
-            "turnover_inr": [volume * c for c in closes],
+            "volume": vols,
+            "turnover_inr": [v * c for v, c in zip(vols, closes, strict=True)],
             "n_trades": [100.0] * n,
             "era": ["legacy"] * n,
             "isin": [isin] * n,
