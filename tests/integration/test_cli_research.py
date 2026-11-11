@@ -83,3 +83,16 @@ def test_named_specs_cover_floors_and_need_selection_for_gbm(tmp_data_root, monk
     s = cli_research.named_specs(tmp_data_root)["gbm-y_oc-regression"]
     assert s.universe == "u200" and s.entry == "open" and s.params["auction"] is True
     assert s.params["num_leaves"] == 15 and s.params["objective"] == "regression" and s.family == "s2-gbm"
+
+
+def test_trial_report_markdown(world):
+    _run(world, "train", "--spec", "t-ridge-y_oc", "--seeds", "1", "--folds", FOLDS, "--inner-months", "2")
+    tid = next(
+        ln.split()[0]
+        for ln in _run(world, "research", "wf-status").output.splitlines()
+        if "floor-ridge-y_oc-" in ln
+    )
+    res = _run(world, "research", "trial-report", "--trial", tid)
+    assert res.exit_code == 0, res.output
+    assert "mean IC" in res.output and "decile" in res.output and "| 2019 |" in res.output
+    assert _run(world, "research", "trial-report", "--trial", "nope").exit_code == 2

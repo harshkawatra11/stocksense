@@ -310,6 +310,75 @@ def diagnostics(
         )
 
 
+def trial_markdown(settings: Settings, state: State, trial_id: str) -> str:
+    """Markdown block for one trial: IC by year, decile means of the realised target, parameters and, when
+    `research diagnostics` has run, group gain and the masking ablation."""
+    row = next((r for r in _trials(state, None) if r[0] == trial_id), None)
+    if row is None:
+        raise KeyError(trial_id)
+    _tid, fam, target, _status, spec_json = row
+    spec = json.loads(spec_json)
+    preds = io.read(settings, "preds", sub=trial_id).collect().select("date", "sid", "score")
+    r = oof_report(preds, load_labels(settings, "research", columns=[target]).collect(), target)
+    by = r["by_year"]
+    nd = len(r["deciles"])
+    lines = [
+        f"#### {trial_id}",
+        "",
+        f"family `{fam}`, target `{target}`, universe `{spec['universe']}`, entry `{spec['entry']}`, "
+        f"params `{json.dumps(spec['params'], sort_keys=True)}`",
+        "",
+        f"mean IC {r['mean_ic'] * 100:+.2f}e-2, t {r['ic_tstat']:+.1f}, {r['n_dates']} dates, "
+        f"{sum(v > 0 for v in by.values())}/{len(by)} years positive",
+        "",
+        "| year | " + " | ".join(str(y) for y in by) + " |",
+        "|---|" + "---|" * len(by),
+        "| IC x100 | " + " | ".join(f"{v * 100:+.2f}" for v in by.values()) + " |",
+        "",
+        f"Mean realised {target} (bps) by score decile (0 = lowest score):",
+        "",
+        "| " + " | ".join(str(i) for i in range(nd)) + " |",
+        "|" + "---|" * nd,
+        "| " + " | ".join(f"{d * 1e4:+.1f}" for d in r["deciles"]) + " |",
+        "",
+        f"top minus bottom decile {r['decile_spread'] * 1e4:+.1f} bps, monotonicity {r['monotonicity']:+.2f}",
+    ]
+    dj = Paths(settings).models / "_wf" / trial_id / "diagnostics.json"
+    if dj.is_file():
+        d = json.loads(dj.read_text(encoding="utf-8"))
+        shares = sorted(d["group_gain"].items(), key=lambda kv: -kv[1])
+        lines += ["", "Gain share by feature group: " + ", ".join(f"{g} {v:.3f}" for g, v in shares)]
+        lines += [
+            "",
+            "Top features by gain share: " + ", ".join(f"{n} {v:.3f}" for n, v in d["top_features"][:10]),
+        ]
+        if d["ablation"]:
+            lines += [
+                "",
+                "| group | dates | IC with | IC without (masked) | paired t |",
+                "|---|---|---|---|---|",
+            ]
+            for g, a in d["ablation"].items():
+                lines.append(
+                    f"| {g} | {a['n_dates']} | {a['ic_with'] * 100:+.2f} | {a['ic_without'] * 100:+.2f} "
+                    f"| {a['diff_tstat']:+.1f} |"
+                )
+    return "\n".join(lines)
+
+
+@research_app.command("trial-report")
+def trial_report(ctx: typer.Context, trial: Annotated[str, typer.Option(help="Trial id.")]) -> None:
+    """Markdown report of one trial (for docs/RESULTS-G1.md)."""
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    try:
+        typer.echo(trial_markdown(settings, state, trial))
+    except KeyError as e:
+        typer.echo(f"unknown trial {trial!r}", err=True)
+        raise typer.Exit(2) from e
+
+
 def register(app: typer.Typer) -> None:
     """Hook for cli.py: replace the placeholder train/validate and add the `research` group."""
     app.registered_commands = [
