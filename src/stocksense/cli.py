@@ -252,6 +252,44 @@ def ingest_fo_cmd(
     _echo_summary(results)
 
 
+@ingest_app.command("index")
+def ingest_index_cmd(
+    ctx: typer.Context,
+    to: Annotated[str, typer.Option("--to", help="Last day, YYYY-MM-DD or 'yesterday'.")],
+    from_: Annotated[str | None, typer.Option("--from", help="First day, YYYY-MM-DD.")] = None,
+    backfill: Annotated[
+        bool,
+        typer.Option("--backfill", help="Walk backward from --to until 60 consecutive days have no file."),
+    ] = False,
+    rebuild: Annotated[
+        bool, typer.Option("--rebuild", help="Re-parse every cached file with the current name map first.")
+    ] = False,
+) -> None:
+    """Index values and India VIX for every calendar day in [from, to], or backfill backward from --to."""
+    from stocksense.data.ingest_index import backfill_index, ingest_index_range, rebuild_index_from_cache
+
+    ictx, nse, clock = _ingest_context(ctx)
+    b = _parse_day(to, clock)
+    if not backfill and from_ is None and not rebuild:
+        raise typer.BadParameter("give --from, or --backfill, or --rebuild")
+    try:
+        _backup_dataset(ictx.settings, "india_vix", "t2x")
+        if rebuild:
+            per_day = rebuild_index_from_cache(ictx)
+            typer.echo(f"rebuilt {len(per_day)} cached days")
+        results = []
+        if backfill:
+            results = backfill_index(ictx, b, on_result=_echo_result)
+        elif from_ is not None:
+            results = ingest_index_range(ictx, _parse_day(from_, clock), b, on_result=_echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    ok = sorted(r.date for r in results if r.dataset == "index_daily" and r.status == "ok")
+    if ok:
+        typer.echo(f"index days added: {len(ok)}, {ok[0]} .. {ok[-1]}")
+
+
 @app.command("build-panel")
 def build_panel() -> None:
     """Build the adjusted daily panel."""

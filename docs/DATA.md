@@ -102,3 +102,10 @@ Repair log counts (dataset, status): bhavcopy_eq ok 47, no_session 1,510, not_pu
 
 - 20 random weekday (symbol, date) pairs from the 27 weekday sessions ingested here (seed 11): 20 checked, 0 mismatches within 0.01.
 - Weekend special sessions cannot be checked this way: the server forward-fills non-weekday dates with the previous close (MOM30IETF 2026-11-07 and 2026-11-08 are both 30.4 while the stored Muhurat close is 30.73). The first CLI run sampled weekends and flagged 3 of 18 such pairs; `sample_pairs` now draws weekdays only.
+
+## After T2.4 / T2.5 / T2.7 (2026-11-11)
+
+- `fo_bhavcopy`: rebuilt from the cached files (the adopted table had no expiry and ~40% of the rows): 21,540,909 rows, 2024-07-08 -> 2026-11-09, no missing sessions.
+- `index_daily`: true first date 2012-02-21 (NIFTY 50 close 5607.15); last 2026-11-11 (25255.05); 296,413 rows, 3,575 days.
+- `india_vix`: 4,140 rows, last 2026-11-11.
+- Reference datasets (2026-11-11): holidays 302 (2011-2026), symbol_changes 1,080, listed_equities 2,633, etf_list 360, sectors 754, price_bands 3,612, F&O list 218 symbols.
