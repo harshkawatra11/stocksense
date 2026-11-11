@@ -17,7 +17,6 @@ def test_paths_layout(tmp_data_root):
     assert p.parquet == root / "parquet" and p.state == root / "state" and p.logs == root / "logs"
     assert p.dataset_dir("bhavcopy_eq") == root / "parquet" / "bhavcopy_eq"
     assert p.sqlite == root / "state" / "stocksense.sqlite"
-    assert p.archive == root / "_archive_v1"
 
 
 def test_migrate_creates_tables_and_is_idempotent(tmp_data_root, fixed_clock):

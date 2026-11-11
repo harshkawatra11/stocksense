@@ -252,7 +252,7 @@ class Settings(_Frozen):
     runtime: Runtime
     universe: Universe
     costs: Costs
-    gate: Gate | None  # None until config/gate.toml exists (T1.7)
+    gate: Gate
     strategies: Strategies
     risk: Risk
     schedule: Schedule
@@ -293,6 +293,8 @@ def load_settings(config_dir: Path = Path("config"), env_file: Path = Path(".env
         root = config_dir.resolve().parent / root
     paths["data_root"] = root
     gate_path = config_dir / "gate.toml"
+    if not gate_path.is_file():
+        raise ConfigError(f"gate.toml not found in {config_dir} (it is frozen, see T1.7)")
     sched_path = config_dir / "schedule.toml"
     env: dict[str, str] = {}
     if Path(env_file).is_file():
@@ -306,7 +308,7 @@ def load_settings(config_dir: Path = Path("config"), env_file: Path = Path(".env
         "runtime": default.get("runtime", {}),
         "universe": _read_toml(config_dir / "universe.toml"),
         "costs": _read_toml(config_dir / "costs.toml"),
-        "gate": _read_toml(gate_path) if gate_path.is_file() else None,
+        "gate": _read_toml(gate_path),
         "strategies": _read_toml(config_dir / "strategies.toml"),
         "risk": _read_toml(config_dir / "risk.toml"),
         "schedule": _read_toml(sched_path) if sched_path.is_file() else {},

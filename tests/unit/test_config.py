@@ -102,11 +102,20 @@ def test_wrong_type_raises_config_error_naming_key(clean_env, tmp_path):
     assert "max_gross" in str(e.value)
 
 
-def test_gate_none_when_file_absent(clean_env):
-    # gate.toml is created by T1.7; until then Settings.gate is None
+def test_gate_loaded_from_frozen_file(clean_env):
     s = load_settings(REAL_CONFIG, clean_env)
-    if not (REAL_CONFIG / "gate.toml").exists():
-        assert s.gate is None
+    assert s.gate.research.min_dsr == 0.95 and s.gate.research.max_pbo == 0.30
+    assert s.gate.research.reference_capital_inr == 500000
+    assert s.gate.lockbox.min_net_sharpe == 0.5 and s.gate.paper.min_sessions == 60
+    assert s.gate.promotion.min_shadow_sessions == 20 and s.gate.auction.min_strict_capture == 0.5
+
+
+def test_gate_file_is_required(tmp_path, clean_env):
+    cfg = tmp_path / "config"
+    shutil.copytree(REAL_CONFIG, cfg)
+    (cfg / "gate.toml").unlink()
+    with pytest.raises(ConfigError, match="gate.toml"):
+        load_settings(cfg, clean_env)
 
 
 def test_tmp_data_root_fixture_is_settings(tmp_data_root, tmp_data_dir):

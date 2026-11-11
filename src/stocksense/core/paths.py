@@ -56,10 +56,6 @@ class Paths:
         return self.root / "logs"
 
     @property
-    def archive(self) -> Path:
-        return self.root / "_archive_v1"
-
-    @property
     def sqlite(self) -> Path:
         return self.state / "stocksense.sqlite"
 
