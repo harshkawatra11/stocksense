@@ -23,6 +23,10 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 - T1.1 (2026-11-11): torch resolved from the cu128 index as written; uv picked torch 2.11.0+cu128 (not 2.9.x; the `>=2.9` constraint allows it). CUDA available, RTX 3050 detected. cu126 fallback not needed. hatch wheel target with `third_party/kronos` resolved and built without issue.
 - T1.1 (2026-11-11): `cli.py` has a `@app.callback()` so the placeholder `version` stays a subcommand (a single-command typer app otherwise collapses it); T1.x will add real commands.
+- T1.2 (2026-11-11): `config/gate.toml` is not created here (T1.7 freezes it). `Settings.gate` is `Gate | None`; `load_settings` loads it only if the file exists, otherwise None. T1.7 should make it required. `python-dotenv` added to pyproject explicitly (it is a pydantic-settings dependency, used to read `.env` so that empty values can be skipped for "first non-empty wins").
+- T1.2 (2026-11-11): `Settings` also carries a `schedule` model (only `special_sessions` for now, extra keys allowed) so the calendar needs no separate config read; relative `data_root` is resolved against the parent of the config directory.
+- T1.2 (2026-11-11): conftest `tmp_data_root` now returns a `Settings`; the raw `Path` is the new fixture `tmp_data_dir`.
+- T1.4 (2026-11-11): old `bhavcopy_eq` partitions mix timestamp units (ms and us), so `scan_parquet` over a glob fails with a SchemaError; the calendar reads the `date` column file by file (private helper, TODO T1.6 to move to `data/io.py`). The holidays dataset does not exist yet; `from_store` logs one warning and treats future weekdays as sessions. `config/schedule.toml` is a stub with `special_sessions = []` (T10.4 completes it).
 
 ## Phase 2
 
