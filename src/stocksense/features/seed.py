@@ -9,18 +9,6 @@ from stocksense.features.base import FeatureContext, feature, log_ret, roll_std
 
 
 @feature(
-    "ret_1",
-    group="price",
-    kind="xs",
-    window=1,
-    label="Yesterday's total price move (log return, adjusted for splits and bonuses).",
-)
-def ret_1(ctx: FeatureContext) -> pl.LazyFrame:
-    """Adjusted log return of the session, ln(1 + ret)."""
-    return ctx.panel().select("date", "sid", log_ret("ret").alias("ret_1"))
-
-
-@feature(
     "vol_21",
     group="risk",
     kind="xs",

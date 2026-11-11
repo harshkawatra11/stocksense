@@ -19,6 +19,7 @@ from stocksense.features.base import (
     log_ret,
     roll_cov,
     roll_max,
+    roll_mean,
     roll_min,
     roll_slope_r2,
     roll_std,
@@ -142,9 +143,122 @@ _A: dict[str, tuple[Callable[[], pl.Expr], int, str]] = {
     ),
 }
 
-# ---- T4.3b builders (filled in with T4.3b) -----------------------------------------------------
+# ---- T4.3b builders -----------------------------------------------------------------------------
 
-_B: dict[str, tuple[Callable[[], pl.Expr], int, str]] = {}
+
+def ret_1() -> pl.Expr:
+    return pl.col("la")
+
+
+def wilder(x: str | pl.Expr, n: int) -> pl.Expr:
+    """Wilder smoothing of x (first valid value at row 1 of each sid): the first average is the simple mean
+    of the first n values (row n), then avg = (prev * (n - 1) + x) / n, via ewm_mean(alpha=1/n, adjust=False).
+    Null before row n and where the last n + 1 rows span too many sessions."""
+    x = pl.col(x) if isinstance(x, str) else x
+    rn = pl.int_range(pl.len()).over("sid")
+    seed = x.rolling_mean(n, min_samples=n).over("sid")
+    y = pl.when(rn == n).then(seed).when(rn > n).then(x)
+    avg = y.ewm_mean(alpha=1.0 / n, adjust=False, ignore_nulls=True, min_samples=1).over("sid")
+    return pl.when(span_ok(n + 1)).then(avg)
+
+
+def rsi(n: int) -> pl.Expr:
+    delta = pl.col("adj_close") - pl.col("adj_close").shift(1).over("sid")
+    ag = wilder(delta.clip(lower_bound=0.0), n)
+    al = wilder((-delta).clip(lower_bound=0.0), n)
+    return (
+        pl.when(al == 0.0)
+        .then(pl.when(ag == 0.0).then(50.0).otherwise(100.0))
+        .otherwise(100.0 - 100.0 / (1.0 + ag / al))
+    )
+
+
+def bb_z(w: int) -> pl.Expr:
+    p = pl.col("adj_close")
+    return (p - p.rolling_mean(w, min_samples=w).over("sid")) / roll_std("adj_close", w)
+
+
+def max_ret(w: int) -> pl.Expr:
+    return roll_max("la", w)
+
+
+def min_ret(w: int) -> pl.Expr:
+    return roll_min("la", w)
+
+
+def close_loc() -> pl.Expr:
+    rng = pl.col("adj_high") - pl.col("adj_low")
+    return pl.when(rng > 0).then((pl.col("adj_close") - pl.col("adj_low")) / rng)
+
+
+def close_loc_mean(w: int) -> pl.Expr:
+    return roll_mean(close_loc(), w)
+
+
+def range_pct() -> pl.Expr:
+    return (pl.col("adj_high") - pl.col("adj_low")) / pl.col("adj_close")
+
+
+def nr7(w: int) -> pl.Expr:
+    r = range_pct()
+    m = roll_min(r, w)
+    return pl.when(m.is_null()).then(None).otherwise((r == m).cast(pl.Float64))
+
+
+def inside_day() -> pl.Expr:
+    ph = pl.col("adj_high").shift(1).over("sid")
+    pl_ = pl.col("adj_low").shift(1).over("sid")
+    both = (pl.col("adj_high") <= ph) & (pl.col("adj_low") >= pl_)
+    return pl.when(ph.is_null() | pl_.is_null()).then(None).otherwise(both.cast(pl.Float64))
+
+
+def streak(up: bool, cap: int) -> pl.Expr:
+    """Consecutive rows with la > 0 (up) or la < 0 (down) ending today, capped; 0 on any other day."""
+    la = pl.col("la")
+    cond = (la > 0) if up else (la < 0)
+    hit = cond.fill_null(False)
+    grp = (~hit).cast(pl.Int64).cum_sum().over("sid")
+    run = hit.cast(pl.Int64).cum_sum().over(["sid", grp])
+    return pl.when(la.is_null()).then(None).otherwise(run.clip(upper_bound=cap).cast(pl.Float64))
+
+
+def dist_round() -> pl.Expr:
+    c = pl.col("close")
+    u = pl.lit(10.0).pow(c.log(10.0).floor())
+    return (c - (c / u).round(0) * u).abs() / c
+
+
+_B: dict[str, tuple[Callable[[], pl.Expr], int, str]] = {
+    "ret_1": (ret_1, 1, "Yesterday's total price move (log return, adjusted for splits and bonuses)."),
+    "rsi_14": (
+        lambda: rsi(14),
+        14,
+        "Relative strength index over 14 sessions (0-100; high = recent gains dominate).",
+    ),
+    "bb_z_20": (
+        lambda: bb_z(20),
+        20,
+        "Price in standard deviations from its 20-session average (Bollinger z-score).",
+    ),
+    "max_ret_21": (
+        lambda: max_ret(21),
+        21,
+        "Best single-day return in the last 21 sessions (lottery-like jumps).",
+    ),
+    "min_ret_21": (lambda: min_ret(21), 21, "Worst single-day return in the last 21 sessions."),
+    "close_loc": (close_loc, 1, "Where the day closed in its range (0 = at the low, 1 = at the high)."),
+    "close_loc_5": (
+        lambda: close_loc_mean(5),
+        5,
+        "Average of the closing position in the day's range over 5 sessions.",
+    ),
+    "range_pct": (range_pct, 1, "The day's high-low range as a fraction of the close."),
+    "nr7": (lambda: nr7(7), 7, "1 if today's range is the narrowest of the last 7 sessions, else 0."),
+    "inside_day": (inside_day, 2, "1 if today's high and low sit inside yesterday's range, else 0."),
+    "up_streak": (lambda: streak(True, 10), 10, "Number of consecutive up days ending today (max 10)."),
+    "down_streak": (lambda: streak(False, 10), 10, "Number of consecutive down days ending today (max 10)."),
+    "dist_round": (dist_round, 1, "How far the close is from the nearest round price level, as a fraction."),
+}
 
 SPECS = {**_A, **_B}
 
