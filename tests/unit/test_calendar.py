@@ -151,8 +151,8 @@ def test_real_store_calendar():
 
     s = load_settings()
     cal = TradingCalendar.from_store(s, FixedClock(datetime(2026, 11, 12, 10, 0, tzinfo=IST)))
-    # PLAN B.2: 4,135 sessions, 2010-01-04 .. 2026-09-29
-    assert cal.session_index(date(2026, 9, 29)) == 4134
+    # after T2.3 (19 special sessions added before 2026-09-29): 4,135 + 19 = 4,154 sessions up to 2026-09-29
+    assert cal.session_index(date(2026, 9, 29)) == 4153
     assert cal.sessions(date(2010, 1, 1), date(2026, 9, 29))[0] == date(2010, 1, 4)
-    assert len(cal.sessions(date(2010, 1, 1), date(2026, 9, 29))) == 4135
+    assert len(cal.sessions(date(2010, 1, 1), date(2026, 9, 29))) == 4154
     assert not cal.is_session(date(2026, 1, 26))  # Republic Day

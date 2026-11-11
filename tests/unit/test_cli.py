@@ -75,3 +75,10 @@ def test_unimplemented_commands_exit_2(tmp_data_root, cmd, phase):
 
 def test_version_still_works():
     assert runner.invoke(app, ["version"]).exit_code == 0
+
+
+def test_ingest_eq_is_a_real_subcommand_and_bare_ingest_stays_stubbed(tmp_data_root):
+    assert runner.invoke(app, ["ingest", "eq", "--help"], obj=tmp_data_root).exit_code == 0
+    assert runner.invoke(app, ["ingest"], obj=tmp_data_root).exit_code == 2
+    res = runner.invoke(app, ["ingest", "eq", "--from", "2020-01-01", "--to", "nonsense"], obj=tmp_data_root)
+    assert res.exit_code != 0
