@@ -26,7 +26,7 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_data_root, fixed_clock):
     con = st.connect()
     names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"job_runs", "kv", "schema_version"} <= names
-    assert [r[0] for r in con.execute("SELECT version FROM schema_version")] == [1]
+    assert [r[0] for r in con.execute("SELECT version FROM schema_version")] == [1, 2]
     assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
