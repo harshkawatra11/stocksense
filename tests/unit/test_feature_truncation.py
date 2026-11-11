@@ -7,12 +7,14 @@ once per session; each feature is computed once on the full context and once per
 
 from __future__ import annotations
 
-from datetime import date
+import math
+from datetime import date, datetime, timedelta
 
 import polars as pl
 import pytest
 
 from stocksense import panel as panel_pkg
+from stocksense.core.clock import IST
 from stocksense.data import io
 from stocksense.features.base import FeatureContext, FeatureSpec, feature
 from stocksense.features.registry import load_all
@@ -25,6 +27,174 @@ TOL = 1e-9
 REGISTRY = load_all()
 
 
+def _add_market_raw(s, sessions) -> None:
+    """Small synthetic VIX / index / macro / flow datasets so the market features are non-trivial."""
+    n = len(sessions)
+    wave = [math.sin(i / 9.0) for i in range(n)]
+    io.upsert(s, "india_vix", pl.DataFrame({"date": sessions, "close": [15 + 5 * w for w in wave]}))
+    ix = pl.DataFrame(
+        {
+            "index_name": ["NIFTY 50"] * n,
+            "date": sessions,
+            "close": [10000 + 3 * i for i in range(n)],
+            "pe": [20 + 3 * w for w in wave],
+        }
+    )
+    io.upsert(s, "index_daily", ix)
+    rows = []
+    for name, base, hours in (("USDINR", 70.0, 17), ("SPX", 2700.0, 29.5)):
+        for i, d in enumerate(sessions):
+            ts = datetime.combine(d, datetime.min.time(), tzinfo=IST) + timedelta(hours=hours)
+            rows.append((name, d, base * (1 + 0.1 * wave[i]), ts))
+    io.upsert(
+        s, "macro_daily", pl.DataFrame(rows, schema=["series", "date", "close", "available_ts"], orient="row")
+    )
+    fd = []
+    for i, d in enumerate(sessions):
+        fd.append((d, "FII", 0.0, 0.0, 1000.0 * wave[i]))
+        fd.append((d, "DII", 0.0, 0.0, -800.0 * wave[i]))
+    io.upsert(
+        s,
+        "fii_dii",
+        pl.DataFrame(fd, schema=["date", "category", "buy_value", "sell_value", "net_value"], orient="row"),
+    )
+    po = []
+    for i, d in enumerate(sessions):
+        po.append((d, "FII", 1000.0 + 100 * wave[i], 900.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    cols = [
+        "date",
+        "client_type",
+        "fut_idx_long",
+        "fut_idx_short",
+        "fut_stk_long",
+        "fut_stk_short",
+        "opt_idx_call_long",
+        "opt_idx_put_long",
+        "opt_idx_call_short",
+        "opt_idx_put_short",
+    ]
+    io.upsert(s, "participant_oi", pl.DataFrame(po, schema=cols, orient="row"))
+
+
+def _last_thursdays(y0: int, y1: int) -> list[date]:
+    out = []
+    for y in range(y0, y1 + 1):
+        for mth in range(1, 13):
+            d = date(y + (mth == 12), 1 if mth == 12 else mth + 1, 1) - timedelta(days=1)
+            while d.weekday() != 3:
+                d -= timedelta(days=1)
+            out.append(d)
+    return out
+
+
+def _add_fo(s, market) -> None:
+    """Futures and a 7-strike option chain for five stocks, so the derivatives features are non-trivial."""
+    from stocksense.features.derivs import R_FREE, bs_price
+
+    expiries = _last_thursdays(2018, 2020)
+    close = {
+        (r["symbol"], r["date"]): r["close"]
+        for r in market.eq.filter(pl.col("symbol").is_in(SYMS)).iter_rows(named=True)
+    }
+    rows = []
+    for (sym, d), c in close.items():
+        if d < market.sessions[200]:
+            continue
+        near = [e for e in expiries if e >= d][:2]
+        k0 = round(c / 5.0) * 5.0
+        for j, e in enumerate(near):
+            rows.append(
+                (sym, "STF", e, None, None, d, c * 1.004, 1000.0 + 7 * (d.toordinal() % 13) + 300 * j)
+            )
+        t_ = (near[0] - d).days / 365.0
+        for step in range(-3, 4):
+            k = k0 + 5.0 * step
+            if k <= 0:
+                continue
+            vol = 0.28 + 0.01 * (d.toordinal() % 7) / 7
+            oi = 100.0 + (d.toordinal() % 11) * 5 + 3 * abs(step)
+            rows.append((sym, "STO", near[0], k, "CE", d, bs_price(c, k, t_, R_FREE, vol, True), oi))
+            rows.append(
+                (sym, "STO", near[0], k, "PE", d, bs_price(c, k, t_, R_FREE, vol + 0.02, False), oi + 20)
+            )
+    cols = [
+        "symbol",
+        "instrument_type",
+        "expiry_date",
+        "strike_price",
+        "option_type",
+        "date",
+        "settle_price",
+        "oi",
+    ]
+    io.upsert(
+        s,
+        "fo_bhavcopy",
+        pl.DataFrame(
+            rows,
+            schema=cols,
+            orient="row",
+            schema_overrides={"strike_price": pl.Float64, "option_type": pl.Utf8},
+        ),
+    )
+
+
+SYMS = ["S00", "S01", "S02"]
+
+
+def _add_bars(s, market) -> None:
+    """Full 5-minute sessions for three stocks over sessions 250-600 (every third session)."""
+    rows = []
+    eq = market.eq.filter(pl.col("symbol").is_in(SYMS))
+    for r in eq.iter_rows(named=True):
+        idx = market.sessions.index(r["date"])
+        if idx < 250 or idx % 3:
+            continue
+        base = datetime.combine(r["date"], datetime.min.time(), tzinfo=IST) + timedelta(hours=9, minutes=15)
+        o, c = r["open"], r["close"]
+        for k in range(75):
+            f0, f1 = k / 75.0, (k + 1) / 75.0
+            op, cl = o + (c - o) * f0, o + (c - o) * f1
+            hi, lo = max(op, cl) * 1.001, min(op, cl) * 0.999
+            rows.append(
+                (
+                    r["symbol"],
+                    base + timedelta(minutes=5 * k),
+                    "FIVE_MINUTE",
+                    op,
+                    hi,
+                    lo,
+                    cl,
+                    100 + 7 * (k % 5),
+                )
+            )
+    cols = ["symbol", "ts", "interval", "open", "high", "low", "close", "volume"]
+    io.upsert(s, "intraday_bars", pl.DataFrame(rows, schema=cols, orient="row"))
+
+
+def _add_events(s, sessions) -> None:
+    """Announcements, results filings and board meetings for a few stocks (results every 60 sessions)."""
+    ann, ri, bm = [], [], []
+    for k, sym in enumerate(SYMS + ["S10", "S11"]):
+        for j in range(60 + 7 * k, len(sessions) - 5, 60):
+            d = sessions[j]
+            at = datetime.combine(d, datetime.min.time(), tzinfo=IST) + timedelta(hours=16 + 5 * (j % 2))
+            ann.append((f"R{k}-{j}", sym, at, "Financial Results"))
+            ri.append((f"F{k}-{j}", sym, at + timedelta(minutes=45)))
+            bm.append((sym, sessions[j + 3], "Results", "x", at - timedelta(days=20)))
+        for j in range(30 + k, len(sessions) - 5, 9):
+            at = datetime.combine(sessions[j], datetime.min.time(), tzinfo=IST) + timedelta(hours=11)
+            ann.append((f"M{k}-{j}", sym, at, "Press Release"))
+    io.upsert(
+        s, "announcements", pl.DataFrame(ann, schema=["seq_id", "symbol", "ts", "category"], orient="row")
+    )
+    io.upsert(
+        s, "results_index", pl.DataFrame(ri, schema=["seq_number", "symbol", "filing_ts"], orient="row")
+    )
+    cols = ["symbol", "meeting_date", "purpose", "description", "announced_ts"]
+    io.upsert(s, "board_meetings", pl.DataFrame(bm, schema=cols, orient="row"))
+
+
 @pytest.fixture(scope="session")
 def truncation_env(tmp_path_factory):
     """(settings, sessions, cache): synthetic market on disk, panel/universe/market built once."""
@@ -34,6 +204,10 @@ def truncation_env(tmp_path_factory):
     s = _settings_for(root)
     panel_pkg.build_all(s)
     write_test_kronos_files(s, m.sessions)  # kr_* read stored files (tiny random-weight model, T7.5c)
+    _add_market_raw(s, m.sessions)
+    _add_fo(s, m)
+    _add_events(s, m.sessions)
+    _add_bars(s, m)
     return s, m.sessions, {}
 
 

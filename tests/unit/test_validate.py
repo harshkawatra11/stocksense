@@ -111,35 +111,10 @@ def test_range_filter_restricts_issues(market, tmp_data_root, tmp_data_dir):
 
 
 @pytest.mark.realdata
-def test_real_store_missing_sessions_are_the_19_of_finding_2():
+def test_real_store_has_no_missing_sessions_after_t23():
     from stocksense.core.config import load_settings
 
-    expected = {
-        date.fromisoformat(d)
-        for d in [
-            "2010-02-08",
-            "2012-01-09",
-            "2012-03-05",
-            "2012-04-30",
-            "2012-09-10",
-            "2013-05-13",
-            "2013-11-05",
-            "2014-03-24",
-            "2015-03-02",
-            "2016-11-01",
-            "2019-10-29",
-            "2020-02-03",
-            "2020-11-17",
-            "2023-11-13",
-            "2024-01-23",
-            "2024-03-04",
-            "2024-05-21",
-            "2025-02-03",
-            "2026-02-02",
-        ]
-    }
     issues = validate_dataset(load_settings(), "bhavcopy_eq")
     found = [i for i in issues if i.code.startswith("missing_session_before:")]
-    # PLAN B.3 Finding 2: the 19 missing special sessions, each attached to the NEXT stored session
-    assert len(found) == 19
-    assert {i.date for i in found} == expected
+    # PLAN B.3 Finding 2 (19 missing special sessions) was repaired by T2.3's backfill
+    assert found == []

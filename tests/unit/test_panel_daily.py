@@ -435,3 +435,61 @@ def test_snap():
 
 def test_dates_are_python_dates():
     assert isinstance(weekdays(1)[0], date)
+
+
+# ---- event inside the session (ADANIENT 2015-06-03): the open still shows the old price ----------
+
+
+def _event_day_rows(open_, close_, n=20, at=10):
+    opens = [100.0] * at + [open_] + [close_] * (n - at - 1)
+    closes = [100.0] * at + [close_] * (n - at)
+    return _rows(opens, closes, [100.0] + closes[:-1])
+
+
+def test_intraday_demerger_gets_close_based_factor():
+    rows = _event_day_rows(open_=90.0, close_=20.0)  # open -10%, close -80%
+    ca = _ca(
+        [{"ex_date": rows["date"][10], "action_type": "scheme_of_arrangement", "parse_status": "unparsed"}]
+    )
+    out = compute_gap_factors(rows, ca)
+    assert out.height == 1
+    r = out.row(0, named=True)
+    assert r["date"] == rows["date"][10]
+    assert r["gap_src"] == "implied_event_close"
+    assert r["gap_factor"] == pytest.approx(0.2)
+
+
+def test_event_with_mild_close_move_and_small_open_gap_is_untouched():
+    rows = _event_day_rows(open_=98.0, close_=75.0)  # -25% close: a real move, not mechanical
+    ca = _ca(
+        [{"ex_date": rows["date"][10], "action_type": "scheme_of_arrangement", "parse_status": "unparsed"}]
+    )
+    assert compute_gap_factors(rows, ca).height == 0
+
+
+def test_big_close_crash_without_a_table_event_is_not_adjusted():
+    rows = _event_day_rows(open_=98.0, close_=20.0)
+    assert compute_gap_factors(rows, _ca([])).height == 0
+
+
+def test_intraday_event_day_has_zero_ret_and_null_open_split(tmp_data_root):
+    from tests.fixtures.handmade import eq_rows, write_raw
+
+    dates = weekdays(20)
+    opens = [100.0] * 10 + [90.0] + [20.0] * 9
+    closes = [100.0] * 10 + [20.0] * 10
+    eq = eq_rows("AAA", dates, closes, opens=opens, prev_closes=[100.0] + closes[:-1])
+    ca = _ca([{"ex_date": dates[10], "action_type": "scheme_of_arrangement", "parse_status": "unparsed"}])
+    ca = ca.drop("sid").with_columns(pl.lit("AAA").alias("symbol"))
+    write_raw(tmp_data_root, bhavcopy_eq=eq, corporate_actions=ca)
+    build_security_master(tmp_data_root)
+    build_daily_panel(tmp_data_root)
+    p = io.read(tmp_data_root, "panel_daily").collect().sort("date")
+    r = p.row(10, named=True)
+    assert r["gap_src"] == "implied_event_close"
+    # whole day mechanical: ret = 20 / (100 * 0.2) - 1 = 0; open/close splits are undefined
+    assert r["ret"] == pytest.approx(0.0, abs=1e-12)
+    assert r["ret_co"] is None and r["ret_oc"] is None
+    assert not r["flag_bigmove"]
+    # adjusted history is continuous: adj_close before the event equals the post-event level
+    assert p.row(9, named=True)["adj_close"] == pytest.approx(20.0)

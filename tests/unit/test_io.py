@@ -335,8 +335,10 @@ def test_real_corporate_actions_rows():
     from stocksense.core.config import load_settings
 
     df = io.read(load_settings(), "corporate_actions").collect()
-    assert df.height == 35319
-    assert df.schema["ex_date"] == pl.Date and df["record_date"].null_count() == df.height
+    # the 35,319 adopted rows (no record_date) plus the rows added by T2.6 (API rows carry a record date,
+    # source 'nse_api'); a later ingest only adds rows
+    assert df.height >= 35319
+    assert df.schema["ex_date"] == pl.Date and df["record_date"].null_count() >= 34_000
 
 
 @pytest.mark.realdata

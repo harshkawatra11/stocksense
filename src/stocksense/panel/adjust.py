@@ -143,7 +143,11 @@ def compute_gap_factors(rows: pl.DataFrame, ca: pl.DataFrame) -> pl.DataFrame:
     A sid's first row never gets a factor (a listing-day move is not a return).
     """
     r = prepare_rows(rows)
-    rn = r.filter(~pl.col("is_first")).select("sid", "date", "session_idx", "base", "r_obs", "is_first")
+    rn = (
+        r.filter(~pl.col("is_first"))
+        .select("sid", "date", "session_idx", "base", "r_obs", "is_first")
+        .join(rows.select("sid", "date", "close"), on=["sid", "date"], how="left")
+    )
     sess = r.select("date", "session_idx").unique().sort("date")
     ca = ca.filter(pl.col("sid").is_not_null()).with_columns(pl.col("sid").cast(pl.Int32))
     parts: list[pl.DataFrame] = []
@@ -285,7 +289,31 @@ def compute_gap_factors(rows: pl.DataFrame, ca: pl.DataFrame) -> pl.DataFrame:
         )
         nf = _ex_idx(nf, sess).filter(pl.col("ex_idx").is_not_null())
         row = _anti(_first_row_in_window(nf, rn, 5), parts)
+        small_open = row.filter(pl.col("r_obs").is_not_null() & (pl.col("r_obs").log().abs() <= 0.12))
         row = row.filter(pl.col("r_obs").is_not_null() & (pl.col("r_obs").log().abs() > 0.12))
+        # The event happened inside the session: the open still shows the old price (e.g. ADANIENT
+        # 2015-06-03, open -10%, close -83%). The close carries the evidence; the whole day is
+        # treated as mechanical (ret 0, ret_co and ret_oc are set to null in the panel).
+        intra = small_open.filter(
+            (pl.col("close") > 0)
+            & (pl.col("base") > 0)
+            & ((pl.col("close") / pl.col("base")).log().abs() > 0.5)
+        )
+        if intra.height:
+            parts.append(
+                _shape(
+                    intra.select(
+                        "sid",
+                        "date",
+                        (pl.col("close") / pl.col("base")).alias("gap_factor"),
+                        pl.lit("implied_event_close").alias("gap_src"),
+                        "r_obs",
+                        pl.lit(None, dtype=pl.Float64).alias("f_ca"),
+                        "ca_types",
+                        pl.lit("event inside the session; close ratio treated as mechanical").alias("note"),
+                    )
+                )
+            )
         if row.height:
             parts.append(
                 _shape(
