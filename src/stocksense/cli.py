@@ -200,6 +200,58 @@ def ingest_reference_cmd(ctx: typer.Context) -> None:
         raise typer.Exit(1)
 
 
+def _backup_dataset(settings: Settings, dataset: str, tag: str) -> Path:
+    """Copy a dataset's folder to data_store/_backup_<tag>/<dataset>/ once (never overwrites)."""
+    src = Path(settings.paths.data_root) / "parquet" / dataset
+    dst = Path(settings.paths.data_root) / f"_backup_{tag}" / dataset
+    if src.is_dir() and not dst.exists():
+        shutil.copytree(src, dst)
+    return dst
+
+
+def _echo_result(r) -> None:
+    if r.status != "skipped":
+        typer.echo(f"{r.date} {r.dataset:<18} {r.status:<14} rows={r.rows}", color=False)
+        sys.stdout.flush()
+
+
+def _echo_summary(results) -> None:
+    from collections import Counter
+
+    counts = Counter((r.dataset, r.status) for r in results)
+    typer.echo("summary (dataset, status): count")
+    for (ds, st), n in sorted(counts.items()):
+        typer.echo(f"  {ds:<18} {st:<14} {n}")
+
+
+@ingest_app.command("fo")
+def ingest_fo_cmd(
+    ctx: typer.Context,
+    from_: Annotated[str, typer.Option("--from", help="First day, YYYY-MM-DD.")],
+    to: Annotated[str, typer.Option("--to", help="Last day, YYYY-MM-DD or 'yesterday'.")],
+    rebuild: Annotated[
+        bool,
+        typer.Option(
+            "--rebuild", help="First re-parse every cached file in [from, to] over the stored rows."
+        ),
+    ] = False,
+) -> None:
+    """F&O bhavcopy for every calendar day in [from, to] (never before 2024-07-08)."""
+    from stocksense.data.ingest_fo import ingest_fo_range, rebuild_fo_from_cache
+
+    ictx, nse, clock = _ingest_context(ctx)
+    a, b = _parse_day(from_, clock), _parse_day(to, clock)
+    try:
+        _backup_dataset(ictx.settings, "fo_bhavcopy", "t2x")
+        if rebuild:
+            per_day = rebuild_fo_from_cache(ictx, a, b)
+            typer.echo(f"rebuilt {len(per_day)} cached days, {sum(per_day.values())} rows")
+        results = ingest_fo_range(ictx, a, b, on_result=_echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+
+
 @app.command("build-panel")
 def build_panel() -> None:
     """Build the adjusted daily panel."""
