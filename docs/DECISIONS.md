@@ -51,6 +51,9 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 5
 
+- T5.1 (2026-11-11): fetched `https://www.angelone.in/pricing` once (HTTP 200). Page text is mixed: a headline "Rs 0 brokerage on stock investments", the table "lower of Rs 20 or 0.1% per executed order, minimum Rs 5" (Stock Investments / Intraday), DP charge "CDSL Rs 3.5 + Angel One Rs 16.5 + GST" (= Rs 20 + GST, matches D.7), STT 0.1% buy/sell delivery and 0.025% intraday sell, and an NSE transaction charge of 0.0030699% (D.7 has 0.00297%). The page carries no revision date and the exchange rate is not unambiguous, so verification is PENDING: `config/costs.toml` and `verified_on` are unchanged (D.7 values; the tests pin them). The costlier exchange rate (0.0030699%) would add about 0.01 bps of value per side (negligible); revisit when the figure can be confirmed from an official NSE circular.
+- T5.1 (2026-11-11): all card numbers check out (142.2226, 156.00373, 26.9113, 37.9113, min position 48,000 as the first 1,000 step >= 47,200; round trip 0.0069425 at Rs 10,000 and 0.0029305 at Rs 1,00,000).
+
 ## Phase 6
 
 ## Phase 7
