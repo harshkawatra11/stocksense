@@ -18,7 +18,7 @@ PLANNING_NOTE = "signals examined on development data while writing the plan, 20
 N_PLANNING_TRIALS = 30
 
 
-def _git_sha() -> str | None:
+def git_sha() -> str | None:
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -50,7 +50,7 @@ def register_trial(state: State, family: str, target: str, spec: Any) -> str:
         con.execute(
             "INSERT INTO trials(trial_id, created_at, family, target, spec_json, spec_hash, status, git_sha) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            (trial_id, state._now_iso(), family, target, canonical_json(spec), h, "registered", _git_sha()),
+            (trial_id, state._now_iso(), family, target, canonical_json(spec), h, "registered", git_sha()),
         )
         return trial_id
     finally:
