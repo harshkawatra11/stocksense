@@ -117,6 +117,8 @@ def build_model(spec: ModelSpec) -> Model:
     import stocksense.models.linear  # noqa: F401  (registers the linear families)
 
     key = spec.family.rsplit("-", 1)[-1]
+    if key == "seqnet":
+        import stocksense.models.seqnet  # noqa: F401  (torch is imported only when asked for)
     if key not in MODELS:
         raise KeyError(f"no model registered for family {spec.family!r}")
     return MODELS[key](spec)
