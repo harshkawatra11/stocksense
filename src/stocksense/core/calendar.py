@@ -4,13 +4,13 @@ import logging
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta, tzinfo
-from pathlib import Path
 
 import polars as pl
 
 from stocksense.core.clock import IST, Clock
 from stocksense.core.config import Settings, SpecialSession
 from stocksense.core.errors import DataNotAvailable
+from stocksense.data.io import list_partitions, read
 
 _log = logging.getLogger(__name__)
 
@@ -20,17 +20,10 @@ _ONE_DAY = timedelta(days=1)
 _MAX_WALK_DAYS = 3660  # safety bound when stepping over non-sessions
 
 
-def _read_dates(folder: Path) -> list[date]:
-    """Distinct values of the `date` column across a dataset's parquet files, as dates.
-
-    TODO(T1.6): replace with data/io.py once it exists. Files are scanned one at a time and only
-    the `date` column is read, because old partitions mix timestamp units (ms vs us).
-    """
-    out: set[date] = set()
-    for f in sorted(folder.glob("*.parquet")):
-        col = pl.scan_parquet(f).select(pl.col("date").cast(pl.Date).unique()).collect()["date"]
-        out.update(d for d in col.to_list() if d is not None)
-    return sorted(out)
+def _read_dates(settings: Settings, dataset: str) -> list[date]:
+    """Distinct values of a dataset's `date` column, sorted (via data.io, which handles mixed units)."""
+    col = read(settings, dataset, columns=["date"]).select(pl.col("date").unique()).collect()["date"]
+    return sorted(d for d in col.to_list() if d is not None)
 
 
 class TradingCalendar:
@@ -66,14 +59,12 @@ class TradingCalendar:
     @classmethod
     def from_store(cls, settings: Settings, clock: Clock) -> TradingCalendar:
         """Build from distinct dates in the bhavcopy_eq store plus config/schedule.toml specials."""
-        parquet = settings.paths.data_root / "parquet"
-        eq = parquet / "bhavcopy_eq"
-        if not eq.is_dir() or not any(eq.glob("*.parquet")):
+        eq = settings.paths.data_root / "parquet" / "bhavcopy_eq"
+        if not list_partitions(settings, "bhavcopy_eq"):
             raise DataNotAvailable(f"no bhavcopy_eq data under {eq}")
-        past = _read_dates(eq)
-        hol_dir = parquet / "holidays"
-        if hol_dir.is_dir() and any(hol_dir.glob("*.parquet")):
-            holidays = _read_dates(hol_dir)
+        past = _read_dates(settings, "bhavcopy_eq")
+        if list_partitions(settings, "holidays"):
+            holidays = _read_dates(settings, "holidays")
         else:
             holidays = []
             _log.warning("holidays dataset missing: treating all future weekdays as sessions")
