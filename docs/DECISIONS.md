@@ -21,6 +21,9 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 1
 
+- T1.1 (2026-11-11): torch resolved from the cu128 index as written; uv picked torch 2.11.0+cu128 (not 2.9.x; the `>=2.9` constraint allows it). CUDA available, RTX 3050 detected. cu126 fallback not needed. hatch wheel target with `third_party/kronos` resolved and built without issue.
+- T1.1 (2026-11-11): `cli.py` has a `@app.callback()` so the placeholder `version` stays a subcommand (a single-command typer app otherwise collapses it); T1.x will add real commands.
+
 ## Phase 2
 
 ## Phase 3
