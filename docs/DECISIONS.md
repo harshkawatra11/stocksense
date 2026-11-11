@@ -39,6 +39,12 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 2
 
+- 2026-11-11 T2.1: live smoke check passed (EQUITY_L.csv 185,986 bytes starting `SYMBOL,NAME OF COMPANY`; `/api/holiday-master` returned a dict with `CM`). NSE trading holidays 2026-11: 08-Nov (Diwali Laxmi Pujan, Sunday Muhurat), 10-Nov (Diwali-Balipratipada), 24-Nov. `NseClient` also raises `DataNotAvailable` on an API 404 and after 5 exhausted attempts on 429/5xx (archive and API); persistent transport errors re-raise the httpx error.
+- 2026-11-11 T2.2: `validate_dataset` has a keyword-only `min_session_rows` (default 500, the plan's value) because the synthetic market has only 40 stocks per session; tests pass 10.
+- 2026-11-11 T2.2: OHLC and positive-price checks skip rows with open = high = low = 0 (untraded instruments). Without this, `fo_bhavcopy` showed 4.9M false violations (no-trade contracts carry only close/settle). Remaining real-data findings: bhavcopy_eq 91 `high_below_max_open_close` and 126 `low_above_min_open_close` rows; fo_bhavcopy 26 and 74. Price issues are aggregated into one Issue per check with a row count.
+- 2026-11-11 T2.2: besides the 19 `missing_session_before` issues, `bhavcopy_eq` has 10 `session_row_count_off` issues (2014-08-06..2014-08-20: 1,419-1,434 EQ rows vs trailing median ~1,189, a genuine step up in the EQ count that the trailing-20 median needs two weeks to absorb); reported, not suppressed.
+- 2026-11-11 T2.2: `fresh` = newest date >= last completed session for per-session datasets (catalog freshness <= 5 days), else (today - newest date) <= catalog freshness days; `None` where the catalog has no freshness rule (`nse_snapshots`). `sessions_missing` is computed for per-session datasets only (calendar sessions between first and last date with no rows; the calendar is derived from bhavcopy_eq, so that dataset is 0 by construction). Status lists every catalog dataset that has files on disk (7 today). `data-status --issues` also prints each issue.
+
 ## Phase 3
 
 ## Phase 4

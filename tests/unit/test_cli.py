@@ -12,7 +12,6 @@ from stocksense.data import io
 runner = CliRunner()
 
 NOT_IMPL = {
-    "data-status": 2,
     "ingest": 2,
     "build-panel": 3,
     "build-features": 4,

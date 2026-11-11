@@ -13,12 +13,16 @@ import pyarrow.parquet as pq
 import typer
 
 from stocksense import __version__
+from stocksense.core.calendar import TradingCalendar
 from stocksense.core.clock import IST, SystemClock
 from stocksense.core.config import Settings, load_settings
+from stocksense.core.errors import DataNotAvailable
 from stocksense.core.paths import Paths
 from stocksense.core.state import State
 from stocksense.data.catalog import CATALOG, DatasetSpec
 from stocksense.data.io import list_partitions, read
+from stocksense.data.status import status_table
+from stocksense.data.validate import validate_dataset
 
 app = typer.Typer(help="StockSense command line.", no_args_is_help=True)
 
@@ -53,9 +57,33 @@ def _not_implemented(phase: int) -> None:
 
 
 @app.command("data-status")
-def data_status() -> None:
-    """Dataset freshness and validation report."""
-    _not_implemented(2)
+def data_status(
+    ctx: typer.Context,
+    issues: Annotated[bool, typer.Option("--issues", help="Also list every validation issue.")] = False,
+) -> None:
+    """Dataset freshness and validation report (exit 1 if there is no data)."""
+    settings = _settings(ctx)
+    clock = SystemClock()
+    try:
+        calendar = TradingCalendar.from_store(settings, clock)
+    except DataNotAvailable:
+        typer.echo("no data: bhavcopy_eq is empty or missing")
+        raise typer.Exit(1) from None
+    table = status_table(settings, calendar, clock)
+    with pl.Config(
+        tbl_rows=-1,
+        tbl_cols=-1,
+        tbl_width_chars=200,
+        tbl_formatting="ASCII_MARKDOWN",
+        tbl_hide_dataframe_shape=True,
+        tbl_hide_column_data_types=True,
+        fmt_str_lengths=60,
+    ):
+        typer.echo(str(table))
+    if issues:
+        for name in table["dataset"]:
+            for i in validate_dataset(settings, name):
+                typer.echo(f"{i.dataset}\t{i.code}\t{i.detail}")
 
 
 @app.command()
