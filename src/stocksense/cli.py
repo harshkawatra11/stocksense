@@ -390,6 +390,96 @@ def ingest_results_cmd(
     typer.echo(f"rows: {sum(r.rows for r in results)}")
 
 
+@ingest_app.command("macro")
+def ingest_macro_cmd(ctx: typer.Context) -> None:
+    """Macro series (stooq, then Yahoo) into macro_daily."""
+    from stocksense.data.ingest_macro import ingest_macro
+
+    ictx, nse, _ = _ingest_context(ctx)
+    nse.close()
+    for r in ingest_macro(ictx):
+        typer.echo(f"{r.dataset:<12} {r.status:<8} rows={r.rows}")
+
+
+@ingest_app.command("participant-oi")
+def ingest_participant_oi_cmd(
+    ctx: typer.Context,
+    to: Annotated[str, typer.Option("--to", help="Newest day.")] = "yesterday",
+    from_: Annotated[str | None, typer.Option("--from", help="First day (forward range).")] = None,
+    backfill: Annotated[
+        bool, typer.Option("--backfill", help="Walk back until 30 days in a row have no file.")
+    ] = False,
+) -> None:
+    """Participant-wise F&O open interest."""
+    from stocksense.data.ingest_misc import backfill_participant_oi, ingest_participant_oi_range
+
+    ictx, nse, clock = _ingest_context(ctx)
+    try:
+        b = _parse_day(to, clock)
+        if backfill:
+            res = backfill_participant_oi(ictx, b, _echo_result)
+        elif from_:
+            res = ingest_participant_oi_range(ictx, _parse_day(from_, clock), b, _echo_result)
+        else:
+            raise typer.BadParameter("give --from or --backfill")
+    finally:
+        nse.close()
+    _echo_summary(res)
+
+
+@ingest_app.command("fii-dii")
+def ingest_fii_dii_cmd(
+    ctx: typer.Context,
+    seed: Annotated[
+        bool, typer.Option("--seed", help="Also seed history from the adopted snapshots.")
+    ] = False,
+) -> None:
+    """Latest FII/DII cash flows (and optionally the adopted snapshot history)."""
+    from stocksense.data.ingest_misc import ingest_fii_dii, seed_fii_dii_from_snapshots
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        if seed:
+            typer.echo(f"seeded rows: {seed_fii_dii_from_snapshots(ictx)}")
+        r = ingest_fii_dii(ictx)
+    finally:
+        nse.close()
+    typer.echo(f"{r.dataset} {r.status} rows={r.rows}")
+
+
+@ingest_app.command("deals")
+def ingest_deals_cmd(ctx: typer.Context) -> None:
+    """Today's bulk and block deals."""
+    from stocksense.data.ingest_misc import ingest_deals_today
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        for r in ingest_deals_today(ictx):
+            typer.echo(f"{r.dataset} {r.status} rows={r.rows}")
+    finally:
+        nse.close()
+
+
+@ingest_app.command("preopen")
+def ingest_preopen_cmd(
+    ctx: typer.Context,
+    seed: Annotated[
+        bool, typer.Option("--seed", help="Seed history from the adopted pre_open snapshots.")
+    ] = False,
+) -> None:
+    """One live pre-open snapshot (09:00-09:08 IST on a session day), or --seed the adopted history."""
+    from stocksense.data.ingest_misc import capture_preopen, seed_preopen_from_snapshots
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        if seed:
+            typer.echo(f"seeded rows: {seed_preopen_from_snapshots(ictx)}")
+        else:
+            typer.echo(f"preopen rows: {capture_preopen(ictx)}")
+    finally:
+        nse.close()
+
+
 @ingest_app.command("intraday")
 def ingest_intraday_cmd(
     ctx: typer.Context,

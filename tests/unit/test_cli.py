@@ -114,3 +114,9 @@ def test_announcement_ingest_commands_exist(tmp_data_root):
     for cmd in ("announcements", "board-meetings", "results"):
         res = runner.invoke(app, ["ingest", cmd, "--help"], obj=tmp_data_root)
         assert res.exit_code == 0, res.output
+
+
+def test_misc_ingest_commands_exist(tmp_data_root):
+    for cmd in ("macro", "participant-oi", "fii-dii", "deals", "preopen", "intraday"):
+        res = runner.invoke(app, ["ingest", cmd, "--help"], obj=tmp_data_root)
+        assert res.exit_code == 0, res.output
