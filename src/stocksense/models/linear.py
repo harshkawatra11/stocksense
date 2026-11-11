@@ -146,3 +146,34 @@ def _single_factory(spec: ModelSpec) -> Model:
 
 register_model("ridge", _ridge_factory)
 register_model("single", _single_factory)
+
+
+# ---- the floor trials of T7.1 -------------------------------------------------------------------------
+
+S1_TARGETS = ("y_c2o_5", "y_c2o_10", "y_c2o_20")
+FLOOR_TARGETS = (*S1_TARGETS, "y_oc")
+SINGLE_FACTORS: tuple[tuple[str, float], ...] = (
+    ("vol_21", -1.0),
+    ("co_sum_5", -1.0),
+    ("deliv_z", 1.0),
+    ("ret_1", -1.0),
+    ("mom_5", -1.0),
+    ("mom_252_skip21", 1.0),
+    ("mom_126", 1.0),
+)
+
+
+def _entry(target: str) -> str:
+    return "open" if target == "y_oc" else "close"
+
+
+def floor_specs() -> list[ModelSpec]:
+    """The T7.1 trials: each signed single factor against the three S1 targets and y_oc (28), plus a ridge
+    on all features for each of the four targets (4)."""
+    out = [
+        ModelSpec("floor-single", t, "u500", [f], {"feature": f, "sign": s}, _entry(t))
+        for f, s in SINGLE_FACTORS
+        for t in FLOOR_TARGETS
+    ]
+    out += [ModelSpec("floor-ridge", t, "u500", "all", {}, _entry(t)) for t in FLOOR_TARGETS]
+    return out
