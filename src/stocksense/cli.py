@@ -290,6 +290,45 @@ def ingest_index_cmd(
         typer.echo(f"index days added: {len(ok)}, {ok[0]} .. {ok[-1]}")
 
 
+@ingest_app.command("corpact")
+def ingest_corpact_cmd(
+    ctx: typer.Context,
+    from_: Annotated[str | None, typer.Option("--from", help="First ex-date (default: today - 10).")] = None,
+    to: Annotated[str | None, typer.Option("--to", help="Last ex-date (default: today + 45).")] = None,
+    reparse: Annotated[
+        bool, typer.Option("--reparse", help="Re-run the parser over stored unparsed/rights/other rows.")
+    ] = False,
+) -> None:
+    """Corporate actions in 31-day windows, or --reparse the stored unparsed rows."""
+    from stocksense.data.ingest_corpact import (
+        FUTURE_DAYS,
+        ingest_corpact_range,
+        reparse_unparsed,
+        table_counts,
+    )
+
+    ictx, nse, clock = _ingest_context(ctx)
+    _backup_dataset(ictx.settings, "corporate_actions", "t2x")
+    today = clock.today()
+    try:
+        if reparse:
+            before = table_counts(ictx)
+            reparse_unparsed(ictx)
+            after = table_counts(ictx)
+            typer.echo(f"{'action_type':<32}{'status':<10}{'before':>8}{'after':>8}")
+            for key in sorted(set(before) | set(after)):
+                typer.echo(f"{key[0]:<32}{key[1]:<10}{before[key]:>8}{after[key]:>8}")
+            typer.echo(f"{'TOTAL':<42}{sum(before.values()):>8}{sum(after.values()):>8}")
+            return
+        a = _parse_day(from_, clock) if from_ else today - timedelta(days=10)
+        b = _parse_day(to, clock) if to else today + timedelta(days=FUTURE_DAYS)
+        results = ingest_corpact_range(ictx, a, b, on_result=_echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
 @app.command("build-panel")
 def build_panel() -> None:
     """Build the adjusted daily panel."""
