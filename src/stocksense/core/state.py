@@ -19,9 +19,17 @@ CREATE TABLE job_runs(job TEXT, trade_date TEXT, attempt INTEGER,
 CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
 """,
     ),
+    (
+        2,
+        """
+CREATE TABLE trials(trial_id TEXT PRIMARY KEY, created_at TEXT, family TEXT, target TEXT, spec_json TEXT,
+  spec_hash TEXT, status TEXT, metrics_json TEXT, returns_path TEXT, git_sha TEXT, note TEXT);
+""",
+    ),
 ]
 
 _STALE_RUNNING = timedelta(hours=6)
+_SEED_FLAG = "planning_trials_seeded"
 _FINAL_STATUSES = ("done", "failed", "skipped")
 
 
@@ -65,8 +73,17 @@ class State:
                     if con.in_transaction:
                         con.execute("ROLLBACK")
                     raise
+            has_trials = (
+                con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trials'").fetchone()
+                is not None
+            )
         finally:
             con.close()
+        if has_trials and self.kv_get(_SEED_FLAG) is None:
+            from stocksense.validation.trials import seed_planning_trials
+
+            seed_planning_trials(self)
+            self.kv_set(_SEED_FLAG, "1")
 
     # ---- helpers ----------------------------------------------------------------------------
 
