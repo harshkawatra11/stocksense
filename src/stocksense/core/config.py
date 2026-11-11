@@ -234,6 +234,10 @@ class Secrets(BaseSettings):
         # Only explicit input: load_settings() merges os.environ and the .env file itself.
         return (init_settings,)
 
+    def secret_values(self) -> list[str]:
+        """The non-empty secret values, for log scrubbing only. Never log or print the result."""
+        return [v for v in self.model_dump().values() if v]
+
     def __repr__(self) -> str:
         inner = ", ".join(f"{k}={'***' if v else 'None'}" for k, v in self.model_dump().items())
         return f"Secrets({inner})"

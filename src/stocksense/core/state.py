@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta
+
+from stocksense.core.clock import Clock, SystemClock
+from stocksense.core.config import Settings
+from stocksense.core.paths import Paths
+
+# (version, sql). Later tasks append theirs; see PLAN D.6 for which task owns which.
+MIGRATIONS: list[tuple[int, str]] = [
+    (
+        1,
+        """
+CREATE TABLE job_runs(job TEXT, trade_date TEXT, attempt INTEGER,
+  status TEXT CHECK(status IN('running','done','failed','skipped')),
+  started_at TEXT, finished_at TEXT, detail TEXT, PRIMARY KEY(job, trade_date, attempt));
+CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
+""",
+    ),
+]
+
+_STALE_RUNNING = timedelta(hours=6)
+_FINAL_STATUSES = ("done", "failed", "skipped")
+
+
+class State:
+    """SQLite state store (WAL) with numbered migrations, a job table and a key/value table."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        clock: Clock | None = None,
+        migrations: Sequence[tuple[int, str]] | None = None,
+    ) -> None:
+        self._path = Paths(settings).sqlite
+        self._clock: Clock = clock if clock is not None else SystemClock()
+        self._migrations = list(MIGRATIONS if migrations is None else migrations)
+
+    def connect(self) -> sqlite3.Connection:
+        """A new autocommit connection (WAL, busy_timeout 30 s, foreign keys on)."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(self._path, timeout=30, isolation_level=None)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")
+        con.execute("PRAGMA busy_timeout=30000")
+        con.execute("PRAGMA foreign_keys=ON")
+        return con
+
+    def migrate(self) -> None:
+        """Apply missing migrations, each in its own transaction; idempotent."""
+        con = self.connect()
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY)")
+            done = {r[0] for r in con.execute("SELECT version FROM schema_version")}
+            for version, sql in sorted(self._migrations):
+                if version in done:
+                    continue
+                try:
+                    con.executescript(
+                        f"BEGIN;\n{sql}\nINSERT INTO schema_version(version) VALUES({int(version)});\nCOMMIT;"
+                    )
+                except sqlite3.Error:
+                    if con.in_transaction:
+                        con.execute("ROLLBACK")
+                    raise
+        finally:
+            con.close()
+
+    # ---- helpers ----------------------------------------------------------------------------
+
+    def _now_iso(self) -> str:
+        return self._clock.now().isoformat(timespec="seconds")
+
+    @staticmethod
+    def _d(trade_date: date | str) -> str:
+        return trade_date if isinstance(trade_date, str) else trade_date.isoformat()
+
+    # ---- jobs -------------------------------------------------------------------------------
+
+    def job_start(self, job: str, trade_date: date | str) -> int:
+        """Record a new `running` attempt for (job, trade_date); returns its attempt number."""
+        td = self._d(trade_date)
+        con = self.connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT COALESCE(MAX(attempt), 0) FROM job_runs WHERE job=? AND trade_date=?", (job, td)
+            ).fetchone()
+            attempt = int(row[0]) + 1
+            con.execute(
+                "INSERT INTO job_runs(job, trade_date, attempt, status, started_at) VALUES(?,?,?,?,?)",
+                (job, td, attempt, "running", self._now_iso()),
+            )
+            con.execute("COMMIT")
+            return attempt
+        except BaseException:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
+        finally:
+            con.close()
+
+    def job_finish(
+        self, job: str, trade_date: date | str, attempt: int, status: str, detail: str = ""
+    ) -> None:
+        """Close an attempt with status done / failed / skipped."""
+        if status not in _FINAL_STATUSES:
+            raise ValueError(f"status must be one of {_FINAL_STATUSES}, got {status!r}")
+        con = self.connect()
+        try:
+            con.execute(
+                "UPDATE job_runs SET status=?, finished_at=?, detail=? "
+                "WHERE job=? AND trade_date=? AND attempt=?",
+                (status, self._now_iso(), detail, job, self._d(trade_date), attempt),
+            )
+        finally:
+            con.close()
+
+    def job_status(self, job: str, trade_date: date | str) -> str | None:
+        """Status of the latest attempt; a `running` one older than 6 h counts as `failed`."""
+        con = self.connect()
+        try:
+            row = con.execute(
+                "SELECT status, started_at FROM job_runs WHERE job=? AND trade_date=? "
+                "ORDER BY attempt DESC LIMIT 1",
+                (job, self._d(trade_date)),
+            ).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            return None
+        status, started = row
+        age = self._clock.now() - datetime.fromisoformat(started) if started else timedelta(0)
+        if status == "running" and age > _STALE_RUNNING:
+            return "failed"
+        return status
+
+    # ---- key/value --------------------------------------------------------------------------
+
+    def kv_get(self, key: str, default: str | None = None) -> str | None:
+        con = self.connect()
+        try:
+            row = con.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        finally:
+            con.close()
+        return default if row is None else row[0]
+
+    def kv_set(self, key: str, value: str) -> None:
+        con = self.connect()
+        try:
+            con.execute(
+                "INSERT INTO kv(key, value, updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (key, value, self._now_iso()),
+            )
+        finally:
+            con.close()
