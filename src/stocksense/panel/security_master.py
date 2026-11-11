@@ -23,7 +23,7 @@ _AUTO_END_MARGIN_DAYS = 30
 # ---- nodes ------------------------------------------------------------------------------------
 
 
-def _session_index(settings: Settings) -> pl.DataFrame:
+def session_frame(settings: Settings) -> pl.DataFrame:
     """(date, idx): every distinct bhavcopy_eq session date, 0-based in order."""
     d = io.read(settings, "bhavcopy_eq", columns=["date"]).select(pl.col("date").unique().sort()).collect()
     return d.with_row_index("idx").with_columns(pl.col("idx").cast(pl.Int64))
@@ -164,7 +164,7 @@ def build_security_master(settings: Settings) -> pl.DataFrame:
     Returns one row per (sid, symbol); valid_from/valid_to are dates (no unit conversion involved).
     """
     paths = Paths(settings)
-    sessions = _session_index(settings)
+    sessions = session_frame(settings)
     data_end: date = sessions["date"].max()
     nodes = _nodes(settings, sessions)
     symbols = nodes["symbol"].to_list()
