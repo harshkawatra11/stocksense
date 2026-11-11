@@ -62,7 +62,7 @@ Everything in this part was observed directly (read-only) on that date. Executor
 
 ## B.1 Repository and machine state right now
 
-- Phase 0 was started and then paused. **Done:** T0.1 (nothing was scheduled or running), T0.2 (backup), T0.3 (Codex worktree removed). **Partly done:** T0.4, interrupted after deleting `.git`, `.claude`, `.pytest_cache`, `.ruff_cache`. The folder is currently **not a git repository**. `.venv` is half-deleted and unusable. Every other old file is still on disk. `data_store` is untouched.
+- **Phase 0 is complete (2026-11-11).** The repo contains only the fresh-start commit plus later work; there is no `.venv` (T1.1 creates it); `data_store` was reorganized per T0.6.
 - Remote `origin = https://github.com/harshkawatra11/stocksense.git`; default branch `claude/loving-brahmagupta-sQm9O`; other remote branches `StockSense`, `phase0/prove-the-economics`, `research/preregistration-intraday`.
 - Machine: Windows 11, 12 logical CPUs, 16 GB RAM, RTX 3050 Laptop 4 GB (driver 596.36), 93 GB free on C:.
 - Pythons installed: 3.11, 3.12 (`C:\Users\harsh\AppData\Local\Programs\Python\Python312\python.exe`), 3.14. `uv 0.12.13` is installed. PyTorch CUDA wheels exist for cp312 at `https://download.pytorch.org/whl/cu128` (2.9.1).
@@ -1640,7 +1640,7 @@ Preconditions before anyone writes order code: `[paper]` gate passed on ≥ 60 s
 
 # PART H — Status checklist (the orchestrator updates this in `docs/PLAN.md` after each phase)
 
-- [ ] P0 Reset — T0.1–T0.3 done 2026-11-11; resume at T0.4
+- [x] P0 Reset — done 2026-11-11 (fresh-start commit `a696fa5`; GitHub has only `main`; memory reset). Next: T1.1
 - [ ] P1 Foundation (T1.1–T1.9)
 - [ ] P2 Data (T2.1–T2.13)
 - [ ] P3 Panel (T3.1–T3.4)
