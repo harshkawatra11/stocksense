@@ -113,6 +113,7 @@ def register_model(key: str, factory: ModelFactory) -> None:
 
 def build_model(spec: ModelSpec) -> Model:
     """Instance for `spec.family` (registered under the family's last '-' segment)."""
+    import stocksense.models.gbm  # noqa: F401  (registers 'gbm')
     import stocksense.models.linear  # noqa: F401  (registers the linear families)
 
     key = spec.family.rsplit("-", 1)[-1]
