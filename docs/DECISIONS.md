@@ -59,6 +59,8 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 6
 
+- T6.2 (2026-11-11): signatures gained keyword args the card omits: `train_mask(label_end, fold, embargo_sessions=5, *, calendar, dates=None, dev_start=None)` (the calendar is needed to count sessions; `dates`/`dev_start` add the `date >= dev_start` condition), `sample_weights(dates, fold, calendar)` (new helper), `inner_validation_split(dates, label_end, months, embargo, *, calendar)` returning `(train_mask, val_mask)`. The embargo cutoff is the session `embargo_sessions` before the FIRST session on or after `test_start` (Jan 1 is rarely a session). Weight convention: `sessions_back` = session-index distance to that first test session, so the boundary row has w = 1.0 and 756 sessions back 0.5. Inner validation starts at `(last training date + 1 day) - months`. `cscv_blocks` returns `(start, stop)` pairs, the first `n_rows mod n_blocks` blocks one row longer. `train_end` of a Fold is the last session before `test_start`. `validation/lockbox.py` gets `research_end` here (needed by the folds); the rest of T6.1 lands later.
+
 ## Phase 7
 
 ## Phase 8
