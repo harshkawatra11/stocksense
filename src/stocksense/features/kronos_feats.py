@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -55,7 +56,24 @@ _PANEL_COLS = [
     "adj_volume",
     "turnover_inr",
 ]
-_SPAN_MAX = math.ceil(1.25 * LOOKBACK) + 2  # the wide-span rule of features.base.span_ok
+
+
+@dataclass(frozen=True)
+class KronosConfig:
+    """Run parameters. Defaults are the T7.5c spec; `max_rank` (None = the u500 flag) restricts the
+    universe to turnover_rank <= max_rank (the reduced T7.5d plan)."""
+
+    lookback: int = LOOKBACK
+    pred_len: int = PRED_LEN
+    n_paths: int = N_PATHS
+    max_rank: int | None = None
+
+    @property
+    def span_max(self) -> int:  # the wide-span rule of features.base.span_ok
+        return math.ceil(1.25 * self.lookback) + 2
+
+
+DEFAULT_CONFIG = KronosConfig()
 
 
 def default_tag() -> str:
@@ -116,10 +134,10 @@ def _holidays(settings) -> list[date]:
     return sorted(d for d in col.to_list() if d is not None)
 
 
-def _future_sessions(settings, sessions_to_d: list[date], holidays: list[date]) -> list[date]:
+def _future_sessions(settings, sessions_to_d: list[date], holidays: list[date], pred_len: int) -> list[date]:
     cal = TradingCalendar.from_dates(sessions_to_d, holidays, settings.schedule.special_sessions)
     out, cur = [], sessions_to_d[-1]
-    for _ in range(PRED_LEN):
+    for _ in range(pred_len):
         cur = cal.next_session(cur)
         out.append(cur)
     return out
@@ -128,17 +146,19 @@ def _future_sessions(settings, sessions_to_d: list[date], holidays: list[date]) 
 class _Store:
     """Panel, u500 flags and calendar loaded once up to `as_of` (the last date of a run)."""
 
-    def __init__(self, settings, as_of: date) -> None:
+    def __init__(self, settings, as_of: date, config: KronosConfig = DEFAULT_CONFIG) -> None:
         ctx = FeatureContext(settings, as_of=as_of)
         self.settings = settings
         self.panel = ctx.panel().select(_PANEL_COLS).collect()
-        self.u500 = ctx.universe().filter(pl.col("u500")).select("date", "sid").collect()
+        uni = ctx.universe()
+        flag = pl.col("u500") if config.max_rank is None else pl.col("turnover_rank") <= config.max_rank
+        self.u500 = uni.filter(flag).select("date", "sid").collect()
         self.sessions: list[date] = ctx.sessions().collect()["date"].to_list()
         self.holidays = _holidays(settings)
 
 
 def _day_frame(
-    store: _Store, d: date, bundle: km.KronosBundle, batch_series: int, autocast: bool
+    store: _Store, d: date, bundle: km.KronosBundle, batch_series: int, autocast: bool, cfg: KronosConfig
 ) -> pl.DataFrame:
     sess = [x for x in store.sessions if x <= d]
     if not sess or sess[-1] != d:
@@ -149,21 +169,21 @@ def _day_frame(
         store.panel.filter(
             pl.col("sid").is_in(sids.implode())
             & (pl.col("date") <= d)
-            & (pl.col("sx") >= sx_d - _SPAN_MAX - 2)
+            & (pl.col("sx") >= sx_d - cfg.span_max - 2)
         )
         .sort("sid", "date")
         .group_by("sid", maintain_order=True)
-        .tail(LOOKBACK)
+        .tail(cfg.lookback)
     )
-    future = _future_sessions(store.settings, sess, store.holidays)
+    future = _future_sessions(store.settings, sess, store.holidays, cfg.pred_len)
     frames: list[km.KronosInput] = []
     keep: list[int] = []
     last_close: list[float] = []
     vol20: list[float] = []
     for (sid,), g in win.partition_by("sid", maintain_order=True, as_dict=True).items():
-        if g.height < LOOKBACK or g["date"][-1] != d:
+        if g.height < cfg.lookback or g["date"][-1] != d:
             continue
-        if g["sx"][-1] - g["sx"][0] + 1 > _SPAN_MAX:
+        if g["sx"][-1] - g["sx"][0] + 1 > cfg.span_max:
             continue
         vals = g.select(
             "adj_open", "adj_high", "adj_low", "adj_close", "adj_volume", "turnover_inr"
@@ -177,7 +197,7 @@ def _day_frame(
     if not frames:
         return _empty()
     paths = km.forecast_panel(
-        frames, bundle, PRED_LEN, N_PATHS, T=TEMPERATURE, top_p=TOP_P, seed=int(d.strftime("%Y%m%d")),
+        frames, bundle, cfg.pred_len, cfg.n_paths, T=TEMPERATURE, top_p=TOP_P, seed=int(d.strftime("%Y%m%d")),
         batch_series=batch_series, autocast=autocast,
     )  # fmt: skip
     feats = features_from_paths(paths, np.array(last_close), np.array(vol20))
@@ -197,13 +217,20 @@ def _write(settings, tag: str, d: date, df: pl.DataFrame) -> None:
 
 
 def compute_kronos_day(
-    settings, d: date, tag: str, bundle: km.KronosBundle, *, batch_series: int = 8, autocast: bool = False
+    settings,
+    d: date,
+    tag: str,
+    bundle: km.KronosBundle,
+    *,
+    batch_series: int = 8,
+    autocast: bool = False,
+    config: KronosConfig = DEFAULT_CONFIG,
 ) -> pl.DataFrame:
-    """The kr_* rows for decision date `d` (u500 sids with a full 256-row window), from data <= d only.
+    """The kr_* rows for decision date `d` (universe sids with a full lookback window), from data <= d only.
 
     Returns the frame; does not write it (use `compute_kronos_range` for the resumable file store).
     """
-    return _day_frame(_Store(settings, d), d, bundle, batch_series, autocast)
+    return _day_frame(_Store(settings, d, config), d, bundle, batch_series, autocast, config)
 
 
 def compute_kronos_range(
@@ -214,16 +241,17 @@ def compute_kronos_range(
     *,
     batch_series: int = 8,
     autocast: bool = False,
+    config: KronosConfig = DEFAULT_CONFIG,
 ) -> list[date]:
     """Compute and store every date without a file yet; returns the dates computed in this call."""
     todo = sorted(d for d in set(dates) if not (_dir(settings, tag) / f"{d.isoformat()}.parquet").is_file())
     if not todo:
         return []
     b = bundle if bundle is not None else km.load_bundle("small")
-    store = _Store(settings, todo[-1])
+    store = _Store(settings, todo[-1], config)
     done: list[date] = []
     for d in todo:
-        df = _day_frame(store, d, b, batch_series, autocast)
+        df = _day_frame(store, d, b, batch_series, autocast, config)
         _write(settings, tag, d, df)
         done.append(d)
         log.info("kronos_day_done", date=d.isoformat(), tag=tag, rows=df.height)

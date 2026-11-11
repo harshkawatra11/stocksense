@@ -121,3 +121,19 @@ def test_feature_reads_files_null_where_missing_and_respects_as_of(env, bundle, 
     e = spec.fn(FeatureContext(s)).collect()
     assert e.height == 0 and e.columns == ["date", "sid", "kr_up_prob"]
     assert io.read(s, "panel_daily").collect().height > 0
+
+
+def test_custom_lookback_paths_and_turnover_rank_universe(env, bundle):
+    """T7.5d variant: lookback 128, 4 paths, universe = turnover_rank <= max_rank (not u500)."""
+    s, sessions = env
+    d = sessions[300]
+    full = kf.compute_kronos_day(s, d, "v", bundle)
+    cfg = kf.KronosConfig(lookback=128, n_paths=4, max_rank=5)
+    df = kf.compute_kronos_day(s, d, "v", bundle, config=cfg)
+    uni = io.read(s, "panel_universe").filter(pl.col("date") == d)
+    top = uni.filter(pl.col("turnover_rank") <= 5).collect()
+    assert 0 < df.height <= top.height < full.height
+    assert set(df["sid"].to_list()) <= set(top["sid"].to_list())
+    assert df.columns == ["date", "sid", *NAMES]
+    done = kf.compute_kronos_range(s, [d], "v2", bundle, config=cfg)
+    assert done == [d] and kf.compute_kronos_range(s, [d], "v2", bundle, config=cfg) == []
