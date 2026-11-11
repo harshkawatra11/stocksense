@@ -76,4 +76,3 @@ def test_unimplemented_commands_exit_2(tmp_data_root, cmd, phase):
 
 def test_version_still_works():
     assert runner.invoke(app, ["version"]).exit_code == 0
-
