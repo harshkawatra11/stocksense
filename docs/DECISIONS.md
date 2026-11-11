@@ -81,6 +81,8 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 7
 
+- T7.4 (2026-11-11): migration 3 (models, model_events, live_ic) is appended to `core/state.py`; the schema-version expectations in `test_state.py` and `test_trials.py` became [1, 2, 3]. Signatures gained the first arguments the card omits: `save_model(settings, state, model, spec, train_end, meta)`, `load_model(settings, model_id)`, `set_status(state, model_id, status, note)`, `current(state, prefix, status)` (newest model of that strategy prefix with that status, else None), `append_preds(settings, model_id, frame, mode, clock=None)` (mode `walkforward` or `live`; upsert on (date, sid) into `preds/<model_id>/`). `model_id` is `core.ids.model_id(family, target, spec_dict, train_end)`. The strategy prefix is the part of `family` before the first dash (`s1-ridge` -> `s1`); promoting a champion demotes the other champions with the same prefix to `shadow` in the same transaction and logs a `status:shadow` event on each. `meta` carries `feature_names`, `feature_kinds`, `feature_version`, `fit_info`, `train_start`, `note`. A new row is a `candidate` with `validated = 0`; events are `saved` and `status:<name>`.
+
 ## Phase 8
 
 ## Phase 9
