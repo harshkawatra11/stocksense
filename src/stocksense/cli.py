@@ -329,6 +329,67 @@ def ingest_corpact_cmd(
     typer.echo(f"rows: {sum(r.rows for r in results)}")
 
 
+@ingest_app.command("announcements")
+def ingest_announcements_cmd(
+    ctx: typer.Context,
+    to: Annotated[str, typer.Option("--to", help="Newest day, YYYY-MM-DD or 'yesterday'.")] = "yesterday",
+    from_: Annotated[
+        str, typer.Option("--from", help="Oldest day (the walk stops earlier after 12 empty windows).")
+    ] = "2010-01-01",
+    poll: Annotated[bool, typer.Option("--poll", help="Live poll of today instead of a backfill.")] = False,
+) -> None:
+    """Corporate announcements: 7-day windows backward from --to (resumable), or --poll today."""
+    from stocksense.data.ingest_announcements import backfill_announcements, poll_announcements
+
+    ictx, nse, clock = _ingest_context(ctx)
+    try:
+        if poll:
+            typer.echo(f"new announcements: {poll_announcements(ictx)}")
+            return
+        results = backfill_announcements(ictx, _parse_day(from_, clock), _parse_day(to, clock), _echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
+@ingest_app.command("board-meetings")
+def ingest_board_meetings_cmd(
+    ctx: typer.Context,
+    from_: Annotated[str, typer.Option("--from", help="Oldest meeting date.")] = "2010-01-01",
+    to: Annotated[str | None, typer.Option("--to", help="Newest meeting date (default today + 60).")] = None,
+) -> None:
+    """Board meetings in 30-day windows backward from --to."""
+    from stocksense.data.ingest_announcements import ingest_board_meetings
+
+    ictx, nse, clock = _ingest_context(ctx)
+    b = _parse_day(to, clock) if to else clock.today() + timedelta(days=60)
+    try:
+        results = ingest_board_meetings(ictx, _parse_day(from_, clock), b, _echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
+@ingest_app.command("results")
+def ingest_results_cmd(
+    ctx: typer.Context,
+    from_: Annotated[str, typer.Option("--from", help="Oldest filing date.")] = "2010-01-01",
+    to: Annotated[str, typer.Option("--to", help="Newest filing date.")] = "yesterday",
+) -> None:
+    """Financial-results filings index (Quarterly and Annual) in 31-day windows backward from --to."""
+    from stocksense.data.ingest_announcements import ingest_results_index
+
+    ictx, nse, clock = _ingest_context(ctx)
+    try:
+        results = ingest_results_index(ictx, _parse_day(from_, clock), _parse_day(to, clock), _echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
 @app.command("build-panel")
 def build_panel(ctx: typer.Context) -> None:
     """Build the security master, adjusted daily panel, universe and market frame."""
@@ -498,3 +559,4 @@ def doctor(ctx: typer.Context) -> None:
     out("secrets")
     for name, value in settings.secrets.model_dump().items():
         out(f"  {name:<24}{'set' if value else 'unset'}")
+

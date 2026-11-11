@@ -108,3 +108,9 @@ def test_build_panel_runs_all_four_builds(tmp_path_factory):
     assert "panel_daily" in res.output and "gap_src" in res.output
     for name in ("security_master", "panel_daily", "panel_universe", "panel_market", "adj_events"):
         assert io.read(s, name).collect().height > 0
+
+
+def test_announcement_ingest_commands_exist(tmp_data_root):
+    for cmd in ("announcements", "board-meetings", "results"):
+        res = runner.invoke(app, ["ingest", cmd, "--help"], obj=tmp_data_root)
+        assert res.exit_code == 0, res.output

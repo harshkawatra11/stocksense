@@ -226,3 +226,76 @@ like-for-like with PLAN B.3 (mean of LOG returns, same members, bigmoves exclude
 ```
 
 PLAN expects about +22 and -20, measured as mean LOG returns. The log-return means above match (+22.7, -19.2). The panel stores fractions, so `ew500_co/oc` are arithmetic means; those exceed log means by about sigma^2/2 per day (about 1.7 bps for the intraday leg, volatile at 1.8% a day). Per year (arithmetic) `ew500_co` / `ew500_oc` in bps: 2012 21.5/-7.4, 2013 12.0/-15.5, 2014 21.5/-2.0, 2015 27.5/-22.3, 2016 24.9/-22.8, 2017 31.4/-13.1, 2018 15.0/-24.6, 2019 17.7/-20.5, 2020 31.1/-19.2, 2021 36.6/-18.9, 2022 19.9/-17.5, 2023 27.5/-10.5, 2024 27.9/-17.5, 2025 11.3/-10.7: overnight positive and intraday negative in every year, as in Finding 3.
+
+## After T2.8 (2026-11-12): announcements, board meetings, results index
+
+**Truncation check (before the backfill).** 2026-11-02 -> 2026-11-08: the 7-day call returned 6,699 rows; the seven 1-day calls returned 904 + 1,142 + 1,419 + 1,530 + 1,239 + 426 + 39 = 6,699 with identical seq_id sets. Four other weeks (2011-03, 2015-03, 2020-03, 2024-03) also matched exactly. So 7-day windows are used for all history. As a safety net a window that returns 9,000 rows or more is re-read day by day (never triggered).
+
+**Backfill.** `stocksense ingest announcements` walks 7-day windows back from yesterday to 2010-01-01 (the API serves 2010-01-01 onward; the plan expected 2011). Log `data_store/logs/t28_announcements.log`. 863 of 880 windows succeeded on the first pass; the 17 that failed (2012-09-05..10-02 and 2015-01-21..04-21) were transient server errors: they succeeded on retry (14,948 rows). Raw windows are cached gzipped under `cache/announcements/`. Stored: **1,559,164 rows**, 2010-01-01 09:25 -> 2026-11-11 23:59 IST, 858 distinct categories. 15 seq_ids occur in two month partitions (the same filing stamped at a month boundary); key is seq_id per partition file. `exch_ts` is null for 36.5% of rows (NSE's `exchdisstime` is `-`); `first_seen_ts` is null for every backfilled row (live poll only).
+
+Rows per year (by `ts`):
+
+| year | rows |
+rows 1559164 unique 1559149 first 2010-01-01 09:25:00+05:30 last 2026-11-11 23:59:36+05:30
+results_index 195678 2010-01-04 15:20:00+05:30 2026-11-03 10:29:00+05:30
+board_meetings 181993 2010-01-04 2026-12-05
+
+30 most frequent `category` values (input to the T8.2 taxonomy; note the case variants "General Updates" / "General updates" and "Loss of Share Certificates" / "Loss of share certificate"):
+
+rows 1559164 unique 1559149 first 2010-01-01 09:25:00+05:30 last 2026-11-11 23:59:36+05:30
+| year | rows |
+|---|---|
+| 2010 | 26,100 |
+| 2011 | 31,562 |
+| 2012 | 35,739 |
+| 2013 | 37,911 |
+| 2014 | 41,617 |
+| 2015 | 48,007 |
+| 2016 | 57,359 |
+| 2017 | 66,145 |
+| 2018 | 77,172 |
+| 2019 | 93,981 |
+| 2020 | 101,469 |
+| 2021 | 117,100 |
+| 2022 | 136,895 |
+| 2023 | 163,701 |
+| 2024 | 183,403 |
+| 2025 | 175,936 |
+| 2026 | 165,067 |
+categories 858 null 0
+| # | category | rows |
+|---|---|---|
+| 1 | Updates | 188,537 |
+| 2 | Analysts/Institutional Investor Meet/Con. Call Updates | 144,853 |
+| 3 | Outcome of Board Meeting | 95,966 |
+| 4 | Financial Result Updates | 93,701 |
+| 5 | Press Release | 83,017 |
+| 6 | Shareholders meeting | 74,778 |
+| 7 | Copy of Newspaper Publication | 73,512 |
+| 8 | Trading Window | 70,803 |
+| 9 | Loss of Share Certificates | 63,048 |
+| 10 | Disclosure under SEBI Takeover Regulations | 53,371 |
+| 11 | Certificate under SEBI (Depositories and Participants) Regulations, 2018 | 37,642 |
+| 12 | General Updates | 36,390 |
+| 13 | Investor Presentation | 29,088 |
+| 14 | Dividend | 20,860 |
+| 15 | Appointment | 20,821 |
+| 16 | General updates | 17,888 |
+| 17 | Record Date | 17,075 |
+| 18 | Disc. under Reg.30 of SEBI (SAST) Reg.2011 | 15,863 |
+| 19 | Allotment of Securities | 14,329 |
+| 20 | Credit Rating | 14,288 |
+| 21 | Change in Director(s) | 13,645 |
+| 22 | Resignation | 12,320 |
+| 23 | Loss of share certificate | 12,008 |
+| 24 | Related Party Transactions | 11,619 |
+| 25 | ESOP/ESOS/ESPS | 11,323 |
+| 26 | Schedule of Analysts/Institutional Investor Meet/Con. Call | 10,465 |
+| 27 | AGM/Book Closure | 10,251 |
+| 28 | Annual General Meeting Updates | 10,249 |
+| 29 | Book Closure | 9,509 |
+| 30 | Disclosure under Insider Trading Regulation | 9,062 |
+
+**Board meetings** (`ingest board-meetings`, 30-day windows by meeting date): 181,993 rows, meeting dates 2010-01-04 -> 2026-12-05 (the API returns announced future meetings); the earliest window is 2010-01 (data exists back to at least 2010-01-01).
+
+**Results index** (`ingest results`): probe 2026-11-11: the API honours `from_date`/`to_date` (a filter on the FILING date) and `period=Quarterly` or `Annual` (`Half-Yearly` returns nothing); without dates it returns only recent filings (3,816 quarterly). Backfilled in 31-day windows for both periods: 195,678 rows, filing dates 2010-01-04 -> 2026-11-03. Fields: `seqNumber` (key), `fromDate`/`toDate` (period), `filingDate` (`%d-%b-%Y %H:%M`, no seconds), `exchdisstime`, `audited`, `consolidated`, `relatingTo`, `xbrl`.
