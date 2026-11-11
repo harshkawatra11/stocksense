@@ -467,6 +467,42 @@ def resume() -> None:
     _not_implemented(10)
 
 
+def _broker_lines(settings: Settings) -> list[str]:
+    """Live read-only broker checks; amounts are never printed, only that they were read."""
+    from stocksense.brokers.angel import AngelClient
+    from stocksense.brokers.upstox import UpstoxClient
+    from stocksense.core.errors import BrokerError
+
+    clock = SystemClock()
+    lines: list[str] = []
+    sec = settings.secrets
+    if not (sec.angel_api_key and sec.angel_client_id and sec.angel_pin and sec.angel_totp_secret):
+        lines.append("angel: not configured")
+    else:
+        angel = AngelClient(settings, clock)
+        try:
+            angel.login()
+            angel.funds()
+            lines.append("angel: login ok, available cash read")
+        except (BrokerError, OSError) as e:
+            lines.append(f"angel: FAILED ({type(e).__name__}: {str(e)[:80]})")
+        finally:
+            angel.close()
+    if not sec.upstox_analytics_token:
+        lines.append("upstox: not configured")
+    else:
+        up = UpstoxClient(settings, clock)
+        try:
+            today = clock.today()
+            df = up.candles("NSE_EQ|INE002A01018", "days", 1, today - timedelta(days=10), today)
+            lines.append(f"upstox: token ok, {df.height} daily candles read")
+        except (BrokerError, OSError) as e:
+            lines.append(f"upstox: FAILED ({type(e).__name__}: {str(e)[:80]})")
+        finally:
+            up.close()
+    return lines
+
+
 # ---- doctor -----------------------------------------------------------------------------------
 
 
@@ -560,3 +596,6 @@ def doctor(ctx: typer.Context) -> None:
     for name, value in settings.secrets.model_dump().items():
         out(f"  {name:<24}{'set' if value else 'unset'}")
 
+    out("brokers")
+    for line in _broker_lines(settings):
+        out(f"  {line}")

@@ -299,3 +299,19 @@ categories 858 null 0
 **Board meetings** (`ingest board-meetings`, 30-day windows by meeting date): 181,993 rows, meeting dates 2010-01-04 -> 2026-12-05 (the API returns announced future meetings); the earliest window is 2010-01 (data exists back to at least 2010-01-01).
 
 **Results index** (`ingest results`): probe 2026-11-11: the API honours `from_date`/`to_date` (a filter on the FILING date) and `period=Quarterly` or `Annual` (`Half-Yearly` returns nothing); without dates it returns only recent filings (3,816 quarterly). Backfilled in 31-day windows for both periods: 195,678 rows, filing dates 2010-01-04 -> 2026-11-03. Fields: `seqNumber` (key), `fromDate`/`toDate` (period), `filingDate` (`%d-%b-%Y %H:%M`, no seconds), `exchdisstime`, `audited`, `consolidated`, `relatingTo`, `xbrl`.
+
+## After T2.9 (2026-11-12): broker probes (non-secret facts only)
+
+**Angel One, direct REST (no smartapi fallback needed).** From this network the login worked on the first attempt (home-ISP blocking seen earlier does not occur now).
+- ``loginByPassword`` -> ``status`` true; ``data`` keys ``feedToken, jwtToken, refreshToken, state``.
+- ``getRMS`` ``data`` keys: ``availablecash, availableintradaypayin, availablelimitmargin, collateral, m2mrealized, m2munrealized, net, utiliseddebits, utilisedexposure, utilisedholdingsales, utilisedoptionpremium, utilisedpayout, utilisedspan, utilisedturnover`` (strings).
+- ``getAllHolding`` -> ``data`` is a dict ``{holdings: [], totalholding: {}}``; 0 holdings. ``getPosition`` -> ``data`` null when there are no positions.
+- Scrip master: 163,238 rows (38 MB), keys ``exch_seg, expiry, freeze_qty, instrumenttype, is_cas_enabled, lotsize, name, strike, symbol, tick_size, token``; RELIANCE-EQ token 2885, KAMDHENU-EQ 13457.
+- FULL quote (RELIANCE) keys: ``52WeekHigh, 52WeekLow, avgPrice, close, depth, exchFeedTime, exchTradeTime, exchange, high, lastTradeQty, low, lowerCircuit, ltp, netChange, open, opnInterest, percentChange, referenceLimitPrice, symbolToken, totBuyQuan, totSellQuan, tradeVolume, tradingSymbol, upperCircuit``; ``depth.buy`` / ``depth.sell`` are 5 levels of ``{price, quantity, orders}``; ``exchFeedTime`` ``11-Nov-2026 16:08:11``; ``close`` is the previous close.
+- ``getCandleData`` rows ``[ISO ts +05:30, o, h, l, c, v]`` (RELIANCE 2026-11-09 5-minute: 73 bars). One call returned an empty non-JSON body (a rate limit without ``AB1021``): the client treats an empty or non-JSON body like ``AB1021`` (sleep 60 s, then 300 s).
+- ``stocksense doctor`` now prints ``angel: login ok, available cash read``.
+
+**Upstox, Analytics Token.**
+- Instrument master ``NSE.json.gz``: 85,180 rows, keys ``exchange, exchange_token, freeze_quantity, instrument_key, instrument_type, isin, lot_size, name, qty_multiplier, security_type, segment, tick_size, trading_symbol``; 2,757 rows with segment ``NSE_EQ`` and type ``EQ``; key ``NSE_EQ|<ISIN>``.
+- Historical candles V3 work: newest-first, 7 fields ``[ts, o, h, l, c, v, oi]``. One request spans a whole month: 1-minute October 2026 returned 7,500 candles (20 sessions x 375) and January 2022 returned 7,500, so the client's request span for minute intervals up to 15 is 31 days (the plan said 28). A 70-day range answers HTTP 400 ``UDAPI1148``. A full session has 375 one-minute bars (09:15..15:29).
+- **Quotes are NOT available with the Analytics Token.** Every market-quote endpoint (``/v2/market-quote/quotes``, ``ltp``, ``ohlc``; ``/v3/market-quote/ltp``, ``ohlc``, ``quotes``) and ``/v2/user/profile`` answered HTTP 401 ``UDAPI100050`` (while historical candles work with the same token). ``UpstoxClient.quotes`` is implemented to the documented shape and tested on a fixture, but raises ``BrokerError`` with this token. **For T10.2: Angel is the only live quote source; Upstox serves historical candles only.**
