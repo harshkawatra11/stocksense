@@ -1640,8 +1640,8 @@ Preconditions before anyone writes order code: `[paper]` gate passed on ≥ 60 s
 
 # PART H — Status checklist (the orchestrator updates this in `docs/PLAN.md` after each phase)
 
-- [x] P0 Reset — done 2026-11-11 (fresh-start commit `a696fa5`; GitHub has only `main`; memory reset). Next: T1.1
-- [ ] P1 Foundation (T1.1–T1.9)
+- [x] P0 Reset — done 2026-11-11 (fresh-start commit `a696fa5`; GitHub has only `main`; memory reset)
+- [x] P1 Foundation (T1.1–T1.9) — done 2026-11-11; 131 tests; `doctor` matches B.2. Next: T2.1
 - [ ] P2 Data (T2.1–T2.13)
 - [ ] P3 Panel (T3.1–T3.4)
 - [ ] P4 Features and labels (T4.1–T4.6)
