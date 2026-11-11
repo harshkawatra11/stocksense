@@ -34,15 +34,3 @@ def vol_21(ctx: FeatureContext) -> pl.LazyFrame:
         .with_columns(log_ret("ret").alias("_la"))
         .select("date", "sid", roll_std("_la", 21).alias("vol_21"))
     )
-
-
-@feature(
-    "mkt_ret_1",
-    group="market",
-    kind="mkt",
-    window=1,
-    label="How the broad market (equal-weight top 500) moved on the day, log return.",
-)
-def mkt_ret_1(ctx: FeatureContext) -> pl.LazyFrame:
-    """ln(1 + ew500_ret) per date."""
-    return ctx.market().select("date", log_ret("ew500_ret").alias("mkt_ret_1"))

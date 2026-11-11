@@ -7,12 +7,14 @@ once per session; each feature is computed once on the full context and once per
 
 from __future__ import annotations
 
-from datetime import date
+import math
+from datetime import date, datetime, timedelta
 
 import polars as pl
 import pytest
 
 from stocksense import panel as panel_pkg
+from stocksense.core.clock import IST
 from stocksense.data import io
 from stocksense.features.base import FeatureContext, FeatureSpec, feature
 from stocksense.features.registry import load_all
@@ -24,6 +26,55 @@ TOL = 1e-9
 REGISTRY = load_all()
 
 
+def _add_market_raw(s, sessions) -> None:
+    """Small synthetic VIX / index / macro / flow datasets so the market features are non-trivial."""
+    n = len(sessions)
+    wave = [math.sin(i / 9.0) for i in range(n)]
+    io.upsert(s, "india_vix", pl.DataFrame({"date": sessions, "close": [15 + 5 * w for w in wave]}))
+    ix = pl.DataFrame(
+        {
+            "index_name": ["NIFTY 50"] * n,
+            "date": sessions,
+            "close": [10000 + 3 * i for i in range(n)],
+            "pe": [20 + 3 * w for w in wave],
+        }
+    )
+    io.upsert(s, "index_daily", ix)
+    rows = []
+    for name, base, hours in (("USDINR", 70.0, 17), ("SPX", 2700.0, 29.5)):
+        for i, d in enumerate(sessions):
+            ts = datetime.combine(d, datetime.min.time(), tzinfo=IST) + timedelta(hours=hours)
+            rows.append((name, d, base * (1 + 0.1 * wave[i]), ts))
+    io.upsert(
+        s, "macro_daily", pl.DataFrame(rows, schema=["series", "date", "close", "available_ts"], orient="row")
+    )
+    fd = []
+    for i, d in enumerate(sessions):
+        fd.append((d, "FII", 0.0, 0.0, 1000.0 * wave[i]))
+        fd.append((d, "DII", 0.0, 0.0, -800.0 * wave[i]))
+    io.upsert(
+        s,
+        "fii_dii",
+        pl.DataFrame(fd, schema=["date", "category", "buy_value", "sell_value", "net_value"], orient="row"),
+    )
+    po = []
+    for i, d in enumerate(sessions):
+        po.append((d, "FII", 1000.0 + 100 * wave[i], 900.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    cols = [
+        "date",
+        "client_type",
+        "fut_idx_long",
+        "fut_idx_short",
+        "fut_stk_long",
+        "fut_stk_short",
+        "opt_idx_call_long",
+        "opt_idx_put_long",
+        "opt_idx_call_short",
+        "opt_idx_put_short",
+    ]
+    io.upsert(s, "participant_oi", pl.DataFrame(po, schema=cols, orient="row"))
+
+
 @pytest.fixture(scope="session")
 def truncation_env(tmp_path_factory):
     """(settings, sessions, cache): synthetic market on disk, panel/universe/market built once."""
@@ -32,6 +83,7 @@ def truncation_env(tmp_path_factory):
     write_market(m, root)
     s = _settings_for(root)
     panel_pkg.build_all(s)
+    _add_market_raw(s, m.sessions)
     return s, m.sessions, {}
 
 
