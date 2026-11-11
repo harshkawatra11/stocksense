@@ -13,7 +13,6 @@ runner = CliRunner()
 
 NOT_IMPL = {
     "ingest": 2,
-    "build-panel": 3,
     "build-features": 4,
     "build-labels": 4,
     "train": 7,
@@ -82,3 +81,30 @@ def test_ingest_eq_is_a_real_subcommand_and_bare_ingest_stays_stubbed(tmp_data_r
     assert runner.invoke(app, ["ingest"], obj=tmp_data_root).exit_code == 2
     res = runner.invoke(app, ["ingest", "eq", "--from", "2020-01-01", "--to", "nonsense"], obj=tmp_data_root)
     assert res.exit_code != 0
+
+
+def test_build_panel_runs_all_four_builds(tmp_path_factory):
+    from tests.fixtures.synth import _settings_for, make_market, write_market
+
+    root = tmp_path_factory.mktemp("cli_panel")
+    write_market(make_market(), root)
+    s = _settings_for(root)
+    s = s.model_copy(
+        update={
+            "universe": s.universe.model_copy(
+                update={
+                    "u500_size": 15,
+                    "u500_exit_rank": 20,
+                    "u200_size": 6,
+                    "u200_exit_rank": 8,
+                    "min_med_turnover_inr": 1.0,
+                    "u200_min_med_turnover_inr": 1.0,
+                }
+            )
+        }
+    )
+    res = runner.invoke(app, ["build-panel"], obj=s)
+    assert res.exit_code == 0, res.output
+    assert "panel_daily" in res.output and "gap_src" in res.output
+    for name in ("security_master", "panel_daily", "panel_universe", "panel_market", "adj_events"):
+        assert io.read(s, name).collect().height > 0

@@ -102,10 +102,15 @@ def _core(rows: pl.DataFrame, gaps: pl.DataFrame, divs: pl.DataFrame) -> pl.Data
     )
     denom = pl.col("_base") * pl.col("gap_factor")
     ok_open = pl.col("open") > 0
+    # event inside the session: the open still carries the old price, so the open/close split of
+    # that day is undefined (ret itself is 0 by construction)
+    intra_event = pl.col("gap_src") == "implied_event_close"
     df = df.with_columns(
         pl.when(~pl.col("_first") & (pl.col("close") > 0)).then(pl.col("close") / denom - 1.0).alias("ret"),
-        pl.when(~pl.col("_first") & ok_open).then(pl.col("open") / denom - 1.0).alias("ret_co"),
-        pl.when(~pl.col("_first") & ok_open & (pl.col("close") > 0))
+        pl.when(~pl.col("_first") & ok_open & ~intra_event)
+        .then(pl.col("open") / denom - 1.0)
+        .alias("ret_co"),
+        pl.when(~pl.col("_first") & ok_open & (pl.col("close") > 0) & ~intra_event)
         .then(pl.col("close") / pl.col("open") - 1.0)
         .alias("ret_oc"),
         (pl.col("div_amt") / pl.col("_base")).alias("div_ret"),

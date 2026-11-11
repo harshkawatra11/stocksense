@@ -330,9 +330,26 @@ def ingest_corpact_cmd(
 
 
 @app.command("build-panel")
-def build_panel() -> None:
-    """Build the adjusted daily panel."""
-    _not_implemented(3)
+def build_panel(ctx: typer.Context) -> None:
+    """Build the security master, adjusted daily panel, universe and market frame."""
+    import time
+
+    from stocksense.panel import build_all
+
+    settings = _settings(ctx)
+    t0 = time.monotonic()
+    build_all(settings)
+    elapsed = time.monotonic() - t0
+    daily = read(settings, "panel_daily")
+    typer.echo(f"panel_daily rows: {daily.select(pl.len()).collect().item()}")
+    by_src = daily.group_by("gap_src").agg(pl.len().alias("n")).sort("n", descending=True).collect()
+    typer.echo("gap_src counts:")
+    for src, n in by_src.iter_rows():
+        typer.echo(f"  {src or '(none)':<16}{n:>10}")
+    for name in ("security_master", "panel_universe", "panel_market", "adj_events"):
+        n = read(settings, name).select(pl.len()).collect().item()
+        typer.echo(f"{name} rows: {n}")
+    typer.echo(f"build-panel took {elapsed:.1f} s")
 
 
 @app.command("build-features")
