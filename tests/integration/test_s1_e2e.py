@@ -123,3 +123,27 @@ def test_hysteresis_lowers_turnover_against_naive_daily_rebalancing(world):
     )
     assert keep.summary["mean_turnover"] < naive.summary["mean_turnover"]
     assert keep.summary["n_trades"] < naive.summary["n_trades"]
+
+
+def test_meta_pipeline_on_the_e2e_entries(world):
+    """Entry log -> closed-trade samples -> walk-forward meta predictions, all causal by construction."""
+    from datetime import timedelta
+
+    from stocksense.portfolio.meta import MetaModel, build_meta_samples, oof_meta_predictions
+    from stocksense.validation.splits import Fold
+
+    res, pol = run(world, hysteresis=True, stop=False)
+    samples = build_meta_samples(pl.DataFrame(pol.entry_log), res.trades)
+    assert samples.height > 100 and set(samples["label"].unique()) <= {0, 1}
+    assert (samples["exit_date"] > samples["entry_date"]).all()
+    d0 = samples["entry_date"].min()
+    folds = [
+        Fold(f"f{i}", d0 + timedelta(days=a - 1), d0 + timedelta(days=a), d0 + timedelta(days=a + 89))
+        for i, a in enumerate((200, 290, 380))
+    ]
+    out = oof_meta_predictions(samples, folds, factory=lambda: MetaModel(min_child_samples=15))
+    print(
+        f"\nmeta: {samples.height} samples, {out.height} out-of-fold rows, fitted folds "
+        f"{out.filter(pl.col('p').is_not_nan()).get_column('fold').n_unique()}"
+    )
+    assert out.height > 0 and out["p"].drop_nans().is_between(0, 1).all()
