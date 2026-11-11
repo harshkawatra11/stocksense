@@ -8,3 +8,9 @@
 - Industry features (`ind_mom_21`, `ind_mom_126`, `rel_ind_mom_21`, `ind_breadth_50`) compute `mom_*` locally (sum of ln(1+ret) over 21/126 rows) so they do not depend on T4.3a; members are the date's u500 rows; null if the industry has fewer than 5 u500 members that day or is `UNKNOWN`.
 - `mkt_ret_1` removed from `seed.py`.
 - Shared weekday arithmetic lives in `features/_calutil.py`; the hand-made test environment is `tests/fixtures/feat58.py`.
+
+## T4.3h calendar_feats.py
+- Forward-looking counts (`days_to_month_end`, last-3 `dom_bucket`, `sessions_to_next_holiday`) cannot use the stored session list under truncation, so they use a calendar = past sessions + projected Monday-Friday dates (75 days) minus holidays. Holidays = `holidays` dataset (read WITHOUT the as_of cut; NSE publishes the list in advance) plus every weekday inside the stored history that was not a session. Weekend special sessions are not projected.
+- `sessions_to_next_holiday` = sessions strictly between the date and the next holiday (0 = holiday tomorrow), capped 10, also 10 when none is known.
+- `is_expiry_week`: per month the latest `expiry_date` among IDF/STF rows visible by as_of, else last Thursday moved back past holidays; week = ISO Monday-Sunday.
+- `is_budget_week`: `BUDGET_DATES` table lists years whose budget (incl. interim) was not 1 Feb, written from memory and marked as best knowledge; other years use 1 Feb.
