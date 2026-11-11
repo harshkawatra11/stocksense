@@ -47,6 +47,8 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 3
 
+- T3.1 (2026-11-11): nodes are symbols (same symbol = same sid, so a symbol never maps to two sids and CA/symbol joins can use the symbol alone; `valid_from/valid_to` are informational). Edge B additionally skips a candidate B that already has an incoming official edge (a node may have one in-edge). Official edges are accepted closest-date-first, auto edges by `(last_date, symbol)`; a union-find rejects cycles. "Sessions between" is the difference of 0-based indices in the distinct `bhavcopy_eq` date list (all series). `sid_merges.csv` is appended to across runs; `rename_autodetect.csv` is rewritten each run. If an earlier auto-detected edge disappears later (a second candidate shows up), the two symbols keep their (shared) existing sid; sids are never re-numbered.
+
 ## Phase 4
 
 ## Phase 5
