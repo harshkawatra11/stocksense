@@ -16,6 +16,7 @@ from stocksense import panel as panel_pkg
 from stocksense.data import io
 from stocksense.features.base import FeatureContext, FeatureSpec, feature
 from stocksense.features.registry import load_all
+from tests.fixtures.kronos import write_test_kronos_files
 from tests.fixtures.synth import _settings_for, make_market, write_market
 
 CUT_INDICES = (300, 380, 450, 520, 590)  # positions in the 601-session list
@@ -32,6 +33,7 @@ def truncation_env(tmp_path_factory):
     write_market(m, root)
     s = _settings_for(root)
     panel_pkg.build_all(s)
+    write_test_kronos_files(s, m.sessions)  # kr_* read stored files (tiny random-weight model, T7.5c)
     return s, m.sessions, {}
 
 
