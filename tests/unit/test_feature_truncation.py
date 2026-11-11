@@ -75,6 +75,72 @@ def _add_market_raw(s, sessions) -> None:
     io.upsert(s, "participant_oi", pl.DataFrame(po, schema=cols, orient="row"))
 
 
+def _last_thursdays(y0: int, y1: int) -> list[date]:
+    out = []
+    for y in range(y0, y1 + 1):
+        for mth in range(1, 13):
+            d = date(y + (mth == 12), 1 if mth == 12 else mth + 1, 1) - timedelta(days=1)
+            while d.weekday() != 3:
+                d -= timedelta(days=1)
+            out.append(d)
+    return out
+
+
+def _add_fo(s, market) -> None:
+    """Futures and a 7-strike option chain for five stocks, so the derivatives features are non-trivial."""
+    from stocksense.features.derivs import R_FREE, bs_price
+
+    expiries = _last_thursdays(2018, 2020)
+    close = {
+        (r["symbol"], r["date"]): r["close"]
+        for r in market.eq.filter(pl.col("symbol").is_in(SYMS)).iter_rows(named=True)
+    }
+    rows = []
+    for (sym, d), c in close.items():
+        if d < market.sessions[200]:
+            continue
+        near = [e for e in expiries if e >= d][:2]
+        k0 = round(c / 5.0) * 5.0
+        for j, e in enumerate(near):
+            rows.append(
+                (sym, "STF", e, None, None, d, c * 1.004, 1000.0 + 7 * (d.toordinal() % 13) + 300 * j)
+            )
+        t_ = (near[0] - d).days / 365.0
+        for step in range(-3, 4):
+            k = k0 + 5.0 * step
+            if k <= 0:
+                continue
+            vol = 0.28 + 0.01 * (d.toordinal() % 7) / 7
+            oi = 100.0 + (d.toordinal() % 11) * 5 + 3 * abs(step)
+            rows.append((sym, "STO", near[0], k, "CE", d, bs_price(c, k, t_, R_FREE, vol, True), oi))
+            rows.append(
+                (sym, "STO", near[0], k, "PE", d, bs_price(c, k, t_, R_FREE, vol + 0.02, False), oi + 20)
+            )
+    cols = [
+        "symbol",
+        "instrument_type",
+        "expiry_date",
+        "strike_price",
+        "option_type",
+        "date",
+        "settle_price",
+        "oi",
+    ]
+    io.upsert(
+        s,
+        "fo_bhavcopy",
+        pl.DataFrame(
+            rows,
+            schema=cols,
+            orient="row",
+            schema_overrides={"strike_price": pl.Float64, "option_type": pl.Utf8},
+        ),
+    )
+
+
+SYMS = ["S00", "S01", "S02"]
+
+
 @pytest.fixture(scope="session")
 def truncation_env(tmp_path_factory):
     """(settings, sessions, cache): synthetic market on disk, panel/universe/market built once."""
@@ -84,6 +150,7 @@ def truncation_env(tmp_path_factory):
     s = _settings_for(root)
     panel_pkg.build_all(s)
     _add_market_raw(s, m.sessions)
+    _add_fo(s, m)
     return s, m.sessions, {}
 
 
