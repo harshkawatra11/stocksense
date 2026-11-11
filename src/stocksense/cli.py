@@ -170,6 +170,36 @@ def ingest_eq(
             raise typer.Exit(1)
 
 
+def _ingest_context(ctx: typer.Context):
+    """(IngestContext, NseClient, SystemClock) wired to the real store and the live NSE client."""
+    from stocksense.data.ingest_common import IngestContext
+    from stocksense.data.nse_http import NseClient
+
+    settings = _settings(ctx)
+    clock = SystemClock()
+    state = State(settings, clock)
+    state.migrate()
+    calendar = TradingCalendar.from_store(settings, clock)
+    nse = NseClient(clock)
+    return IngestContext(settings=settings, clock=clock, calendar=calendar, nse=nse, state=state), nse, clock
+
+
+@ingest_app.command("reference")
+def ingest_reference_cmd(ctx: typer.Context) -> None:
+    """Holidays, symbol changes, listings, ETFs, sectors, price bands and the F&O list."""
+    from stocksense.data.ingest_reference import ingest_reference
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        results = ingest_reference(ictx)
+    finally:
+        nse.close()
+    for r in results:
+        typer.echo(f"{r.dataset:<18} {r.status:<10} rows={r.rows}")
+    if any(r.status == "failed" for r in results):
+        raise typer.Exit(1)
+
+
 @app.command("build-panel")
 def build_panel() -> None:
     """Build the adjusted daily panel."""

@@ -1,0 +1,70 @@
+{
+ "CM": [
+  {
+   "tradingDate": "15-Jan-2026",
+   "weekDay": "Thursday",
+   "description": "Municipal Corporation Election - Maharashtra",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 1
+  },
+  {
+   "tradingDate": "26-Jan-2026",
+   "weekDay": "Monday",
+   "description": "Republic Day",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 2
+  },
+  {
+   "tradingDate": "15-Feb-2026",
+   "weekDay": "Sunday",
+   "description": "Mahashivratri",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 3
+  },
+  {
+   "tradingDate": "03-Mar-2026",
+   "weekDay": "Tuesday",
+   "description": "Holi",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 4
+  },
+  {
+   "tradingDate": "21-Mar-2026",
+   "weekDay": "Saturday",
+   "description": "Id-Ul-Fitr (Ramadan Eid)",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 5
+  },
+  {
+   "tradingDate": "26-Mar-2026",
+   "weekDay": "Thursday",
+   "description": "Shri Ram Navami",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 6
+  }
+ ],
+ "FO": [
+  {
+   "tradingDate": "15-Jan-2026",
+   "weekDay": "Thursday",
+   "description": "Municipal Corporation Election - Maharashtra",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 1
+  },
+  {
+   "tradingDate": "26-Jan-2026",
+   "weekDay": "Monday",
+   "description": "Republic Day",
+   "morning_session": null,
+   "evening_session": null,
+   "Sr_no": 2
+  }
+ ]
+}

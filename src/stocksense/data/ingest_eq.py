@@ -1,34 +1,43 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import random
 import zipfile
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 import httpx
 import polars as pl
 
-from stocksense.core.calendar import TradingCalendar
-from stocksense.core.clock import Clock
 from stocksense.core.config import Settings
 from stocksense.core.errors import DataNotAvailable
 from stocksense.core.log import get_logger
-from stocksense.core.state import State
+from stocksense.data.ingest_common import (
+    MARKER_AGE_DAYS,
+    NSE_ARCHIVES,
+    IngestContext,
+    IngestResult,
+    absent,
+    csv_from_zip,
+    daterange,
+    fetch_cached,
+    marker,
+    num,
+    read_strings,
+)
 from stocksense.data.io import read, upsert
 from stocksense.data.nse_http import NseClient
+
+__all__ = ["IngestContext", "IngestResult", "NseClient"]  # re-exported for callers and tests
 
 log = get_logger(__name__)
 
 UDIFF_START = date(2024, 7, 8)
 DELIVERY_START = date(2019, 8, 23)  # stored delivery history starts here; never extended earlier
 MIN_SESSION_ROWS = 500
-_MARKER_AGE_DAYS = 3  # a 404 older than this is remembered and never fetched again
-_NSE_ARCHIVES = "https://nsearchives.nseindia.com"
 _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
 # PLAN B.3 Finding 2: special sessions found missing from the adopted data.
@@ -64,41 +73,20 @@ _EQ_COLUMNS = (
 _FLOATS = ("open", "high", "low", "close", "prev_close", "last_price", "turnover_inr", "n_trades")
 
 
-@dataclass(frozen=True)
-class IngestResult:
-    """Outcome of one dataset on one day; status is ok | not_published | no_session | skipped | failed."""
-
-    dataset: str
-    date: date
-    rows: int
-    status: str
-
-
-@dataclass
-class IngestContext:
-    settings: Settings
-    clock: Clock
-    calendar: TradingCalendar
-    nse: NseClient
-    state: State
-
-
 # ---- URLs and cache paths -----------------------------------------------------------------------
 
 
 def eq_url(d: date) -> str:
     """NSE archive URL of the cash-market bhavcopy zip for `d` (UDiFF from 2024-07-08, else legacy)."""
     if d >= UDIFF_START:
-        return f"{_NSE_ARCHIVES}/content/cm/BhavCopy_NSE_CM_0_0_0_{d:%Y%m%d}_F_0000.csv.zip"
+        return f"{NSE_ARCHIVES}/content/cm/BhavCopy_NSE_CM_0_0_0_{d:%Y%m%d}_F_0000.csv.zip"
     mon = _MONTHS[d.month - 1]
-    return (
-        f"{_NSE_ARCHIVES}/content/historical/EQUITIES/{d.year}/{mon}/cm{d.day:02d}{mon}{d.year}bhav.csv.zip"
-    )
+    return f"{NSE_ARCHIVES}/content/historical/EQUITIES/{d.year}/{mon}/cm{d.day:02d}{mon}{d.year}bhav.csv.zip"
 
 
 def delivery_url(d: date) -> str:
     """NSE archive URL of sec_bhavdata_full (prices + delivery) for `d`."""
-    return f"{_NSE_ARCHIVES}/products/content/sec_bhavdata_full_{d:%d%m%Y}.csv"
+    return f"{NSE_ARCHIVES}/products/content/sec_bhavdata_full_{d:%d%m%Y}.csv"
 
 
 def _eq_cache(settings: Settings, d: date):
@@ -111,22 +99,6 @@ def _delivery_cache(settings: Settings, d: date):
 
 
 # ---- parsers ------------------------------------------------------------------------------------
-
-
-def _csv_from_zip(raw: bytes) -> bytes:
-    with zipfile.ZipFile(io.BytesIO(raw)) as z:
-        names = [n for n in z.namelist() if not n.endswith("/")]
-        if len(names) != 1:
-            raise DataNotAvailable(f"expected one file in the zip, found {names}")
-        return z.read(names[0])
-
-
-def _read_strings(data: bytes) -> pl.DataFrame:
-    df = pl.read_csv(io.BytesIO(data), infer_schema_length=0, truncate_ragged_lines=True)
-    df = df.rename({c: c.strip() for c in df.columns})
-    keep = [c for c in df.columns if c and not c.startswith(("_duplicated", "Unnamed"))]
-    df = df.select(keep)
-    return df.with_columns(pl.col(c).str.strip_chars() for c in df.columns)
 
 
 def _finish_eq(df: pl.DataFrame, era: str) -> pl.DataFrame:
@@ -146,7 +118,7 @@ def _finish_eq(df: pl.DataFrame, era: str) -> pl.DataFrame:
 
 def parse_udiff(raw: bytes) -> pl.DataFrame:
     """bhavcopy_eq-shaped rows (prices in rupees, volume in shares) from a UDiFF cash-market zip."""
-    df = _read_strings(_csv_from_zip(raw))
+    df = read_strings(csv_from_zip(raw))
     df = df.rename(
         {
             "TckrSymb": "symbol", "SctySrs": "series", "TradDt": "date", "OpnPric": "open",
@@ -161,7 +133,7 @@ def parse_udiff(raw: bytes) -> pl.DataFrame:
 
 def parse_legacy(raw: bytes) -> pl.DataFrame:
     """bhavcopy_eq-shaped rows from a legacy cmDDMONYYYYbhav zip (trailing-comma column dropped)."""
-    df = _read_strings(_csv_from_zip(raw))
+    df = read_strings(csv_from_zip(raw))
     df = df.rename(
         {
             "SYMBOL": "symbol", "SERIES": "series", "OPEN": "open", "HIGH": "high", "LOW": "low",
@@ -183,13 +155,10 @@ def parse_delivery(text: str, d: date) -> pl.DataFrame | None:
     Returns None when any DATE1 differs from `d` (NSE serves the previous session's file on a holiday).
     `-` becomes null. deliv_pct is 0-100.
     """
-    df = _read_strings(text.encode("utf-8"))
+    df = read_strings(text.encode("utf-8"))
     dates = df.select(pl.col("DATE1").str.to_titlecase().str.strptime(pl.Date, "%d-%b-%Y"))["DATE1"]
     if dates.is_null().any() or (dates != d).any() or df.height == 0:
         return None
-
-    def num(c: str) -> pl.Expr:
-        return pl.when(pl.col(c).is_in(["-", ""])).then(None).otherwise(pl.col(c)).cast(pl.Float64)
 
     return df.select(
         pl.col("SYMBOL").alias("symbol"),
@@ -223,30 +192,6 @@ class _Counts:
         return cls(per_day("bhavcopy_eq"), per_day("bhavcopy_delivery"))
 
 
-def _marker(kind: str, d: date) -> str:
-    return f"no_session:{kind}:{d.isoformat()}"
-
-
-def _absent(ctx: IngestContext, dataset: str, kind: str, d: date) -> IngestResult:
-    """Status for a 404: not_published if a session is expected and is at most a day old, else no_session."""
-    age = (ctx.clock.today() - d).days
-    if d.weekday() < 5 and ctx.calendar.is_session(d) and age <= 1:
-        return IngestResult(dataset, d, 0, "not_published")
-    if age > _MARKER_AGE_DAYS:
-        ctx.state.kv_set(_marker(kind, d), "1")
-    return IngestResult(dataset, d, 0, "no_session")
-
-
-def _fetch(ctx: IngestContext, url: str, cache) -> bytes | None:
-    if cache.is_file():
-        return cache.read_bytes()
-    raw = ctx.nse.get_archive(url)
-    if raw is not None:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_bytes(raw)
-    return raw
-
-
 # ---- one day ------------------------------------------------------------------------------------
 
 
@@ -255,15 +200,15 @@ def _eq_part(ctx: IngestContext, d: date, counts: _Counts) -> IngestResult:
     have = counts.eq.get(d, 0)
     if have >= MIN_SESSION_ROWS:
         return IngestResult(name, d, have, "skipped")
-    if ctx.state.kv_get(_marker("eq", d)) is not None:
+    if ctx.state.kv_get(marker("eq", d)) is not None:
         return IngestResult(name, d, 0, "skipped")
     try:
-        raw = _fetch(ctx, eq_url(d), _eq_cache(ctx.settings, d))
+        raw = fetch_cached(ctx, eq_url(d), _eq_cache(ctx.settings, d))
     except (DataNotAvailable, httpx.HTTPError) as e:
         log.warning("eq_fetch_failed", date=str(d), error=str(e))
         return IngestResult(name, d, 0, "failed")
     if raw is None:
-        return _absent(ctx, name, "eq", d)
+        return absent(ctx, name, "eq", d)
     try:
         df = (parse_udiff if d >= UDIFF_START else parse_legacy)(raw)
     except (zipfile.BadZipFile, pl.exceptions.PolarsError, DataNotAvailable, ValueError) as e:
@@ -276,7 +221,7 @@ def _eq_part(ctx: IngestContext, d: date, counts: _Counts) -> IngestResult:
         # e.g. gold-ETF-only Sunday trading: real data, but not an equity session, so it must not
         # become a calendar session (the calendar is derived from the stored dates)
         log.warning("eq_too_few_rows", date=str(d), rows=df.height)
-        res = _absent(ctx, name, "eq", d)
+        res = absent(ctx, name, "eq", d)
         return IngestResult(name, d, df.height, "no_session" if res.status == "no_session" else res.status)
     upsert(ctx.settings, name, df, clock=ctx.clock)
     counts.eq[d] = df.height
@@ -289,7 +234,7 @@ def _delivery_part(ctx: IngestContext, d: date, counts: _Counts) -> IngestResult
     have = counts.deliv.get(d, 0)
     if have > 0:
         return IngestResult(name, d, have, "skipped")
-    if ctx.state.kv_get(_marker("delivery", d)) is not None:
+    if ctx.state.kv_get(marker("delivery", d)) is not None:
         return IngestResult(name, d, 0, "skipped")
     cache = _delivery_cache(ctx.settings, d)
     try:
@@ -298,7 +243,7 @@ def _delivery_part(ctx: IngestContext, d: date, counts: _Counts) -> IngestResult
         log.warning("delivery_fetch_failed", date=str(d), error=str(e))
         return IngestResult(name, d, 0, "failed")
     if raw is None:
-        return _absent(ctx, name, "delivery", d)
+        return absent(ctx, name, "delivery", d)
     try:
         df = parse_delivery(raw.decode("utf-8", errors="replace"), d)
     except (pl.exceptions.PolarsError, ValueError) as e:
@@ -336,8 +281,8 @@ def parse_delivery_ok(raw: bytes, d: date) -> bool:
 
 def _absent_no_session(ctx: IngestContext, dataset: str, d: date) -> IngestResult:
     age = (ctx.clock.today() - d).days
-    if age > _MARKER_AGE_DAYS:
-        ctx.state.kv_set(_marker("delivery", d), "1")
+    if age > MARKER_AGE_DAYS:
+        ctx.state.kv_set(marker("delivery", d), "1")
     return IngestResult(dataset, d, 0, "no_session")
 
 
@@ -370,10 +315,6 @@ def ingest_eq_day(ctx: IngestContext, d: date, counts: _Counts | None = None) ->
 # ---- ranges and repair --------------------------------------------------------------------------
 
 
-def _daterange(a: date, b: date) -> list[date]:
-    return [a + timedelta(days=i) for i in range((b - a).days + 1)]
-
-
 def ingest_eq_range(
     ctx: IngestContext,
     a: date,
@@ -382,7 +323,7 @@ def ingest_eq_range(
     on_result: Callable[[IngestResult], None] | None = None,
 ) -> list[IngestResult]:
     """Ingest every calendar day in [a, b] (weekends included), or the explicit `days` list."""
-    day_list = list(days) if days is not None else _daterange(a, b)
+    day_list = list(days) if days is not None else daterange(a, b)
     if not day_list:
         return []
     counts = _Counts.load(ctx.settings, min(day_list), max(day_list))
@@ -399,8 +340,8 @@ def repair_days(ctx: IngestContext, to: date) -> list[date]:
     """Repair order: (a) the 19 known specials, (b) 2026-09-30..to, (c) 2010-01-01..2026-09-29 (rest)."""
     a = list(MISSING_SPECIAL_SESSIONS)
     seen = set(a)
-    b = _daterange(date(2026, 9, 30), to)
-    c = [d for d in _daterange(date(2010, 1, 1), date(2026, 9, 29)) if d not in seen]
+    b = daterange(date(2026, 9, 30), to)
+    c = [d for d in daterange(date(2010, 1, 1), date(2026, 9, 29)) if d not in seen]
     return a + b + c
 
 
