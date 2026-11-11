@@ -315,3 +315,21 @@ categories 858 null 0
 - Instrument master ``NSE.json.gz``: 85,180 rows, keys ``exchange, exchange_token, freeze_quantity, instrument_key, instrument_type, isin, lot_size, name, qty_multiplier, security_type, segment, tick_size, trading_symbol``; 2,757 rows with segment ``NSE_EQ`` and type ``EQ``; key ``NSE_EQ|<ISIN>``.
 - Historical candles V3 work: newest-first, 7 fields ``[ts, o, h, l, c, v, oi]``. One request spans a whole month: 1-minute October 2026 returned 7,500 candles (20 sessions x 375) and January 2022 returned 7,500, so the client's request span for minute intervals up to 15 is 31 days (the plan said 28). A 70-day range answers HTTP 400 ``UDAPI1148``. A full session has 375 one-minute bars (09:15..15:29).
 - **Quotes are NOT available with the Analytics Token.** Every market-quote endpoint (``/v2/market-quote/quotes``, ``ltp``, ``ohlc``; ``/v3/market-quote/ltp``, ``ohlc``, ``quotes``) and ``/v2/user/profile`` answered HTTP 401 ``UDAPI100050`` (while historical candles work with the same token). ``UpstoxClient.quotes`` is implemented to the documented shape and tested on a fixture, but raises ``BrokerError`` with this token. **For T10.2: Angel is the only live quote source; Upstox serves historical candles only.**
+
+## After T2.10 (2026-11-12): intraday bars
+
+**Adjustment probe.** KAMDHENU (the plan's example) is not among the 470 stored symbols, so the stored bars were checked on three symbols that split or issued bonus shares after the download window began, comparing the last stored 5-minute close of the day before the ex-date with the raw bhavcopy close of that day:
+
+```
+DRREDDY    (split 5:1, ex 2024-10-28)   raw close 6514.70  stored 5m close 1302.00  ratio 0.1999
+RELIANCE   (bonus 1:1, ex 2024-10-28)   raw close 2655.70  stored 5m close 1328.15  ratio 0.5001
+PCJEWELLER (split 10:1, ex 2024-12-16)  raw close 150.76   stored 5m close   15.08  ratio 0.1000
+```
+
+Stored bars are therefore **back-adjusted as of their download date**. Fresh Angel and Upstox calls for KAMDHENU 2025-01-07 (raw close 479.30, split 10:1 on 2025-01-08): Angel 5-minute first bar 47.69 / 48.00 close, last close 48.30 (75 bars): **back-adjusted**. Upstox 5-minute first bar open 47.80, last close 48.30 (75 bars), Upstox 1-minute oldest bar open 47.80 (375 bars): **back-adjusted**. Consequence: bars from different download dates sit on different adjustment bases after a later split; ``load_bars(basis="adjusted")`` rescales each (symbol, session) to the panel's ``adj_open`` and so removes the question; new rows carry ``source`` and ``adj_asof``.
+
+**5-minute extension (Angel).** ``stocksense ingest intraday --extend-5m``: 464 symbols extended (6 have no Angel token), +1,256,945 rows with ``source='angel'``; ``intraday_bars`` now 10,690,973 rows, 470 symbols, 2024-09-13 09:15 -> 2026-11-11 15:25 IST. On the last session every symbol has 62-75 bars (median 75). Angel's ``getCandleData`` returns empty or ``AB1021`` answers above about one call per second, so the client spaces candle calls 1.0 s apart (the first run, at 0.4 s, spent minutes in the 60 s backoff).
+
+**1-minute backfill (Upstox)** launched in the background: ``stocksense ingest intraday --backfill-1m --from 2022-01-03`` (log ``data_store/logs/t210_bars_1m.log``). Symbol set: union over calendar years 2022..2026 of the 300 highest-median-turnover EQ symbols = 512 symbols (473 have an Upstox key and data), 58 months, newest month first, one request per symbol-month, about 1 request per second, resumable through ``job_runs(job="bars_1m:<symbol>:<YYYY-MM>")``. Status when this note was written: 3,386 of about 29,700 symbol-months done (2026-11 back to 2026-04), 23.1M rows in ``bars_1m`` (473 symbols), 61,760 symbol-sessions of which 670 are short (fewer than 375 bars: half-days, the Muhurat session, the current day) and 303 have a summed bar volume more than 5% away from bhavcopy volume (counted in each job's ``detail``, never dropped). ETA about 7 hours more. To resume after an interruption run the same command (done months are skipped).
+
+**``load_bars``.** ``basis="raw_ratio"`` returns the stored bars unchanged; ``basis="adjusted"`` rescales each (symbol, session) by ``k = panel adj_open / bar-09:15 open`` (fallback ``adj_close / last bar close``; prices x k, volume / k) and drops sessions without a panel row.

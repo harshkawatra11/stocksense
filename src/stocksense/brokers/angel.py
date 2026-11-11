@@ -26,6 +26,8 @@ _CANDLE = "/rest/secure/angelbroking/historical/v1/getCandleData"
 QUOTE_CHUNK = 50
 QUOTE_SPACING_S = 1.0
 CALL_SPACING_S = 0.4
+#: getCandleData is documented at 3/s but gives spurious empty/AB1021 answers above about 1/s (2026-11-12)
+CANDLE_SPACING_S = 1.0
 BACKOFF_S = (60.0, 300.0)
 #: maximum span of one getCandleData request, in days
 CANDLE_SPAN_DAYS = {"ONE_MINUTE": 30, "FIVE_MINUTE": 100, "ONE_DAY": 2000}
@@ -246,7 +248,7 @@ class AngelClient:
                 "fromdate": a.strftime("%Y-%m-%d %H:%M"),
                 "todate": b.strftime("%Y-%m-%d %H:%M"),
             }
-            rows += self._call("POST", _CANDLE, body).get("data") or []
+            rows += self._call("POST", _CANDLE, body, spacing=CANDLE_SPACING_S).get("data") or []
         schema = {
             "ts": pl.Datetime("us", "Asia/Kolkata"),
             "open": pl.Float64,

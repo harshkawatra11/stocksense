@@ -390,6 +390,67 @@ def ingest_results_cmd(
     typer.echo(f"rows: {sum(r.rows for r in results)}")
 
 
+@ingest_app.command("intraday")
+def ingest_intraday_cmd(
+    ctx: typer.Context,
+    extend_5m: Annotated[
+        bool, typer.Option("--extend-5m", help="Extend stored 5-minute bars (Angel).")
+    ] = False,
+    backfill_1m: Annotated[
+        bool, typer.Option("--backfill-1m", help="Backfill 1-minute bars (Upstox), resumable.")
+    ] = False,
+    from_: Annotated[str, typer.Option("--from", help="First day of the 1-minute backfill.")] = "2022-01-03",
+    top: Annotated[int, typer.Option("--top", help="Symbols per calendar year (by median turnover).")] = 300,
+) -> None:
+    """5-minute extension via Angel and/or the 1-minute backfill via Upstox."""
+    from stocksense.data.ingest_intraday import backfill_1m as run_1m
+    from stocksense.data.ingest_intraday import extend_5m as run_5m
+    from stocksense.data.ingest_intraday import top_symbols_by_year
+
+    ictx, nse, clock = _ingest_context(ctx)
+    nse.close()
+    if not (extend_5m or backfill_1m):
+        raise typer.BadParameter("give --extend-5m and/or --backfill-1m")
+    if extend_5m:
+        seen = {"n": 0, "rows": 0}
+
+        def show5(r) -> None:
+            seen["n"] += 1
+            seen["rows"] += r.rows
+            if seen["n"] % 20 == 0 or r.status == "failed":
+                typer.echo(
+                    f"{clock.now():%H:%M:%S} 5m symbols {seen['n']} rows {seen['rows']} last {r.status}"
+                )
+                sys.stdout.flush()
+
+        res = run_5m(ictx, on_result=show5)
+        _echo_summary(res)
+        typer.echo(f"5m rows: {sum(r.rows for r in res)}")
+    if backfill_1m:
+        if not ictx.settings.secrets.upstox_analytics_token:
+            typer.echo("skipped: no Upstox token")
+            return
+        start = _parse_day(from_, clock)
+        symbols = top_symbols_by_year(ictx.settings, start.year, clock.today().year, top)
+        typer.echo(f"1m backfill: {len(symbols)} symbols from {start}")
+        sys.stdout.flush()
+        n = {"ok": 0, "rows": 0}
+
+        def show(r) -> None:
+            if r.status == "ok":
+                n["ok"] += 1
+                n["rows"] += r.rows
+                if n["ok"] % 50 == 0:
+                    typer.echo(
+                        f"{clock.now():%H:%M:%S} symbol-months {n['ok']} rows {n['rows']} ({r.date:%Y-%m})"
+                    )
+                    sys.stdout.flush()
+
+        res = run_1m(ictx, symbols, start, on_result=show)
+        _echo_summary(res)
+        typer.echo(f"1m rows: {sum(r.rows for r in res)}")
+
+
 @app.command("build-panel")
 def build_panel(ctx: typer.Context) -> None:
     """Build the security master, adjusted daily panel, universe and market frame."""
