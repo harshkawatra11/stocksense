@@ -84,6 +84,8 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 7
 
+- T7.5: (T7.5a) Kronos vendored from `shiyu-coder/Kronos` at `67b630e67f6a18c9e9be918d9b4337c960db1e9a` (`third_party/kronos/COMMIT`): `model/`, `LICENSE`, `tests/test_kronos_regression.py`, `tests/data/regression_*.csv`. Only two patches, each marked `# STOCKSENSE PATCH:`: `model/kronos.py` line 10 `from model.module import *` -> `from .module import *` (relative import); the regression test's `from model import ...` -> `from kronos.model import ...` (package path). No pandas-3 patch was needed (only a `Pandas4Warning` for `Series.dt.weekday`, left as is). `import kronos.model` works from any cwd through the editable install (hatch `packages` entry), so neither `pythonpath` nor `sys.path` changes were required. Upstream regression test passes on CPU (max abs diff 0.6875 price units, max rel diff 1.7e-6 vs rtol 1e-5; MSE diffs 7.5e-9 and 5.1e-7 vs tol 1e-6) and on CUDA (max rel diff 2.0e-6; MSE diffs 7.2e-9 / 5.1e-7). Weights cached: Kronos-small, Kronos-mini, Tokenizer-base, Tokenizer-2k.
+
 ## Phase 8
 
 ## Phase 9
