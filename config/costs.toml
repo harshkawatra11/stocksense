@@ -1,0 +1,30 @@
+verified_on = "2026-11-11"
+[delivery]
+stt_buy = 0.001
+stt_sell = 0.001
+stamp_buy = 0.00015
+exchange = 0.0000297
+sebi = 0.000001
+gst = 0.18
+dp_per_scrip_sell_inr = 20.0
+brokerage_rate = 0.001
+brokerage_cap_inr = 20.0
+brokerage_min_inr = 5.0
+[intraday]
+stt_buy = 0.0
+stt_sell = 0.00025
+stamp_buy = 0.00003
+exchange = 0.0000297
+sebi = 0.000001
+gst = 0.18
+dp_per_scrip_sell_inr = 0.0
+brokerage_rate = 0.001
+brokerage_cap_inr = 20.0
+brokerage_min_inr = 5.0
+[slippage]
+impact_k = 0.5
+open_penalty_bps = 3.0
+close_penalty_bps = 2.0
+half_spread_bps_by_rank = [[50, 1.5], [100, 2.5], [200, 4.0], [350, 7.0], [500, 12.0]]
+[grid]
+capital_inr = [25000, 100000, 500000, 2500000]

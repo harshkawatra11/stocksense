@@ -1,0 +1,20 @@
+[s1]                         # multi-day delivery book
+product = "delivery"
+entry = "close"              # buy at C(t+1)
+exit = "open"                # sell at O(t+1+h)
+targets = ["y_c2o_5", "y_c2o_10", "y_c2o_20"]
+universe = "u500"
+long_only = true
+k_max = 20
+[s2]                         # same-day auction book
+product = "intraday"
+entry = "open"               # O(t+1), decided 09:07 from pre-open indicative prices
+exit = "close_minus"         # squared off 15:18
+targets = ["y_oc"]
+universe = "u200"
+long_only = false
+shorts_require_fno = true
+k_max = 10
+[s3]
+enabled = false              # event sleeve, switched on in Phase 8
+max_capital_frac = 0.30

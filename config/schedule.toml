@@ -1,0 +1,8 @@
+# Stub. T10.4 writes the full job schedule here.
+# Extra trading sessions (weekend specials, Muhurat), e.g.:
+#   [[special_sessions]]
+#   date = "2027-02-01"
+#   open = "09:15"
+#   close = "15:30"
+#   tradable = true
+special_sessions = []

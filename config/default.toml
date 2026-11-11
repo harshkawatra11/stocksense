@@ -1,0 +1,12 @@
+[paths]
+data_root = "data_store"
+[time]
+tz = "Asia/Kolkata"
+decision_cutoff = "20:00"
+[research]
+dev_start = "2011-01-03"
+wf_test_start = "2014-01-01"
+lockbox_start = "2025-10-01"
+[runtime]
+threads = 8
+gpu = true

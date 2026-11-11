@@ -1,0 +1,14 @@
+target_vol_annual = 0.12
+max_gross = 1.0
+max_name_weight = 0.15
+max_industry_weight = 0.30
+max_adv_participation = 0.01
+max_fixed_cost_bps = 15.0
+min_position_inr_floor = 10000
+stop_min = 0.08
+stop_vol_mult = 3.0
+book_dd_half = 0.10
+book_dd_stop = 0.15
+no_entry_sessions_before_results = 1
+no_entry_sessions_before_split = 2
+s2_free_cash_frac = 1.0

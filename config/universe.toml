@@ -1,0 +1,11 @@
+series_allowed = ["EQ"]
+min_history_sessions = 252
+min_traded_of_last_60 = 57
+min_close = 20.0
+min_med_turnover_inr = 1.0e7      # ₹1 crore
+u500_size = 500
+u500_exit_rank = 600
+u200_size = 200
+u200_exit_rank = 250
+u200_min_med_turnover_inr = 1.0e8 # ₹10 crore
+etf_name_regex = "(?i)(ETF|BEES|LIQUID|GILT|NIFTY|SENSEX|GOLD|SILVER|IETF|ADD$)"
