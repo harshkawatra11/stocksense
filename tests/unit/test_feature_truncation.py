@@ -141,6 +141,36 @@ def _add_fo(s, market) -> None:
 SYMS = ["S00", "S01", "S02"]
 
 
+def _add_bars(s, market) -> None:
+    """Full 5-minute sessions for three stocks over sessions 250-600 (every third session)."""
+    rows = []
+    eq = market.eq.filter(pl.col("symbol").is_in(SYMS))
+    for r in eq.iter_rows(named=True):
+        idx = market.sessions.index(r["date"])
+        if idx < 250 or idx % 3:
+            continue
+        base = datetime.combine(r["date"], datetime.min.time(), tzinfo=IST) + timedelta(hours=9, minutes=15)
+        o, c = r["open"], r["close"]
+        for k in range(75):
+            f0, f1 = k / 75.0, (k + 1) / 75.0
+            op, cl = o + (c - o) * f0, o + (c - o) * f1
+            hi, lo = max(op, cl) * 1.001, min(op, cl) * 0.999
+            rows.append(
+                (
+                    r["symbol"],
+                    base + timedelta(minutes=5 * k),
+                    "FIVE_MINUTE",
+                    op,
+                    hi,
+                    lo,
+                    cl,
+                    100 + 7 * (k % 5),
+                )
+            )
+    cols = ["symbol", "ts", "interval", "open", "high", "low", "close", "volume"]
+    io.upsert(s, "intraday_bars", pl.DataFrame(rows, schema=cols, orient="row"))
+
+
 def _add_events(s, sessions) -> None:
     """Announcements, results filings and board meetings for a few stocks (results every 60 sessions)."""
     ann, ri, bm = [], [], []
@@ -175,6 +205,7 @@ def truncation_env(tmp_path_factory):
     _add_market_raw(s, m.sessions)
     _add_fo(s, m)
     _add_events(s, m.sessions)
+    _add_bars(s, m)
     return s, m.sessions, {}
 
 
