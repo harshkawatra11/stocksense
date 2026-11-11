@@ -216,6 +216,7 @@ def select_hyperparams(
     universe: str = "u500",
     entry: str | None = None,
     purpose: str = "research",
+    auction: bool = False,
 ) -> dict[str, Any]:
     """Best grid configuration (by mean inner-validation IC over the anchor folds) for (target, objective).
 
@@ -242,6 +243,10 @@ def select_hyperparams(
         uni = io.read(settings, "panel_universe", columns=["date", "sid", universe]).collect()
         lab = lab.join(uni.filter(pl.col(universe)).select("date", "sid"), on=["date", "sid"])
     feats = load_features(settings, purpose, end=last_train_end).collect()
+    if auction:  # the T4.4 auction features (y_oc), keyed by decision date
+        from stocksense.features.auction_matrix import auction_columns
+
+        feats = feats.join(auction_columns(settings, purpose)[0].collect(), on=["date", "sid"], how="inner")
     names = [c for c in feats.columns if c not in ("date", "sid")]
     df = lab.join(feats, on=["date", "sid"], how="inner").sort("date", "sid")
     rng = np.random.default_rng(seed)

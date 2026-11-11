@@ -498,3 +498,5 @@ def doctor(ctx: typer.Context) -> None:
     out("secrets")
     for name, value in settings.secrets.model_dump().items():
         out(f"  {name:<24}{'set' if value else 'unset'}")
+
+__import__("stocksense.cli_research").cli_research.register(app)  # research cmds
