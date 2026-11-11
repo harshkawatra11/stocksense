@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from stocksense.backtest.engine import BookState, PanelData
+from stocksense.backtest.engine import AuctionView, BookState, PanelData, Position
 from stocksense.backtest.fills import Order
 from stocksense.core.calendar import TradingCalendar
 from stocksense.core.config import Costs, Risk, Settings
@@ -37,6 +37,10 @@ OVERLAY_BREADTH = 0.30
 OVERLAY_FACTOR = 0.5
 CASH_HAIRCUT = 0.005  # expected sale proceeds are counted at 99.5% when sizing tomorrow's close buys
 BUY_CUSHION_INR = 30.0  # the engine leaves about Rs 29.5 of cash per buy for the exit fees
+S2_STOP_FRAC = 0.03
+S2_UNIVERSE_RANK = 200
+S2_GAP_SKIP = 0.18  # backtest stand-in for "within 2% of the upper price band"
+S2_BAND_MARGIN = 0.02
 _EPS = 1e-9
 
 
@@ -145,6 +149,31 @@ class S1Config:
         return cls(
             h, k_max if k_max is not None else settings.strategies.s1.k_max, settings.risk,
             settings.costs, slippage, overlay, hysteresis,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class S2Config:
+    k_max: int
+    risk: Risk
+    costs: Costs
+    slippage: SlippageTable
+    shorts_require_fno: bool = True
+    universe_rank: int = S2_UNIVERSE_RANK
+    min_pos: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        mp = min_position_for_fixed_cost("intraday", self.costs, self.risk.max_fixed_cost_bps)
+        object.__setattr__(self, "min_pos", float(max(mp, self.risk.min_position_inr_floor)))
+
+    @classmethod
+    def from_settings(
+        cls, settings: Settings, slippage: SlippageTable, *, k_max: int | None = None
+    ) -> S2Config:
+        s2 = settings.strategies.s2
+        return cls(
+            k_max if k_max is not None else s2.k_max, settings.risk, settings.costs, slippage,
+            s2.shorts_require_fno,
         )  # fmt: skip
 
 
@@ -535,6 +564,169 @@ class S1Policy:
             self._pending_vol[e["sid"]] = e["vol_21"]
         self.entry_log.extend(plan.entries)
         self.plans[t] = plan
+        return plan.orders
+
+
+# ---- S2: pure planning -------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AuctionRow:
+    """One name before the open of d: indicative/official open, gap, rank, previous-close vol, F&O flag."""
+
+    open: float
+    gap: float
+    turnover_rank: int
+    med_turn_20: float
+    vol_21: float
+    in_fno: bool = False
+    upper_circuit: float | None = None
+
+
+@dataclass(frozen=True)
+class S2Plan:
+    orders: list[Order]
+    n: int
+    budget: float
+    min_pos: float
+    n_long_qualify: int
+    n_short_qualify: int
+    n_long: int
+    n_short: int
+    note: str = ""
+
+
+def intraday_stop_hit(position: Position | Any, ltp: float, stop: float = S2_STOP_FRAC) -> bool:
+    """True when a position (qty > 0 long, qty < 0 short; `entry_price`) is `stop` or more adverse at `ltp`.
+    The hard 3% stop is live-only: the daemon calls this and covers/sells at once; a backtest has no
+    intraday path."""
+    if position.qty == 0 or position.entry_price <= 0:
+        return False
+    move = (ltp / position.entry_price - 1.0) * (1.0 if position.qty > 0 else -1.0)
+    return move <= -stop + 1e-12
+
+
+def _split_sides(n: int, n_long: int, n_short: int) -> tuple[int, int]:
+    """Split n slots by how many names qualify per side, at most ceil(n/2) per side unless the other side
+    is empty; ties favour longs."""
+    if n <= 0:
+        return 0, 0
+    if n_short == 0:
+        return min(n, n_long), 0
+    if n_long == 0:
+        return 0, min(n, n_short)
+    q = n_long + n_short
+    half = -(-n // 2)
+    nl = min(int(math.floor(n * n_long / q + 0.5)), half, n_long)
+    ns = min(n - nl, half, n_short)
+    nl = min(n - ns, half, n_long)
+    return nl, ns
+
+
+def plan_s2(
+    d: date,
+    scores_d: Mapping[int, float],
+    er_d: Mapping[int, float],
+    auction: Mapping[int, AuctionRow],
+    free_cash: float,
+    equity_inr: float,
+    cfg: S2Config,
+) -> S2Plan:
+    """The auction book for session `d`, decided before the open (PLAN T9.2 steps 1-6)."""
+    risk, min_pos = cfg.risk, cfg.min_pos
+    budget = max(free_cash, 0.0) * risk.s2_free_cash_frac
+    n = min(cfg.k_max, _floor(budget / min_pos))
+    if n <= 0:
+        return S2Plan([], 0, budget, min_pos, 0, 0, 0, 0, "budget below one minimum position")
+    planned = budget / n
+    longs: list[tuple[float, int]] = []
+    shorts: list[tuple[float, int]] = []
+    for sid, a in auction.items():
+        if a.turnover_rank > cfg.universe_rank or sid not in scores_d or a.open <= 0:
+            continue
+        er = er_d.get(sid)
+        if er is None or not math.isfinite(er):
+            continue
+        row = NameRow(a.open, a.vol_21, a.turnover_rank, a.med_turn_20)
+        c = round_trip_cost_frac("intraday", planned, cfg.costs) + 2.0 * _slip(
+            row, planned, "open", cfg.slippage
+        )
+        if er - c > 0:
+            longs.append((er, sid))
+        if -er - c > 0 and (a.in_fno or not cfg.shorts_require_fno):
+            near_band = a.upper_circuit is not None and a.open >= (1.0 - S2_BAND_MARGIN) * a.upper_circuit
+            if not near_band and a.gap < S2_GAP_SKIP:
+                shorts.append((-er, sid))
+    longs.sort(key=lambda x: (-x[0], x[1]))
+    shorts.sort(key=lambda x: (-x[0], x[1]))
+    nl, ns = _split_sides(n, len(longs), len(shorts))
+    pick = [(s, "BUY", "s2_long", e) for e, s in longs[:nl]] + [
+        (s, "SELL", "s2_short", e) for e, s in shorts[:ns]
+    ]
+    if not pick:
+        return S2Plan([], n, budget, min_pos, len(longs), len(shorts), 0, 0, "no stock clears costs today")
+    cap_value = max(risk.max_name_weight * equity_inr, min_pos)
+    while pick:
+        lockup = sum(1.2 if side == "SELL" else 1.0 for _, side, _, _ in pick)  # a short locks 1.2x its value
+        value = min(budget / lockup, cap_value)
+        if value >= min_pos - 1e-6 or len(pick) == 1:
+            break
+        pick.pop()  # drop the weakest pick until every position is at least one minimum position
+    orders = []
+    for sid, side, why, e in pick:
+        qty = _floor(value / auction[sid].open)
+        if qty > 0:
+            orders.append(Order(sid, side, "intraday", "open", qty, trade_date=d, priority=e, reason=why))  # type: ignore[arg-type]
+    return S2Plan(
+        orders, n, budget, min_pos, len(longs), len(shorts),
+        sum(o.side == "BUY" for o in orders), sum(o.side == "SELL" for o in orders),
+    )  # fmt: skip
+
+
+def build_s2_orders(*args: Any, **kw: Any) -> list[Order]:
+    """The orders of `plan_s2` (intraday, at the open of `d`; the engine/daemon squares off at 15:18)."""
+    return plan_s2(*args, **kw).orders
+
+
+class S2Policy:
+    """Implements `decide_auction(d, book, equity_inr, auction_view)` for the open-to-close auction book."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        score_source: ScoreSource,
+        panel_access: PanelAccess,
+        slippage: SlippageTable,
+        *,
+        k_max: int | None = None,
+    ) -> None:
+        self.cfg = S2Config.from_settings(settings, slippage, k_max=k_max)
+        self.source, self.access = score_source, panel_access
+        self.plans: dict[date, S2Plan] = {}
+
+    def decide(self, t: date, book: BookState, capital_inr: float) -> list[Order]:
+        return []  # S2 trades only through decide_auction
+
+    def decide_auction(self, d: date, book: BookState, equity_inr: float, view: AuctionView) -> list[Order]:
+        sc = self.source.scores(d)
+        if sc is None:
+            return []
+        try:
+            prev = book.calendar.prev_session(d)
+        except ValueError:  # the first session of the calendar has no previous close
+            return []
+        rows = self.access.day(prev, d).rows
+        auction: dict[int, AuctionRow] = {}
+        for i, sid in enumerate(view.sids.tolist()):
+            r = rows.get(sid)
+            if r is None:
+                continue
+            auction[sid] = AuctionRow(
+                float(view.open[i]), float(view.gap[i]), int(view.turnover_rank[i]),
+                float(view.med_turn_20[i]), r.vol_21, r.in_fno, r.upper_circuit,
+            )  # fmt: skip
+        plan = plan_s2(d, sc.score, sc.er, auction, book.cash - book.reserved, equity_inr, self.cfg)
+        self.plans[d] = plan
         return plan.orders
 
 
