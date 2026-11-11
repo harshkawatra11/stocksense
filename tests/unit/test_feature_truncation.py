@@ -141,6 +141,29 @@ def _add_fo(s, market) -> None:
 SYMS = ["S00", "S01", "S02"]
 
 
+def _add_events(s, sessions) -> None:
+    """Announcements, results filings and board meetings for a few stocks (results every 60 sessions)."""
+    ann, ri, bm = [], [], []
+    for k, sym in enumerate(SYMS + ["S10", "S11"]):
+        for j in range(60 + 7 * k, len(sessions) - 5, 60):
+            d = sessions[j]
+            at = datetime.combine(d, datetime.min.time(), tzinfo=IST) + timedelta(hours=16 + 5 * (j % 2))
+            ann.append((f"R{k}-{j}", sym, at, "Financial Results"))
+            ri.append((f"F{k}-{j}", sym, at + timedelta(minutes=45)))
+            bm.append((sym, sessions[j + 3], "Results", "x", at - timedelta(days=20)))
+        for j in range(30 + k, len(sessions) - 5, 9):
+            at = datetime.combine(sessions[j], datetime.min.time(), tzinfo=IST) + timedelta(hours=11)
+            ann.append((f"M{k}-{j}", sym, at, "Press Release"))
+    io.upsert(
+        s, "announcements", pl.DataFrame(ann, schema=["seq_id", "symbol", "ts", "category"], orient="row")
+    )
+    io.upsert(
+        s, "results_index", pl.DataFrame(ri, schema=["seq_number", "symbol", "filing_ts"], orient="row")
+    )
+    cols = ["symbol", "meeting_date", "purpose", "description", "announced_ts"]
+    io.upsert(s, "board_meetings", pl.DataFrame(bm, schema=cols, orient="row"))
+
+
 @pytest.fixture(scope="session")
 def truncation_env(tmp_path_factory):
     """(settings, sessions, cache): synthetic market on disk, panel/universe/market built once."""
@@ -151,6 +174,7 @@ def truncation_env(tmp_path_factory):
     panel_pkg.build_all(s)
     _add_market_raw(s, m.sessions)
     _add_fo(s, m)
+    _add_events(s, m.sessions)
     return s, m.sessions, {}
 
 

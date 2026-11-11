@@ -19,7 +19,7 @@ def _arr(s: pl.Series) -> np.ndarray:
 
 def bday_count(a: pl.Series, b: pl.Series, holidays: Iterable[date] = ()) -> pl.Series:
     """Int64 series: weekdays in [a, b) (1 when b is the next weekday after a); null if either is null."""
-    hol = np.array(sorted(holidays), dtype="datetime64[D]") if holidays else None
+    hol = np.array(sorted(holidays), dtype="datetime64[D]")
     out = np.busday_count(_arr(a), _arr(b), holidays=hol)
     mask = a.is_null() | b.is_null()
     return (
