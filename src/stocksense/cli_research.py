@@ -225,7 +225,8 @@ def ic_table(
         preds = io.read(settings, "preds", sub=tid).collect().select("date", "sid", "score")
         if target not in lab_cache:
             lab_cache[target] = load_labels(settings, "research", columns=[target]).collect()
-        label = f"{json.loads(spec_json).get('params', {}).get('feature', '')}"
+        prm = json.loads(spec_json).get("params", {})
+        label = f"{'-' if prm.get('sign', 1) < 0 else ''}{prm['feature']}" if "feature" in prm else fam
         results.append((tid, fam, target, label, oof_report(preds, lab_cache[target], target)))
     if not results:
         typer.echo("no trials with predictions")
@@ -233,11 +234,12 @@ def ic_table(
     years = sorted({y for r in results for y in r[4]["by_year"]})
     head = ["trial", "target", "IC x100", "t", "yrs+", *[str(y) for y in years]]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    for tid, _fam, target, _label, r in results:
+    for tid, _fam, target, label, r in results:
         by = r["by_year"]
         pos = sum(1 for v in by.values() if v > 0)
         cells = [
-            tid, target, f"{r['mean_ic'] * 100:+.2f}", f"{r['ic_tstat']:+.1f}", f"{pos}/{len(by)}",
+            f"{label} [{tid}]", target, f"{r['mean_ic'] * 100:+.2f}", f"{r['ic_tstat']:+.1f}",
+            f"{pos}/{len(by)}",
             *[(f"{by[y] * 100:+.1f}" if y in by else "") for y in years],
         ]  # fmt: skip
         lines.append("| " + " | ".join(cells) + " |")
@@ -274,6 +276,38 @@ def select(
     for row in sorted(res["table"], key=lambda r: -r["mean_ic"]):
         typer.echo(f"{row['mean_ic']:+.4f} {row['ic_by_anchor']} {row['config']}")
     typer.echo(f"selected {res['best']} -> {p}")
+
+
+@research_app.command("diagnostics")
+def diagnostics(
+    ctx: typer.Context,
+    trial: Annotated[str, typer.Option(help="Trial id of a GBM trial run through `train`.")],
+    folds: Annotated[str | None, typer.Option(help="Custom folds 'name:start:end,...' (tests).")] = None,
+    groups: Annotated[
+        str | None, typer.Option(help="Feature groups to ablate (default: late groups).")
+    ] = None,
+) -> None:
+    """Gain importance by feature group and the with/without masking ablation of late-starting groups."""
+    from stocksense.validation.g1_diag import LATE_GROUPS, diagnose
+
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    row = next((r for r in _trials(state, None) if r[0] == trial), None)
+    if row is None:
+        typer.echo(f"unknown trial {trial!r}", err=True)
+        raise typer.Exit(2)
+    cal = TradingCalendar.from_store(settings, SystemClock())
+    fold_list = parse_folds(folds, cal) if folds else walk_forward_folds(settings, cal)
+    grp = tuple(groups.split(",")) if groups else LATE_GROUPS
+    out = diagnose(settings, trial, json.loads(row[4]), fold_list, grp)
+    shares = sorted(out["group_gain"].items(), key=lambda kv: -kv[1])
+    typer.echo("group gain share: " + ", ".join(f"{g} {v:.3f}" for g, v in shares))
+    for g, a in out["ablation"].items():
+        typer.echo(
+            f"ablation {g}: IC with {a['ic_with'] * 100:+.2f}  without {a['ic_without'] * 100:+.2f}"
+            f"  dates {a['n_dates']}  paired t {a['diff_tstat']:+.1f}"
+        )
 
 
 def register(app: typer.Typer) -> None:
