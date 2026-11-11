@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
+from stocksense.core.clock import IST, FixedClock
 from stocksense.core.config import Paths, Settings, load_settings
 
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -34,9 +34,8 @@ _REPO = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def fixed_clock() -> datetime:
-    # Plain tz-aware datetime for now; becomes a core.clock.FixedClock in T1.3.
-    return datetime(2026, 11, 12, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+def fixed_clock() -> FixedClock:
+    return FixedClock(datetime(2026, 11, 12, 10, 0, tzinfo=IST))
 
 
 @pytest.fixture
