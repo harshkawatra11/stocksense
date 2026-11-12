@@ -345,3 +345,24 @@ Stored bars are therefore **back-adjusted as of their download date**. Fresh Ang
 **Deals (``deals``).** ``bulk.csv`` (columns ``Date, Symbol, Security Name, Client Name, Buy/Sell, Quantity Traded, Trade Price / Wght. Avg. Price, Remarks``) and ``block.csv`` (no Remarks). Date is ``11-NOV-2026``. 2026-11-11: 70 bulk and 5 block rows stored. Identical rows within one day collapse (the key is the whole row).
 
 **Pre-open (``preopen``) shape probe** (``/api/market-data-pre-open?key=ALL``, answered with the 2026-11-11 09:09 snapshot; 2,426 symbols): top level ``declines, unchanged, data, advances, timestamp, totalTradedValue, totalmarketcap, totalTradedVolume``; each ``data[i].metadata`` has ``symbol, identifier, series, purpose, lastPrice, change, pChange, previousClose, finalQuantity, totalTurnover, marketCap, yearHigh, yearLow, iep`` (**no ``finalPrice``** there); ``data[i].detail.preOpenMarket`` has ``preopen`` (order-book levels ``{price, buyQty, sellQty, iep?}``), ``ato``, ``IEP``, ``totalTradedVolume``, ``finalPrice``, ``finalQuantity``, ``lastUpdateTime``, ``totalSellQuantity``, ``totalBuyQuantity``, ``atoBuyQty``, ``atoSellQty``, ``Change``, ``perChange``, ``prevClose``. The parser maps ``iep -> indicative_price``, ``detail.finalPrice -> final_price`` (0 -> null), ``detail.totalBuyQuantity/totalSellQuantity -> buy_qty/sell_qty``, ``metadata.previousClose -> prev_close``; ``key=ALL`` works (no fallback to NIFTY/FO/OTHERS needed, but implemented). A live capture is possible only 09:00-09:08 IST on a session day; the tests use a recorded sample. The adopted ``nse_snapshots/pre_open`` history (16 days) was seeded into ``preopen``: 1,773,457 rows (ts = source timestamp; the earliest snapshots lack the auction columns, which are null).
+
+## Features and labels on real data (T4.5 / T4.6 acceptance, 2026-11-12)
+
+- `build_features` over the whole history (138 features: 99 cross-sectional, 39 market-wide; panel through 2026-11-09): **700.7 s** (target < 20 min). `build_labels`: **7.5 s**. Script to reproduce the signal table: `scripts/ic_table.py` (research period only, ends 2025-09-30).
+- Mean daily rank IC x100 (t-stat) of the built features against the labels, compared with the planning measurement (PLAN B.3 Finding 5, different code, same data). Signs and sizes agree for every comparable signal:
+
+| built feature | label | planning | built |
+|---|---|---|---|
+| vol_21 (planning used the negated low-vol signal) | y_oc | -6.18 | -6.25 (t -23.2) |
+| co_sum_5 (planning: -sum of overnight returns) | y_oc | -5.43 | -5.43 (t -41.2) |
+| max_ret_21 | y_oc | -5.13 | -5.12 (t -24.3) |
+| deliv_z | y_oc | +3.12 | +3.25 (t 17.5) |
+| close_loc | y_oc | +2.00 | +2.12 (t 14.3) |
+| turn_shock | y_oc | -1.90 | -2.05 (t -14.1) |
+| mom_5 (planning: 5-day reversal) | y_c2o_5 | -2.83 | -2.90 (t -14.6) |
+| close_loc | y_c2o_5 | -1.36 | -1.40 (t -9.9) |
+| mom_126 | y_c2o_20 | +3.12 | +3.69 (t 14.0) |
+| mom_252_skip21 | y_c2o_20 | +4.11 | +4.99 (t 17.4) |
+
+- New in the built set, not measured in planning (single trials still to be tested out of sample): `atr_14_pct` -7.58 (t -26) and `downside_vol_63`, `idio_vol_63`, `range_pct` all around -6.5 to -7.5 on y_oc; `fut_basis` +4.46 and `atm_iv` -4.59 on y_oc (F&O names, 2024-07 onward only); `hi52_prox` +5.89 and `days_since_hi52` -4.58 on y_c2o_20; `ind_mom_21` +3.95 on y_c2o_20.
+- Verdict: the panel, features and labels reproduce the independent planning measurements. Market-wide features show NaN in the table because a cross-sectional correlation is undefined for a value that is the same for all stocks on a date; they are tested in the models, not here.

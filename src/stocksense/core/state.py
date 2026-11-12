@@ -26,6 +26,18 @@ CREATE TABLE trials(trial_id TEXT PRIMARY KEY, created_at TEXT, family TEXT, tar
   spec_hash TEXT, status TEXT, metrics_json TEXT, returns_path TEXT, git_sha TEXT, note TEXT);
 """,
     ),
+    (
+        3,
+        """
+CREATE TABLE models(model_id TEXT PRIMARY KEY, family TEXT, target TEXT, spec_hash TEXT, train_end TEXT,
+  created_at TEXT, status TEXT CHECK(status IN('candidate','shadow','champion','retired')),
+  validated INTEGER DEFAULT 0, path TEXT, note TEXT);
+CREATE TABLE model_events(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, model_id TEXT, event TEXT,
+  detail TEXT);
+CREATE TABLE live_ic(model_id TEXT, decision_date TEXT, target TEXT, ic REAL, n INTEGER,
+  PRIMARY KEY(model_id, decision_date, target));
+""",
+    ),
 ]
 
 _STALE_RUNNING = timedelta(hours=6)
