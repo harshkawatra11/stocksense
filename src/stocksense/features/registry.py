@@ -24,6 +24,7 @@ FEATURE_MODULES: tuple[str, ...] = (
     "derivs",
     "events",
     "intraday",
+    "kronos_feats",
 )
 
 
