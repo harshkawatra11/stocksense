@@ -125,3 +125,4 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 ## Phase 12
 
 ## Phase 13
+- T2.8 retry (2026-11-13): the 17 failed windows (2012-09-05..2012-10-02 four windows, 2015-01-21..2015-04-21 thirteen windows) were re-run one window each with `ingest announcements --from <a> --to <a+6>`; all 17 succeeded (14,948 rows in total) and are now cached. The earlier note that they "succeeded on retry" was wrong: the original run left them failed, this retry fixed them. No code change.
