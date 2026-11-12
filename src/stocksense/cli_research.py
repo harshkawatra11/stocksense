@@ -379,6 +379,43 @@ def trial_report(ctx: typer.Context, trial: Annotated[str, typer.Option(help="Tr
         raise typer.Exit(2) from e
 
 
+@research_app.command("finish-trials")
+def finish_trials(ctx: typer.Context) -> None:
+    """Top-k backtest (metrics and returns) for every complete model trial that is not yet done."""
+    from stocksense.validation.g1_run import finish_model_trials
+
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    cal = TradingCalendar.from_store(settings, SystemClock())
+    for name, tid in finish_model_trials(settings, state, cal, named_specs(settings)).items():
+        typer.echo(f"{name:<40} {tid}")
+
+
+@research_app.command("g1")
+def g1_run_command(
+    ctx: typer.Context,
+    production: Annotated[bool, typer.Option(help="Fit the two candidates in production mode.")] = True,
+) -> None:
+    """Gate G1 (T9.5): portfolio grid, references, candidates, research gate, production fits."""
+    from stocksense.validation.g1_run import run_g1
+
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    cal = TradingCalendar.from_store(settings, SystemClock())
+    out = run_g1(settings, state, cal, specs=named_specs(settings), production=production)
+    for fam, rep in out.reports.items():
+        typer.echo(f"{fam}: {out.candidates[fam]}")
+        typer.echo(rep.table())
+    for n in out.notes:
+        typer.echo(f"note: {n}")
+    from stocksense.validation.g1_report import write_results
+
+    docs = Path(__file__).resolve().parents[2] / "docs" / "RESULTS-G1.md"
+    typer.echo(f"wrote {write_results(settings, state, docs)}")
+
+
 def register(app: typer.Typer) -> None:
     """Hook for cli.py: replace the placeholder train/validate and add the `research` group."""
     app.registered_commands = [
