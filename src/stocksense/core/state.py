@@ -38,6 +38,35 @@ CREATE TABLE live_ic(model_id TEXT, decision_date TEXT, target TEXT, ic REAL, n 
   PRIMARY KEY(model_id, decision_date, target));
 """,
     ),
+    (
+        4,
+        """
+CREATE TABLE decisions(decision_id TEXT PRIMARY KEY, book TEXT, strategy TEXT, trade_date TEXT,
+  created_ts TEXT,
+  capital_ref_inr REAL, capital_stale INTEGER, risk_json TEXT, payload_json TEXT);
+CREATE TABLE orders(order_id TEXT PRIMARY KEY, decision_id TEXT, book TEXT, sid INTEGER, symbol TEXT,
+  side TEXT CHECK(side IN('BUY','SELL')), product TEXT CHECK(product IN('delivery','intraday')),
+  when_kind TEXT CHECK(when_kind IN('open','close','now')), trade_date TEXT, qty INTEGER, ref_price REAL,
+  created_ts TEXT, status TEXT CHECK(status IN('pending','filled','cancelled')), reason TEXT,
+  cancel_reason TEXT);
+CREATE TABLE fills(fill_id TEXT PRIMARY KEY, order_id TEXT, ts TEXT, price REAL, qty INTEGER,
+  slip_assumed REAL,
+  quote_bid REAL, quote_ask REAL, quote_ltp REAL, source TEXT, official_ref REAL, reconciled
+  INTEGER DEFAULT 0);
+CREATE TABLE fees(fill_id TEXT PRIMARY KEY, brokerage REAL, stt REAL, exchange REAL, sebi REAL, stamp REAL,
+  gst REAL, dp REAL, total REAL);
+CREATE TABLE cash_events(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, book TEXT, kind TEXT,
+  amount_frac REAL,
+  ref TEXT);
+CREATE TABLE corp_adjust(id INTEGER PRIMARY KEY AUTOINCREMENT, book TEXT, sid INTEGER, date TEXT, factor REAL,
+  note TEXT);
+CREATE TABLE marks(book TEXT, date TEXT, nav REAL, cash_frac REAL, gross REAL, n_pos INTEGER,
+  capital_ref_inr REAL, day_ret REAL, PRIMARY KEY(book, date));
+CREATE TABLE corrections(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, fill_id TEXT, old_price REAL,
+  new_price REAL, reason TEXT);
+CREATE TABLE mark_prices(book TEXT, date TEXT, sid INTEGER, price REAL, PRIMARY KEY(book, date, sid));
+""",
+    ),
 ]
 
 _STALE_RUNNING = timedelta(hours=6)
