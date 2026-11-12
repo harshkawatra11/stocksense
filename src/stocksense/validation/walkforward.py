@@ -163,6 +163,12 @@ def run_walk_forward(
         names = [f["name"] for f in man["features"]] if spec.features == "all" else list(spec.features)
         kinds = [kind_of[n] for n in names]
         feats = load_features(settings, purpose, columns=names).collect()
+        if spec.params.get("auction"):  # T7.2 y_oc trial: the T4.4 auction features, keyed by decision date
+            from stocksense.features.auction_matrix import auction_columns
+
+            alf, anames, akinds = auction_columns(settings, purpose)
+            feats = feats.join(alf.collect(), on=["date", "sid"], how="inner")
+            names, kinds = names + anames, kinds + akinds
         df = lab.join(feats, on=["date", "sid"], how="inner").sort("date", "sid")
         dates, end, sid_all = df["date"], df[end_col], df["sid"]
         dates_np = dates.to_numpy()

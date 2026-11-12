@@ -24,7 +24,7 @@ def state(tmp_data_root, fixed_clock):
 def test_migration_2_creates_table_and_seeds_30_once(state):
     state.migrate()  # idempotent: no second batch of seeds
     con = state.connect()
-    assert [r[0] for r in con.execute("SELECT version FROM schema_version ORDER BY version")] == [1, 2, 3]
+    assert [r[0] for r in con.execute("SELECT version FROM schema_version ORDER BY version")] == [1, 2, 3, 4]
     rows = con.execute("SELECT family, status, note, metrics_json FROM trials").fetchall()
     assert len(rows) == 30
     assert {r[0] for r in rows} == {"planning-exploration"}

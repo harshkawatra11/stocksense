@@ -1,0 +1,138 @@
+{
+ "declines": 358,
+ "unchanged": 238,
+ "advances": 1830,
+ "timestamp": "11-Nov-2026 09:09:27",
+ "totalTradedValue": 18334781510,
+ "totalmarketcap": 227633667938561.12,
+ "totalTradedVolume": 45546432,
+ "data": [
+  {
+   "metadata": {
+    "symbol": "URBAN-RE",
+    "identifier": "URBAN-RESTN",
+    "series": "ST",
+    "purpose": null,
+    "lastPrice": 8.4,
+    "change": 1.4,
+    "pChange": 20,
+    "previousClose": 7,
+    "finalQuantity": 4000,
+    "totalTurnover": 33600,
+    "marketCap": "-",
+    "yearHigh": 13.9,
+    "yearLow": 4.75,
+    "iep": 8.4
+   },
+   "detail": {
+    "preOpenMarket": {
+     "preopen": [
+      {
+       "price": 5.6,
+       "buyQty": 4000,
+       "sellQty": 0
+      },
+      {
+       "price": 5.7,
+       "buyQty": 800,
+       "sellQty": 0
+      },
+      {
+       "price": 7.7,
+       "buyQty": 2400,
+       "sellQty": 0
+      },
+      {
+       "price": 8.4,
+       "buyQty": 0,
+       "sellQty": 3200,
+       "iep": true
+      }
+     ],
+     "ato": {
+      "totalBuyQuantity": 0,
+      "totalSellQuantity": 0
+     },
+     "IEP": 8.4,
+     "totalTradedVolume": 4000,
+     "finalPrice": 8.4,
+     "finalQuantity": 4000,
+     "lastUpdateTime": "11-Nov-2026 09:09:37",
+     "totalSellQuantity": 3200,
+     "totalBuyQuantity": 7200,
+     "atoBuyQty": 0,
+     "atoSellQty": 4000,
+     "Change": 1.4,
+     "perChange": 20,
+     "prevClose": 7
+    }
+   }
+  },
+  {
+   "metadata": {
+    "symbol": "MDL",
+    "identifier": "MDLSMN",
+    "series": "SM",
+    "purpose": null,
+    "lastPrice": 71,
+    "change": 8.6,
+    "pChange": 13.78,
+    "previousClose": 62.4,
+    "finalQuantity": 2000,
+    "totalTurnover": 142000,
+    "marketCap": "-",
+    "yearHigh": 99.9,
+    "yearLow": 42.8,
+    "iep": 71
+   },
+   "detail": {
+    "preOpenMarket": {
+     "preopen": [
+      {
+       "price": 50.35,
+       "buyQty": 1000,
+       "sellQty": 0
+      },
+      {
+       "price": 50.5,
+       "buyQty": 2000,
+       "sellQty": 0
+      },
+      {
+       "price": 71,
+       "buyQty": 0,
+       "sellQty": 1000,
+       "iep": true
+      },
+      {
+       "price": 74.45,
+       "buyQty": 0,
+       "sellQty": 1000
+      },
+      {
+       "price": 74.85,
+       "buyQty": 0,
+       "sellQty": 1000
+      }
+     ],
+     "ato": {
+      "totalBuyQuantity": 0,
+      "totalSellQuantity": 0
+     },
+     "IEP": 71,
+     "totalTradedVolume": 2000,
+     "finalPrice": 71,
+     "finalQuantity": 2000,
+     "lastUpdateTime": "11-Nov-2026 09:09:30",
+     "totalSellQuantity": 3000,
+     "totalBuyQuantity": 3000,
+     "atoBuyQty": 0,
+     "atoSellQty": 0,
+     "Change": 8.6,
+     "perChange": 13.78,
+     "prevClose": 62.4
+    }
+   }
+  }
+ ]
+}

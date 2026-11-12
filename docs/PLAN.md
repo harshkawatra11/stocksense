@@ -1642,14 +1642,14 @@ Preconditions before anyone writes order code: `[paper]` gate passed on ≥ 60 s
 
 - [x] P0 Reset — done 2026-11-11 (fresh-start commit `a696fa5`; GitHub has only `main`; memory reset)
 - [x] P1 Foundation (T1.1–T1.9) — done 2026-11-11; 131 tests; `doctor` matches B.2. Next: T2.1
-- [ ] P2 Data (T2.1–T2.13)
-- [ ] P3 Panel (T3.1–T3.4)
-- [ ] P4 Features and labels (T4.1–T4.6)
-- [ ] P5 Costs and backtest engine (T5.1–T5.5)
-- [ ] P6 Validation harness (T6.1–T6.8)
-- [ ] P7 Models (T7.1–T7.6), including Kronos decisions
-- [ ] P9 Portfolio, risk, Gate G1 verdict (T9.1–T9.5)
-- [ ] P10 Paper broker and daemon (T10.1–T10.6); five unattended sessions: ____ ____ ____ ____ ____
+- [ ] P2 Data (T2.1–T2.13) — all 13 tasks committed (2026-11-13; T2.8 failed windows retried, all ok); phase-done check (`data-status` fresh, zero issues, pushed) not yet verified
+- [ ] P3 Panel (T3.1–T3.4) — T3.1–T3.4 committed; phase acceptance not re-verified
+- [ ] P4 Features and labels (T4.1–T4.6) — T4.1–T4.5 and T4.5/T4.6 real-data build committed; acceptance not re-verified
+- [ ] P5 Costs and backtest engine (T5.1–T5.5) — T5.1–T5.5 committed
+- [ ] P6 Validation harness (T6.1–T6.8) — T6.1–T6.8 committed
+- [ ] P7 Models (T7.1–T7.6), including Kronos decisions — T7.1–T7.6 committed (Kronos track merged); Gate-dependent results not verified
+- [ ] P9 Portfolio, risk, Gate G1 verdict (T9.1–T9.5) — T9.1–T9.4 merged; T9.5 NOT done (WIP on branch track/p61, strict_capture test failing, no verdict)
+- [ ] P10 Paper broker and daemon (T10.1–T10.6) — T10.1–T10.3 merged; T10.4–T10.6 not started; five unattended sessions: ____ ____ ____ ____ ____
 - [ ] P11 Daily learning (T11.1–T11.5)
 - [ ] P12 Decision records, report, API (T12.1–T12.3)
 - [ ] P8 News and events (T8.1–T8.6)

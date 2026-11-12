@@ -91,10 +91,43 @@ app.add_typer(ingest_app, name="ingest")
 
 
 @ingest_app.callback(invoke_without_command=True)
-def ingest(ctx: typer.Context) -> None:
-    """Download and store new raw data."""
-    if ctx.invoked_subcommand is None:
+def ingest(
+    ctx: typer.Context,
+    all_: Annotated[bool, typer.Option("--all", help="Every dataset (with --catch-up).")] = False,
+    catch_up: Annotated[
+        bool, typer.Option("--catch-up", help="Bring every dataset up to the last completed session.")
+    ] = False,
+) -> None:
+    """Download and store new raw data; `--all --catch-up` runs every ingester in order."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if not (all_ and catch_up):
         _not_implemented(2)
+    from collections import Counter
+
+    from stocksense.data import ingest_all
+
+    try:
+        ictx, nse, clock = _ingest_context(ctx)
+    except DataNotAvailable:
+        typer.echo("no data: bhavcopy_eq is empty or missing")
+        raise typer.Exit(1) from None
+    try:
+        results = ingest_all.catch_up(ictx)
+    finally:
+        nse.close()
+    counts = Counter((r.dataset, r.status) for r in results)
+    typer.echo("summary (dataset, status): count")
+    for (ds, st), n in sorted(counts.items()):
+        typer.echo(f"  {ds:<22} {st:<14} {n}")
+    settings = _settings(ctx)
+    table = status_table(settings, TradingCalendar.from_store(settings, clock), clock)
+    with pl.Config(
+        tbl_rows=-1, tbl_cols=-1, tbl_width_chars=200, tbl_formatting="ASCII_MARKDOWN",
+        tbl_hide_dataframe_shape=True, tbl_hide_column_data_types=True, fmt_str_lengths=60,
+    ):  # fmt: skip
+        typer.echo(str(table))
+    raise typer.Exit(ingest_all.exit_code(table))
 
 
 def _parse_day(text: str, clock: SystemClock) -> date:
@@ -329,6 +362,218 @@ def ingest_corpact_cmd(
     typer.echo(f"rows: {sum(r.rows for r in results)}")
 
 
+@ingest_app.command("announcements")
+def ingest_announcements_cmd(
+    ctx: typer.Context,
+    to: Annotated[str, typer.Option("--to", help="Newest day, YYYY-MM-DD or 'yesterday'.")] = "yesterday",
+    from_: Annotated[
+        str, typer.Option("--from", help="Oldest day (the walk stops earlier after 12 empty windows).")
+    ] = "2010-01-01",
+    poll: Annotated[bool, typer.Option("--poll", help="Live poll of today instead of a backfill.")] = False,
+) -> None:
+    """Corporate announcements: 7-day windows backward from --to (resumable), or --poll today."""
+    from stocksense.data.ingest_announcements import backfill_announcements, poll_announcements
+
+    ictx, nse, clock = _ingest_context(ctx)
+    try:
+        if poll:
+            typer.echo(f"new announcements: {poll_announcements(ictx)}")
+            return
+        results = backfill_announcements(ictx, _parse_day(from_, clock), _parse_day(to, clock), _echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
+@ingest_app.command("board-meetings")
+def ingest_board_meetings_cmd(
+    ctx: typer.Context,
+    from_: Annotated[str, typer.Option("--from", help="Oldest meeting date.")] = "2010-01-01",
+    to: Annotated[str | None, typer.Option("--to", help="Newest meeting date (default today + 60).")] = None,
+) -> None:
+    """Board meetings in 30-day windows backward from --to."""
+    from stocksense.data.ingest_announcements import ingest_board_meetings
+
+    ictx, nse, clock = _ingest_context(ctx)
+    b = _parse_day(to, clock) if to else clock.today() + timedelta(days=60)
+    try:
+        results = ingest_board_meetings(ictx, _parse_day(from_, clock), b, _echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
+@ingest_app.command("results")
+def ingest_results_cmd(
+    ctx: typer.Context,
+    from_: Annotated[str, typer.Option("--from", help="Oldest filing date.")] = "2010-01-01",
+    to: Annotated[str, typer.Option("--to", help="Newest filing date.")] = "yesterday",
+) -> None:
+    """Financial-results filings index (Quarterly and Annual) in 31-day windows backward from --to."""
+    from stocksense.data.ingest_announcements import ingest_results_index
+
+    ictx, nse, clock = _ingest_context(ctx)
+    try:
+        results = ingest_results_index(ictx, _parse_day(from_, clock), _parse_day(to, clock), _echo_result)
+    finally:
+        nse.close()
+    _echo_summary(results)
+    typer.echo(f"rows: {sum(r.rows for r in results)}")
+
+
+@ingest_app.command("macro")
+def ingest_macro_cmd(ctx: typer.Context) -> None:
+    """Macro series (stooq, then Yahoo) into macro_daily."""
+    from stocksense.data.ingest_macro import ingest_macro
+
+    ictx, nse, _ = _ingest_context(ctx)
+    nse.close()
+    for r in ingest_macro(ictx):
+        typer.echo(f"{r.dataset:<12} {r.status:<8} rows={r.rows}")
+
+
+@ingest_app.command("participant-oi")
+def ingest_participant_oi_cmd(
+    ctx: typer.Context,
+    to: Annotated[str, typer.Option("--to", help="Newest day.")] = "yesterday",
+    from_: Annotated[str | None, typer.Option("--from", help="First day (forward range).")] = None,
+    backfill: Annotated[
+        bool, typer.Option("--backfill", help="Walk back until 30 days in a row have no file.")
+    ] = False,
+) -> None:
+    """Participant-wise F&O open interest."""
+    from stocksense.data.ingest_misc import backfill_participant_oi, ingest_participant_oi_range
+
+    ictx, nse, clock = _ingest_context(ctx)
+    try:
+        b = _parse_day(to, clock)
+        if backfill:
+            res = backfill_participant_oi(ictx, b, _echo_result)
+        elif from_:
+            res = ingest_participant_oi_range(ictx, _parse_day(from_, clock), b, _echo_result)
+        else:
+            raise typer.BadParameter("give --from or --backfill")
+    finally:
+        nse.close()
+    _echo_summary(res)
+
+
+@ingest_app.command("fii-dii")
+def ingest_fii_dii_cmd(
+    ctx: typer.Context,
+    seed: Annotated[
+        bool, typer.Option("--seed", help="Also seed history from the adopted snapshots.")
+    ] = False,
+) -> None:
+    """Latest FII/DII cash flows (and optionally the adopted snapshot history)."""
+    from stocksense.data.ingest_misc import ingest_fii_dii, seed_fii_dii_from_snapshots
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        if seed:
+            typer.echo(f"seeded rows: {seed_fii_dii_from_snapshots(ictx)}")
+        r = ingest_fii_dii(ictx)
+    finally:
+        nse.close()
+    typer.echo(f"{r.dataset} {r.status} rows={r.rows}")
+
+
+@ingest_app.command("deals")
+def ingest_deals_cmd(ctx: typer.Context) -> None:
+    """Today's bulk and block deals."""
+    from stocksense.data.ingest_misc import ingest_deals_today
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        for r in ingest_deals_today(ictx):
+            typer.echo(f"{r.dataset} {r.status} rows={r.rows}")
+    finally:
+        nse.close()
+
+
+@ingest_app.command("preopen")
+def ingest_preopen_cmd(
+    ctx: typer.Context,
+    seed: Annotated[
+        bool, typer.Option("--seed", help="Seed history from the adopted pre_open snapshots.")
+    ] = False,
+) -> None:
+    """One live pre-open snapshot (09:00-09:08 IST on a session day), or --seed the adopted history."""
+    from stocksense.data.ingest_misc import capture_preopen, seed_preopen_from_snapshots
+
+    ictx, nse, _ = _ingest_context(ctx)
+    try:
+        if seed:
+            typer.echo(f"seeded rows: {seed_preopen_from_snapshots(ictx)}")
+        else:
+            typer.echo(f"preopen rows: {capture_preopen(ictx)}")
+    finally:
+        nse.close()
+
+
+@ingest_app.command("intraday")
+def ingest_intraday_cmd(
+    ctx: typer.Context,
+    extend_5m: Annotated[
+        bool, typer.Option("--extend-5m", help="Extend stored 5-minute bars (Angel).")
+    ] = False,
+    backfill_1m: Annotated[
+        bool, typer.Option("--backfill-1m", help="Backfill 1-minute bars (Upstox), resumable.")
+    ] = False,
+    from_: Annotated[str, typer.Option("--from", help="First day of the 1-minute backfill.")] = "2022-01-03",
+    top: Annotated[int, typer.Option("--top", help="Symbols per calendar year (by median turnover).")] = 300,
+) -> None:
+    """5-minute extension via Angel and/or the 1-minute backfill via Upstox."""
+    from stocksense.data.ingest_intraday import backfill_1m as run_1m
+    from stocksense.data.ingest_intraday import extend_5m as run_5m
+    from stocksense.data.ingest_intraday import top_symbols_by_year
+
+    ictx, nse, clock = _ingest_context(ctx)
+    nse.close()
+    if not (extend_5m or backfill_1m):
+        raise typer.BadParameter("give --extend-5m and/or --backfill-1m")
+    if extend_5m:
+        seen = {"n": 0, "rows": 0}
+
+        def show5(r) -> None:
+            seen["n"] += 1
+            seen["rows"] += r.rows
+            if seen["n"] % 20 == 0 or r.status == "failed":
+                typer.echo(
+                    f"{clock.now():%H:%M:%S} 5m symbols {seen['n']} rows {seen['rows']} last {r.status}"
+                )
+                sys.stdout.flush()
+
+        res = run_5m(ictx, on_result=show5)
+        _echo_summary(res)
+        typer.echo(f"5m rows: {sum(r.rows for r in res)}")
+    if backfill_1m:
+        if not ictx.settings.secrets.upstox_analytics_token:
+            typer.echo("skipped: no Upstox token")
+            return
+        start = _parse_day(from_, clock)
+        symbols = top_symbols_by_year(ictx.settings, start.year, clock.today().year, top)
+        typer.echo(f"1m backfill: {len(symbols)} symbols from {start}")
+        sys.stdout.flush()
+        n = {"ok": 0, "rows": 0}
+
+        def show(r) -> None:
+            if r.status == "ok":
+                n["ok"] += 1
+                n["rows"] += r.rows
+                if n["ok"] % 50 == 0:
+                    typer.echo(
+                        f"{clock.now():%H:%M:%S} symbol-months {n['ok']} rows {n['rows']} ({r.date:%Y-%m})"
+                    )
+                    sys.stdout.flush()
+
+        res = run_1m(ictx, symbols, start, on_result=show)
+        _echo_summary(res)
+        typer.echo(f"1m rows: {sum(r.rows for r in res)}")
+
+
 @app.command("build-panel")
 def build_panel(ctx: typer.Context) -> None:
     """Build the security master, adjusted daily panel, universe and market frame."""
@@ -404,6 +649,42 @@ def report() -> None:
 def resume() -> None:
     """Resume after an interruption."""
     _not_implemented(10)
+
+
+def _broker_lines(settings: Settings) -> list[str]:
+    """Live read-only broker checks; amounts are never printed, only that they were read."""
+    from stocksense.brokers.angel import AngelClient
+    from stocksense.brokers.upstox import UpstoxClient
+    from stocksense.core.errors import BrokerError
+
+    clock = SystemClock()
+    lines: list[str] = []
+    sec = settings.secrets
+    if not (sec.angel_api_key and sec.angel_client_id and sec.angel_pin and sec.angel_totp_secret):
+        lines.append("angel: not configured")
+    else:
+        angel = AngelClient(settings, clock)
+        try:
+            angel.login()
+            angel.funds()
+            lines.append("angel: login ok, available cash read")
+        except (BrokerError, OSError) as e:
+            lines.append(f"angel: FAILED ({type(e).__name__}: {str(e)[:80]})")
+        finally:
+            angel.close()
+    if not sec.upstox_analytics_token:
+        lines.append("upstox: not configured")
+    else:
+        up = UpstoxClient(settings, clock)
+        try:
+            today = clock.today()
+            df = up.candles("NSE_EQ|INE002A01018", "days", 1, today - timedelta(days=10), today)
+            lines.append(f"upstox: token ok, {df.height} daily candles read")
+        except (BrokerError, OSError) as e:
+            lines.append(f"upstox: FAILED ({type(e).__name__}: {str(e)[:80]})")
+        finally:
+            up.close()
+    return lines
 
 
 # ---- doctor -----------------------------------------------------------------------------------
@@ -498,3 +779,9 @@ def doctor(ctx: typer.Context) -> None:
     out("secrets")
     for name, value in settings.secrets.model_dump().items():
         out(f"  {name:<24}{'set' if value else 'unset'}")
+
+    out("brokers")
+    for line in _broker_lines(settings):
+        out(f"  {line}")
+
+__import__("stocksense.cli_research").cli_research.register(app)  # research cmds

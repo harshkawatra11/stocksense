@@ -226,6 +226,7 @@ like-for-like with PLAN B.3 (mean of LOG returns, same members, bigmoves exclude
 ```
 
 PLAN expects about +22 and -20, measured as mean LOG returns. The log-return means above match (+22.7, -19.2). The panel stores fractions, so `ew500_co/oc` are arithmetic means; those exceed log means by about sigma^2/2 per day (about 1.7 bps for the intraday leg, volatile at 1.8% a day). Per year (arithmetic) `ew500_co` / `ew500_oc` in bps: 2012 21.5/-7.4, 2013 12.0/-15.5, 2014 21.5/-2.0, 2015 27.5/-22.3, 2016 24.9/-22.8, 2017 31.4/-13.1, 2018 15.0/-24.6, 2019 17.7/-20.5, 2020 31.1/-19.2, 2021 36.6/-18.9, 2022 19.9/-17.5, 2023 27.5/-10.5, 2024 27.9/-17.5, 2025 11.3/-10.7: overnight positive and intraday negative in every year, as in Finding 3.
+
 ## Features and labels on real data (T4.5 / T4.6 acceptance, 2026-11-12)
 
 - `build_features` over the whole history (138 features: 99 cross-sectional, 39 market-wide; panel through 2026-11-09): **700.7 s** (target < 20 min). `build_labels`: **7.5 s**. Script to reproduce the signal table: `scripts/ic_table.py` (research period only, ends 2025-09-30).
@@ -246,3 +247,145 @@ PLAN expects about +22 and -20, measured as mean LOG returns. The log-return mea
 
 - New in the built set, not measured in planning (single trials still to be tested out of sample): `atr_14_pct` -7.58 (t -26) and `downside_vol_63`, `idio_vol_63`, `range_pct` all around -6.5 to -7.5 on y_oc; `fut_basis` +4.46 and `atm_iv` -4.59 on y_oc (F&O names, 2024-07 onward only); `hi52_prox` +5.89 and `days_since_hi52` -4.58 on y_c2o_20; `ind_mom_21` +3.95 on y_c2o_20.
 - Verdict: the panel, features and labels reproduce the independent planning measurements. Market-wide features show NaN in the table because a cross-sectional correlation is undefined for a value that is the same for all stocks on a date; they are tested in the models, not here.
+
+
+## After T2.8 (2026-11-12): announcements, board meetings, results index
+
+**Truncation check (before the backfill).** 2026-11-02 -> 2026-11-08: the 7-day call returned 6,699 rows; the seven 1-day calls returned 904 + 1,142 + 1,419 + 1,530 + 1,239 + 426 + 39 = 6,699 with identical seq_id sets. Four other weeks (2011-03, 2015-03, 2020-03, 2024-03) also matched exactly. So 7-day windows are used for all history. As a safety net a window that returns 9,000 rows or more is re-read day by day (never triggered).
+
+**Backfill.** `stocksense ingest announcements` walks 7-day windows back from yesterday to 2010-01-01 (the API serves 2010-01-01 onward; the plan expected 2011). Log `data_store/logs/t28_announcements.log`. 863 of 880 windows succeeded on the first pass; the 17 that failed (2012-09-05..10-02 and 2015-01-21..04-21) were transient server errors: they succeeded on retry (14,948 rows). Raw windows are cached gzipped under `cache/announcements/`. Stored: **1,559,164 rows**, 2010-01-01 09:25 -> 2026-11-11 23:59 IST, 858 distinct categories. 15 seq_ids occur in two month partitions (the same filing stamped at a month boundary); key is seq_id per partition file. `exch_ts` is null for 36.5% of rows (NSE's `exchdisstime` is `-`); `first_seen_ts` is null for every backfilled row (live poll only).
+
+Rows per year (by `ts`):
+
+| year | rows |
+rows 1559164 unique 1559149 first 2010-01-01 09:25:00+05:30 last 2026-11-11 23:59:36+05:30
+results_index 195678 2010-01-04 15:20:00+05:30 2026-11-03 10:29:00+05:30
+board_meetings 181993 2010-01-04 2026-12-05
+
+30 most frequent `category` values (input to the T8.2 taxonomy; note the case variants "General Updates" / "General updates" and "Loss of Share Certificates" / "Loss of share certificate"):
+
+rows 1559164 unique 1559149 first 2010-01-01 09:25:00+05:30 last 2026-11-11 23:59:36+05:30
+| year | rows |
+|---|---|
+| 2010 | 26,100 |
+| 2011 | 31,562 |
+| 2012 | 35,739 |
+| 2013 | 37,911 |
+| 2014 | 41,617 |
+| 2015 | 48,007 |
+| 2016 | 57,359 |
+| 2017 | 66,145 |
+| 2018 | 77,172 |
+| 2019 | 93,981 |
+| 2020 | 101,469 |
+| 2021 | 117,100 |
+| 2022 | 136,895 |
+| 2023 | 163,701 |
+| 2024 | 183,403 |
+| 2025 | 175,936 |
+| 2026 | 165,067 |
+categories 858 null 0
+| # | category | rows |
+|---|---|---|
+| 1 | Updates | 188,537 |
+| 2 | Analysts/Institutional Investor Meet/Con. Call Updates | 144,853 |
+| 3 | Outcome of Board Meeting | 95,966 |
+| 4 | Financial Result Updates | 93,701 |
+| 5 | Press Release | 83,017 |
+| 6 | Shareholders meeting | 74,778 |
+| 7 | Copy of Newspaper Publication | 73,512 |
+| 8 | Trading Window | 70,803 |
+| 9 | Loss of Share Certificates | 63,048 |
+| 10 | Disclosure under SEBI Takeover Regulations | 53,371 |
+| 11 | Certificate under SEBI (Depositories and Participants) Regulations, 2018 | 37,642 |
+| 12 | General Updates | 36,390 |
+| 13 | Investor Presentation | 29,088 |
+| 14 | Dividend | 20,860 |
+| 15 | Appointment | 20,821 |
+| 16 | General updates | 17,888 |
+| 17 | Record Date | 17,075 |
+| 18 | Disc. under Reg.30 of SEBI (SAST) Reg.2011 | 15,863 |
+| 19 | Allotment of Securities | 14,329 |
+| 20 | Credit Rating | 14,288 |
+| 21 | Change in Director(s) | 13,645 |
+| 22 | Resignation | 12,320 |
+| 23 | Loss of share certificate | 12,008 |
+| 24 | Related Party Transactions | 11,619 |
+| 25 | ESOP/ESOS/ESPS | 11,323 |
+| 26 | Schedule of Analysts/Institutional Investor Meet/Con. Call | 10,465 |
+| 27 | AGM/Book Closure | 10,251 |
+| 28 | Annual General Meeting Updates | 10,249 |
+| 29 | Book Closure | 9,509 |
+| 30 | Disclosure under Insider Trading Regulation | 9,062 |
+
+**Board meetings** (`ingest board-meetings`, 30-day windows by meeting date): 181,993 rows, meeting dates 2010-01-04 -> 2026-12-05 (the API returns announced future meetings); the earliest window is 2010-01 (data exists back to at least 2010-01-01).
+
+**Results index** (`ingest results`): probe 2026-11-11: the API honours `from_date`/`to_date` (a filter on the FILING date) and `period=Quarterly` or `Annual` (`Half-Yearly` returns nothing); without dates it returns only recent filings (3,816 quarterly). Backfilled in 31-day windows for both periods: 195,678 rows, filing dates 2010-01-04 -> 2026-11-03. Fields: `seqNumber` (key), `fromDate`/`toDate` (period), `filingDate` (`%d-%b-%Y %H:%M`, no seconds), `exchdisstime`, `audited`, `consolidated`, `relatingTo`, `xbrl`.
+
+## After T2.9 (2026-11-12): broker probes (non-secret facts only)
+
+**Angel One, direct REST (no smartapi fallback needed).** From this network the login worked on the first attempt (home-ISP blocking seen earlier does not occur now).
+- ``loginByPassword`` -> ``status`` true; ``data`` keys ``feedToken, jwtToken, refreshToken, state``.
+- ``getRMS`` ``data`` keys: ``availablecash, availableintradaypayin, availablelimitmargin, collateral, m2mrealized, m2munrealized, net, utiliseddebits, utilisedexposure, utilisedholdingsales, utilisedoptionpremium, utilisedpayout, utilisedspan, utilisedturnover`` (strings).
+- ``getAllHolding`` -> ``data`` is a dict ``{holdings: [], totalholding: {}}``; 0 holdings. ``getPosition`` -> ``data`` null when there are no positions.
+- Scrip master: 163,238 rows (38 MB), keys ``exch_seg, expiry, freeze_qty, instrumenttype, is_cas_enabled, lotsize, name, strike, symbol, tick_size, token``; RELIANCE-EQ token 2885, KAMDHENU-EQ 13457.
+- FULL quote (RELIANCE) keys: ``52WeekHigh, 52WeekLow, avgPrice, close, depth, exchFeedTime, exchTradeTime, exchange, high, lastTradeQty, low, lowerCircuit, ltp, netChange, open, opnInterest, percentChange, referenceLimitPrice, symbolToken, totBuyQuan, totSellQuan, tradeVolume, tradingSymbol, upperCircuit``; ``depth.buy`` / ``depth.sell`` are 5 levels of ``{price, quantity, orders}``; ``exchFeedTime`` ``11-Nov-2026 16:08:11``; ``close`` is the previous close.
+- ``getCandleData`` rows ``[ISO ts +05:30, o, h, l, c, v]`` (RELIANCE 2026-11-09 5-minute: 73 bars). One call returned an empty non-JSON body (a rate limit without ``AB1021``): the client treats an empty or non-JSON body like ``AB1021`` (sleep 60 s, then 300 s).
+- ``stocksense doctor`` now prints ``angel: login ok, available cash read``.
+
+**Upstox, Analytics Token.**
+- Instrument master ``NSE.json.gz``: 85,180 rows, keys ``exchange, exchange_token, freeze_quantity, instrument_key, instrument_type, isin, lot_size, name, qty_multiplier, security_type, segment, tick_size, trading_symbol``; 2,757 rows with segment ``NSE_EQ`` and type ``EQ``; key ``NSE_EQ|<ISIN>``.
+- Historical candles V3 work: newest-first, 7 fields ``[ts, o, h, l, c, v, oi]``. One request spans a whole month: 1-minute October 2026 returned 7,500 candles (20 sessions x 375) and January 2022 returned 7,500, so the client's request span for minute intervals up to 15 is 31 days (the plan said 28). A 70-day range answers HTTP 400 ``UDAPI1148``. A full session has 375 one-minute bars (09:15..15:29).
+- **Quotes are NOT available with the Analytics Token.** Every market-quote endpoint (``/v2/market-quote/quotes``, ``ltp``, ``ohlc``; ``/v3/market-quote/ltp``, ``ohlc``, ``quotes``) and ``/v2/user/profile`` answered HTTP 401 ``UDAPI100050`` (while historical candles work with the same token). ``UpstoxClient.quotes`` is implemented to the documented shape and tested on a fixture, but raises ``BrokerError`` with this token. **For T10.2: Angel is the only live quote source; Upstox serves historical candles only.**
+
+## After T2.10 (2026-11-12): intraday bars
+
+**Adjustment probe.** KAMDHENU (the plan's example) is not among the 470 stored symbols, so the stored bars were checked on three symbols that split or issued bonus shares after the download window began, comparing the last stored 5-minute close of the day before the ex-date with the raw bhavcopy close of that day:
+
+```
+DRREDDY    (split 5:1, ex 2024-10-28)   raw close 6514.70  stored 5m close 1302.00  ratio 0.1999
+RELIANCE   (bonus 1:1, ex 2024-10-28)   raw close 2655.70  stored 5m close 1328.15  ratio 0.5001
+PCJEWELLER (split 10:1, ex 2024-12-16)  raw close 150.76   stored 5m close   15.08  ratio 0.1000
+```
+
+Stored bars are therefore **back-adjusted as of their download date**. Fresh Angel and Upstox calls for KAMDHENU 2025-01-07 (raw close 479.30, split 10:1 on 2025-01-08): Angel 5-minute first bar 47.69 / 48.00 close, last close 48.30 (75 bars): **back-adjusted**. Upstox 5-minute first bar open 47.80, last close 48.30 (75 bars), Upstox 1-minute oldest bar open 47.80 (375 bars): **back-adjusted**. Consequence: bars from different download dates sit on different adjustment bases after a later split; ``load_bars(basis="adjusted")`` rescales each (symbol, session) to the panel's ``adj_open`` and so removes the question; new rows carry ``source`` and ``adj_asof``.
+
+**5-minute extension (Angel).** ``stocksense ingest intraday --extend-5m``: 464 symbols extended (6 have no Angel token), +1,256,945 rows with ``source='angel'``; ``intraday_bars`` now 10,690,973 rows, 470 symbols, 2024-09-13 09:15 -> 2026-11-11 15:25 IST. On the last session every symbol has 62-75 bars (median 75). Angel's ``getCandleData`` returns empty or ``AB1021`` answers above about one call per second, so the client spaces candle calls 1.0 s apart (the first run, at 0.4 s, spent minutes in the 60 s backoff).
+
+**1-minute backfill (Upstox)** launched in the background: ``stocksense ingest intraday --backfill-1m --from 2022-01-03`` (log ``data_store/logs/t210_bars_1m.log``). Symbol set: union over calendar years 2022..2026 of the 300 highest-median-turnover EQ symbols = 512 symbols (473 have an Upstox key and data), 58 months, newest month first, one request per symbol-month, about 1 request per second, resumable through ``job_runs(job="bars_1m:<symbol>:<YYYY-MM>")``. Status when this note was written: 3,386 of about 29,700 symbol-months done (2026-11 back to 2026-04), 23.1M rows in ``bars_1m`` (473 symbols), 61,760 symbol-sessions of which 670 are short (fewer than 375 bars: half-days, the Muhurat session, the current day) and 303 have a summed bar volume more than 5% away from bhavcopy volume (counted in each job's ``detail``, never dropped). ETA about 7 hours more. To resume after an interruption run the same command (done months are skipped).
+
+**``load_bars``.** ``basis="raw_ratio"`` returns the stored bars unchanged; ``basis="adjusted"`` rescales each (symbol, session) by ``k = panel adj_open / bar-09:15 open`` (fallback ``adj_close / last bar close``; prices x k, volume / k) and drops sessions without a panel row.
+
+## After T2.11 / T2.12 (2026-11-12): macro, participant OI, FII/DII, deals, live captures
+
+**Macro (``macro_daily``).** stooq answered every symbol with an HTML page on 2026-11-12 (it now requires an API key), so the card's "skip that series" rule would have left the dataset empty. Yahoo's chart endpoint (``period1=0&period2=4102444800&interval=1d``; ``range=max`` is coarse: monthly or quarterly bars) is used as the fallback, tried only when stooq gives nothing. Series (Yahoo symbol): USDINR (USDINR=X) 5,951 rows from 2003-12-01; BRENT (BZ=F) 4,801 from 2007-07-29; SPX (^GSPC) 14,338 from 1970-01-02; NDX (^NDX) 10,359 from 1985-10-01; US10Y (^TNX, yield in percent) 14,236 from 1970-01-02; DXY (DX-Y.NYB) 14,184 from 1971-01-04; GOLD (GC=F, futures, not spot XAUUSD) 6,575 from 2000-08-29; all to 2026-11-11. ``available_ts``: SPX, NDX, US10Y, DXY next calendar day 06:00 IST; others same day 23:30 IST.
+
+**Participant OI (``participant_oi``).** File ``fao_participant_oi_DDMMYYYY.csv``: line 1 is a title with doubled quotes (``""Participant wise Open Interest ... as on Nov 09, 2026"",...``), then a blank line, then the header, rows Client, DII, FII, Pro, TOTAL (TOTAL dropped). Beyond the card's eight columns the file has Option Stock Call/Put Long/Short (stored as ``opt_stk_*``) and ``total_long``/``total_short`` (kept as extra columns). The title date is checked against the requested date (a holiday request can return the previous file). 2026-11-10 (a holiday) answers 404. Backfill walks back from yesterday until 30 consecutive days without a file (log ``data_store/logs/t211_participant_oi.log``).
+
+**FII/DII (``fii_dii``).** ``/api/fiidiiTradeReact`` returns the latest day only: ``[{category: "DII"|"FII/FPI", date: "11-Nov-2026", buyValue, sellValue, netValue}]`` (strings). ``FII/FPI`` is stored as ``FII``. Seeded 30 rows from the adopted ``nse_snapshots/fii_dii`` files (latest snapshot per date and category), plus today's 2.
+
+**Deals (``deals``).** ``bulk.csv`` (columns ``Date, Symbol, Security Name, Client Name, Buy/Sell, Quantity Traded, Trade Price / Wght. Avg. Price, Remarks``) and ``block.csv`` (no Remarks). Date is ``11-NOV-2026``. 2026-11-11: 70 bulk and 5 block rows stored. Identical rows within one day collapse (the key is the whole row).
+
+**Pre-open (``preopen``) shape probe** (``/api/market-data-pre-open?key=ALL``, answered with the 2026-11-11 09:09 snapshot; 2,426 symbols): top level ``declines, unchanged, data, advances, timestamp, totalTradedValue, totalmarketcap, totalTradedVolume``; each ``data[i].metadata`` has ``symbol, identifier, series, purpose, lastPrice, change, pChange, previousClose, finalQuantity, totalTurnover, marketCap, yearHigh, yearLow, iep`` (**no ``finalPrice``** there); ``data[i].detail.preOpenMarket`` has ``preopen`` (order-book levels ``{price, buyQty, sellQty, iep?}``), ``ato``, ``IEP``, ``totalTradedVolume``, ``finalPrice``, ``finalQuantity``, ``lastUpdateTime``, ``totalSellQuantity``, ``totalBuyQuantity``, ``atoBuyQty``, ``atoSellQty``, ``Change``, ``perChange``, ``prevClose``. The parser maps ``iep -> indicative_price``, ``detail.finalPrice -> final_price`` (0 -> null), ``detail.totalBuyQuantity/totalSellQuantity -> buy_qty/sell_qty``, ``metadata.previousClose -> prev_close``; ``key=ALL`` works (no fallback to NIFTY/FO/OTHERS needed, but implemented). A live capture is possible only 09:00-09:08 IST on a session day; the tests use a recorded sample. The adopted ``nse_snapshots/pre_open`` history (16 days) was seeded into ``preopen``: 1,773,457 rows (ts = source timestamp; the earliest snapshots lack the auction columns, which are null).
+
+## Features and labels on real data (T4.5 / T4.6 acceptance, 2026-11-12)
+
+- `build_features` over the whole history (138 features: 99 cross-sectional, 39 market-wide; panel through 2026-11-09): **700.7 s** (target < 20 min). `build_labels`: **7.5 s**. Script to reproduce the signal table: `scripts/ic_table.py` (research period only, ends 2025-09-30).
+- Mean daily rank IC x100 (t-stat) of the built features against the labels, compared with the planning measurement (PLAN B.3 Finding 5, different code, same data). Signs and sizes agree for every comparable signal:
+
+| built feature | label | planning | built |
+|---|---|---|---|
+| vol_21 (planning used the negated low-vol signal) | y_oc | -6.18 | -6.25 (t -23.2) |
+| co_sum_5 (planning: -sum of overnight returns) | y_oc | -5.43 | -5.43 (t -41.2) |
+| max_ret_21 | y_oc | -5.13 | -5.12 (t -24.3) |
+| deliv_z | y_oc | +3.12 | +3.25 (t 17.5) |
+| close_loc | y_oc | +2.00 | +2.12 (t 14.3) |
+| turn_shock | y_oc | -1.90 | -2.05 (t -14.1) |
+| mom_5 (planning: 5-day reversal) | y_c2o_5 | -2.83 | -2.90 (t -14.6) |
+| close_loc | y_c2o_5 | -1.36 | -1.40 (t -9.9) |
+| mom_126 | y_c2o_20 | +3.12 | +3.69 (t 14.0) |
+| mom_252_skip21 | y_c2o_20 | +4.11 | +4.99 (t 17.4) |
+
+- New in the built set, not measured in planning (single trials still to be tested out of sample): `atr_14_pct` -7.58 (t -26) and `downside_vol_63`, `idio_vol_63`, `range_pct` all around -6.5 to -7.5 on y_oc; `fut_basis` +4.46 and `atm_iv` -4.59 on y_oc (F&O names, 2024-07 onward only); `hi52_prox` +5.89 and `days_since_hi52` -4.58 on y_c2o_20; `ind_mom_21` +3.95 on y_c2o_20.
+- Verdict: the panel, features and labels reproduce the independent planning measurements. Market-wide features show NaN in the table because a cross-sectional correlation is undefined for a value that is the same for all stocks on a date; they are tested in the models, not here.
+
