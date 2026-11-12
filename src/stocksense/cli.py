@@ -91,10 +91,43 @@ app.add_typer(ingest_app, name="ingest")
 
 
 @ingest_app.callback(invoke_without_command=True)
-def ingest(ctx: typer.Context) -> None:
-    """Download and store new raw data."""
-    if ctx.invoked_subcommand is None:
+def ingest(
+    ctx: typer.Context,
+    all_: Annotated[bool, typer.Option("--all", help="Every dataset (with --catch-up).")] = False,
+    catch_up: Annotated[
+        bool, typer.Option("--catch-up", help="Bring every dataset up to the last completed session.")
+    ] = False,
+) -> None:
+    """Download and store new raw data; `--all --catch-up` runs every ingester in order."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if not (all_ and catch_up):
         _not_implemented(2)
+    from collections import Counter
+
+    from stocksense.data import ingest_all
+
+    try:
+        ictx, nse, clock = _ingest_context(ctx)
+    except DataNotAvailable:
+        typer.echo("no data: bhavcopy_eq is empty or missing")
+        raise typer.Exit(1) from None
+    try:
+        results = ingest_all.catch_up(ictx)
+    finally:
+        nse.close()
+    counts = Counter((r.dataset, r.status) for r in results)
+    typer.echo("summary (dataset, status): count")
+    for (ds, st), n in sorted(counts.items()):
+        typer.echo(f"  {ds:<22} {st:<14} {n}")
+    settings = _settings(ctx)
+    table = status_table(settings, TradingCalendar.from_store(settings, clock), clock)
+    with pl.Config(
+        tbl_rows=-1, tbl_cols=-1, tbl_width_chars=200, tbl_formatting="ASCII_MARKDOWN",
+        tbl_hide_dataframe_shape=True, tbl_hide_column_data_types=True, fmt_str_lengths=60,
+    ):  # fmt: skip
+        typer.echo(str(table))
+    raise typer.Exit(ingest_all.exit_code(table))
 
 
 def _parse_day(text: str, clock: SystemClock) -> date:
