@@ -15,8 +15,6 @@ NOT_IMPL = {
     "ingest": 2,
     "build-features": 4,
     "build-labels": 4,
-    "train": 7,
-    "validate": 6,
     "backtest": 5,
     "run": 10,
     "job": 10,

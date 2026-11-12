@@ -783,3 +783,5 @@ def doctor(ctx: typer.Context) -> None:
     out("brokers")
     for line in _broker_lines(settings):
         out(f"  {line}")
+
+__import__("stocksense.cli_research").cli_research.register(app)  # research cmds
