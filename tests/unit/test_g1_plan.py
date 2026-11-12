@@ -32,7 +32,9 @@ def _models():
 
 
 CFG = G1Config(
-    start=date(2014, 1, 1), end=date(2025, 9, 30), capitals=(25000.0, 100000.0, 500000.0, 2500000.0),
+    start=date(2014, 1, 1),
+    end=date(2025, 9, 30),
+    capitals=(25000.0, 100000.0, 500000.0, 2500000.0),
     reference_capital=500000.0,
 )
 

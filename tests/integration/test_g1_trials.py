@@ -167,8 +167,8 @@ def test_the_best_s1_trial_gets_a_meta_variant_and_references(runner, grid_run, 
     s1 = [p for p in registered if p.kind == "s1"]
     best = max(s1, key=lambda p: (results[p.trial_id].ref_sharpe, p.trial_id))
     sp = best.spec
-    meta = g1.TrialPlan("s1-meta", "g1-s1", best.target, {**sp, "meta": "walk-forward", "base_trial": best.trial_id},
-                        "meta")  # fmt: skip
+    meta_spec = {**sp, "meta": "walk-forward", "base_trial": best.trial_id}
+    meta = g1.TrialPlan("s1-meta", "g1-s1", best.target, meta_spec, "meta")
     ref_open = g1.TrialPlan("ref-open", "g1-ref", best.target, {**sp, "entry": "open"}, "S1 entry at open")
     ref_mom = g1.TrialPlan(
         "ref-factor", "g1-ref", best.target,
@@ -207,7 +207,10 @@ def _bars(world, trades: pl.DataFrame) -> pl.DataFrame:
 
 def test_strict_capture_from_five_minute_bars(world, grid_run):
     registered, results, _ = grid_run
-    s2 = max((p for p in registered if p.kind == "s2"), key=lambda p: results[p.trial_id].data["by_capital"]["500000"]["n_trades"])
+    s2 = max(
+        (p for p in registered if p.kind == "s2"),
+        key=lambda p: results[p.trial_id].data["by_capital"]["500000"]["n_trades"],
+    )
     trades = pl.read_parquet(results[s2.trial_id].dir / "trades.parquet")
     assert trades.height > 20
     bars = _bars(world, trades)
@@ -218,7 +221,12 @@ def test_strict_capture_from_five_minute_bars(world, grid_run):
     j = out
     assert j["strict_net_mean"] != j["auction_net_mean"]
     if j["auction_net_mean"] > 0:
-        assert 0.0 < j["strict_capture"] < 1.0
+        # the strict leg keeps 40% of the gross move but pays the full cost, so the ratio is below 1 and
+        # may be negative (costs larger than the strict gross); that is a result, not an error
+        assert j["strict_capture"] < 1.0
+        assert j["strict_capture"] == pytest.approx(j["strict_net_mean"] / j["auction_net_mean"])
+    else:
+        assert j["strict_capture"] is None
     # nothing after the research end is used
     cut = g1.strict_capture(world.settings, trades, trades["entry_date"].min() - timedelta(days=1))
     assert cut["available"] is False

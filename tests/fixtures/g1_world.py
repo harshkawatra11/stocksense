@@ -67,9 +67,7 @@ def build_g1_world(root: Path, planted_ic: float = 0.10, n: int = 150, noise: fl
     m = make_market(n=n, planted_ic=planted_ic)
     write_market(m, root)
     s = _settings_for(root)
-    s = s.model_copy(
-        update={"research": s.research.model_copy(update={"lockbox_start": LOCKBOX_START})}
-    )
+    s = s.model_copy(update={"research": s.research.model_copy(update={"lockbox_start": LOCKBOX_START})})
     panel_pkg.build_all(s)
     build_labels(s)
     reg = _planted_registry(s, m, noise)

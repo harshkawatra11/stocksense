@@ -17,7 +17,7 @@ import json
 import math
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import date, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -186,9 +186,7 @@ def model_trials(state: State, strategy: str, target: str) -> list[dict[str, Any
     return out
 
 
-def surviving_models(
-    state: State, strategy: str, target: str, min_ic: float = 0.0
-) -> list[ModelTrial]:
+def surviving_models(state: State, strategy: str, target: str, min_ic: float = 0.0) -> list[ModelTrial]:
     """Finished walk-forward trials of the strategy and target whose out-of-fold mean IC is above `min_ic`.
     Fixed rule, set before any result is read: a model with no positive out-of-fold IC does not enter the
     blend (the online weights would give it the floor weight anyway)."""
@@ -199,8 +197,14 @@ def surviving_models(
             continue
         t = r["ic_tstat"]
         out.append(
-            ModelTrial(r["trial_id"], r["family"], target, r["spec"], float(ic),
-                       float(t) if t is not None else float("nan"))  # fmt: skip
+            ModelTrial(
+                r["trial_id"],
+                r["family"],
+                target,
+                r["spec"],
+                float(ic),
+                float(t) if t is not None else float("nan"),
+            )  # fmt: skip
         )
     return out
 
@@ -260,8 +264,11 @@ def blend_models(frames: Mapping[str, pl.DataFrame], labels: pl.DataFrame, targe
     return Blended(out, weights, ic)
 
 
-def factor_scores(settings: Settings, feature: str, sign: float, labels: pl.DataFrame, target: str) -> Blended:
-    """A single factor as a 'blend': its cross-sectional rank (times `sign`) with the same expected-return map."""
+def factor_scores(
+    settings: Settings, feature: str, sign: float, labels: pl.DataFrame, target: str
+) -> Blended:
+    """A single factor as a 'blend': its cross-sectional rank (times `sign`) with the same
+    expected-return map."""
     f = (
         load_features(settings, "research", columns=[feature])
         .collect()
@@ -275,7 +282,7 @@ def factor_scores(settings: Settings, feature: str, sign: float, labels: pl.Data
 
 class StoredScoreSource:
     """`ScoreSource` over a blended frame. With `calendar` and `trade_date=True` (S2) a request for trade
-    date d is answered with the scores of the previous session (the decision date the model was fitted for)."""
+    date d is answered with the scores of the previous session (the decision date of the fit)."""
 
     def __init__(
         self, frame: pl.DataFrame, *, calendar: TradingCalendar | None = None, trade_date: bool = False
@@ -332,7 +339,7 @@ class _FnoAccess(EnginePanelAccess):
 
 @dataclass
 class G1World:
-    """Everything a backtest of the grid reads, built once: panel, calendar, slippage, events, market state."""
+    """Everything a backtest of the grid reads, built once: panel, calendar, slippage, events, state."""
 
     settings: Settings
     calendar: TradingCalendar
@@ -419,7 +426,9 @@ def build_world(
     panel = PanelData.from_frame(daily, uni.select("date", "sid", "turnover_rank"))
     member = (
         pl.DataFrame({"date": panel.date, "sid": panel.sid.astype(np.int32)})
-        .join(uni.select("date", "sid").with_columns(pl.lit(True).alias("_u")), on=["date", "sid"], how="left")
+        .join(
+            uni.select("date", "sid").with_columns(pl.lit(True).alias("_u")), on=["date", "sid"], how="left"
+        )
         .get_column("_u")
         .fill_null(False)
         .to_numpy()
@@ -582,8 +591,13 @@ def plan_grid(
         for k in S1_K_MAX:
             for ov in S1_OVERLAY:
                 plans.append(
-                    TrialPlan("s1", FAMILY_S1, target, _spec_s1(cfg, target, k, ov, models),
-                              f"S1 {target} k={k} overlay={'on' if ov else 'off'}")  # fmt: skip
+                    TrialPlan(
+                        "s1",
+                        FAMILY_S1,
+                        target,
+                        _spec_s1(cfg, target, k, ov, models),
+                        f"S1 {target} k={k} overlay={'on' if ov else 'off'}",
+                    )  # fmt: skip
                 )
     if s2_models:
         for k in S2_K_MAX:
@@ -673,9 +687,7 @@ class G1Runner:
     def world(self) -> G1World:
         if self._world is None:
             assert self.cfg.start is not None and self.cfg.end is not None
-            self._world = build_world(
-                self.settings, self.calendar, start=self.cfg.start, end=self.cfg.end
-            )
+            self._world = build_world(self.settings, self.calendar, start=self.cfg.start, end=self.cfg.end)
         return self._world
 
     def labels(self, target: str) -> pl.DataFrame:
@@ -723,7 +735,9 @@ class G1Runner:
         sp = plan.spec
         if plan.kind == "s2":
             b = self.blended(plan.target, sp["models"])
-            return self._s2_factory(StoredScoreSource(b.frame, calendar=self.calendar, trade_date=True), sp["k_max"])
+            return self._s2_factory(
+                StoredScoreSource(b.frame, calendar=self.calendar, trade_date=True), sp["k_max"]
+            )
         if plan.kind == "ref-factor":
             b = factor_scores(self.settings, sp["factor"], sp["sign"], self.labels(plan.target), plan.target)
             return self._s1_factory(plan.target, StoredScoreSource(b.frame), sp["k_max"], sp["overlay"])
@@ -738,7 +752,9 @@ class G1Runner:
 
     def _meta_for(self, base_trial: str) -> WalkForwardMeta:
         d = trial_dir(self.settings, base_trial)
-        samples = build_meta_samples(pl.read_parquet(d / "entries.parquet"), pl.read_parquet(d / "trades.parquet"))
+        samples = build_meta_samples(
+            pl.read_parquet(d / "entries.parquet"), pl.read_parquet(d / "trades.parquet")
+        )
         folds = self.cfg.folds or tuple(walk_forward_folds(self.settings, self.calendar))
         return WalkForwardMeta(samples, folds, self.cfg.meta_factory or MetaModel)
 
@@ -791,13 +807,18 @@ class G1Runner:
         )  # fmt: skip
         stress_stats = _stats(res2, cfg.reference_capital, years)
         assert daily is not None
-        daily = daily.join(res2.daily.select("date", pl.col("day_ret").alias("net_2x")), on="date", how="left")
+        daily = daily.join(
+            res2.daily.select("date", pl.col("day_ret").alias("net_2x")), on="date", how="left"
+        )
         for e in extra_cols:
             daily = daily.join(e, on="date", how="left")
         bench = (
             world.benchmark.select("date", pl.col("ew500_ret").alias("benchmark"))
             if plan.kind != "s2"
-            else pl.DataFrame({"date": daily["date"], "benchmark": [None] * daily.height}, schema={"date": pl.Date, "benchmark": pl.Float64})
+            else pl.DataFrame(
+                {"date": daily["date"], "benchmark": [None] * daily.height},
+                schema={"date": pl.Date, "benchmark": pl.Float64},
+            )
         )
         daily = daily.join(bench, on="date", how="left").sort("date")
         net = daily["net"].to_numpy()
@@ -854,13 +875,17 @@ def strict_capture(settings: Settings, trades: pl.DataFrame, end: date | None = 
 
     Only dates inside the stored bars and not after `end` (the research end) are used. Returns
     {"available": False, "reason": ...} when there are no bars or no matching trades."""
-    bars = io.read(
-        settings, "intraday_bars", end=end, columns=["symbol", "ts", "interval", "close"]
-    ).filter(pl.col("interval") == BARS_INTERVAL).collect()
+    bars = (
+        io.read(settings, "intraday_bars", end=end, columns=["symbol", "ts", "interval", "close"])
+        .filter(pl.col("interval") == BARS_INTERVAL)
+        .collect()
+    )
     if bars.is_empty():
         return {"available": False, "reason": "no intraday_bars history in the research range"}
     bars = bars.with_columns(pl.col("ts").dt.date().alias("date"), pl.col("ts").dt.time().alias("_t"))
-    ends = bars.filter(pl.col("_t") == STRICT_EXIT_BAR).select("symbol", "date", pl.col("close").alias("c_exit"))
+    ends = bars.filter(pl.col("_t") == STRICT_EXIT_BAR).select(
+        "symbol", "date", pl.col("close").alias("c_exit")
+    )
     starts = bars.filter(pl.col("_t") == STRICT_ENTRY_BAR).select(
         "symbol", "date", pl.col("close").alias("c_entry")
     )

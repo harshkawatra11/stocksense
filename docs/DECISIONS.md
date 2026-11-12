@@ -204,3 +204,8 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 13
 - T2.8 retry (2026-11-13): the 17 failed windows (2012-09-05..2012-10-02 four windows, 2015-01-21..2015-04-21 thirteen windows) were re-run one window each with `ingest announcements --from <a> --to <a+6>`; all 17 succeeded (14,948 rows in total) and are now cached. The earlier note that they "succeeded on retry" was wrong: the original run left them failed, this retry fixed them. No code change.
+
+## Phase 9 (T9.5)
+
+- 2026-11-13 T9.5: `strict_capture` = mean strict net return / mean auction net return over the S2 trades that have both 5-minute bars. The code was right and the first test expectation was wrong: the strict leg keeps only part of the gross move but pays the full cost, so the ratio is below 1 and can be negative (a strict net return below zero is a finding, not an error). It is defined only when the auction net mean is positive; otherwise it is reported as `null` with a note, and the two net means are still stored. The test now asserts `< 1` and the identity strict/auction.
+- 2026-11-13 T9.5: `learn/nightly.py` holds only the production-fit piece of T11.1 (`fit_production`, `ModelBag`, `load_bag`), which T9.5 step 6 needs; it is kept and now has tests (`tests/integration/test_nightly_fit.py`). The rest of T11.1 stays for Phase 11.

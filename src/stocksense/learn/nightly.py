@@ -57,7 +57,9 @@ class ModelBag(Model):
     working single-seed model; `load_bag` restores every seed (files under `seeds/<i>/`). `predict` averages
     the members' per-row ranks in [-0.5, 0.5], so `X` must hold one cross-section (one date) per call."""
 
-    def __init__(self, members: Sequence[Model] | None = None, factory: Callable[[], Model] | None = None) -> None:
+    def __init__(
+        self, members: Sequence[Model] | None = None, factory: Callable[[], Model] | None = None
+    ) -> None:
         self.members: list[Model] = list(members or [])
         self._factory = factory
         if self.members:
@@ -116,7 +118,9 @@ def load_bag(settings: Settings, model_id: str) -> ModelBag:
 # ---- the training rows ------------------------------------------------------------------------------
 
 
-def production_cutoff(calendar: TradingCalendar, as_of: date, embargo_sessions: int = EMBARGO_SESSIONS) -> date:
+def production_cutoff(
+    calendar: TradingCalendar, as_of: date, embargo_sessions: int = EMBARGO_SESSIONS
+) -> date:
     """The session `embargo_sessions` before `as_of`: a label ending on or after it is not trained on."""
     return calendar.shift(_first_session_on_or_after(calendar, as_of), -embargo_sessions)
 
