@@ -227,6 +227,28 @@ like-for-like with PLAN B.3 (mean of LOG returns, same members, bigmoves exclude
 
 PLAN expects about +22 and -20, measured as mean LOG returns. The log-return means above match (+22.7, -19.2). The panel stores fractions, so `ew500_co/oc` are arithmetic means; those exceed log means by about sigma^2/2 per day (about 1.7 bps for the intraday leg, volatile at 1.8% a day). Per year (arithmetic) `ew500_co` / `ew500_oc` in bps: 2012 21.5/-7.4, 2013 12.0/-15.5, 2014 21.5/-2.0, 2015 27.5/-22.3, 2016 24.9/-22.8, 2017 31.4/-13.1, 2018 15.0/-24.6, 2019 17.7/-20.5, 2020 31.1/-19.2, 2021 36.6/-18.9, 2022 19.9/-17.5, 2023 27.5/-10.5, 2024 27.9/-17.5, 2025 11.3/-10.7: overnight positive and intraday negative in every year, as in Finding 3.
 
+## Features and labels on real data (T4.5 / T4.6 acceptance, 2026-11-12)
+
+- `build_features` over the whole history (138 features: 99 cross-sectional, 39 market-wide; panel through 2026-11-09): **700.7 s** (target < 20 min). `build_labels`: **7.5 s**. Script to reproduce the signal table: `scripts/ic_table.py` (research period only, ends 2025-09-30).
+- Mean daily rank IC x100 (t-stat) of the built features against the labels, compared with the planning measurement (PLAN B.3 Finding 5, different code, same data). Signs and sizes agree for every comparable signal:
+
+| built feature | label | planning | built |
+|---|---|---|---|
+| vol_21 (planning used the negated low-vol signal) | y_oc | -6.18 | -6.25 (t -23.2) |
+| co_sum_5 (planning: -sum of overnight returns) | y_oc | -5.43 | -5.43 (t -41.2) |
+| max_ret_21 | y_oc | -5.13 | -5.12 (t -24.3) |
+| deliv_z | y_oc | +3.12 | +3.25 (t 17.5) |
+| close_loc | y_oc | +2.00 | +2.12 (t 14.3) |
+| turn_shock | y_oc | -1.90 | -2.05 (t -14.1) |
+| mom_5 (planning: 5-day reversal) | y_c2o_5 | -2.83 | -2.90 (t -14.6) |
+| close_loc | y_c2o_5 | -1.36 | -1.40 (t -9.9) |
+| mom_126 | y_c2o_20 | +3.12 | +3.69 (t 14.0) |
+| mom_252_skip21 | y_c2o_20 | +4.11 | +4.99 (t 17.4) |
+
+- New in the built set, not measured in planning (single trials still to be tested out of sample): `atr_14_pct` -7.58 (t -26) and `downside_vol_63`, `idio_vol_63`, `range_pct` all around -6.5 to -7.5 on y_oc; `fut_basis` +4.46 and `atm_iv` -4.59 on y_oc (F&O names, 2024-07 onward only); `hi52_prox` +5.89 and `days_since_hi52` -4.58 on y_c2o_20; `ind_mom_21` +3.95 on y_c2o_20.
+- Verdict: the panel, features and labels reproduce the independent planning measurements. Market-wide features show NaN in the table because a cross-sectional correlation is undefined for a value that is the same for all stocks on a date; they are tested in the models, not here.
+
+
 ## After T2.8 (2026-11-12): announcements, board meetings, results index
 
 **Truncation check (before the backfill).** 2026-11-02 -> 2026-11-08: the 7-day call returned 6,699 rows; the seven 1-day calls returned 904 + 1,142 + 1,419 + 1,530 + 1,239 + 426 + 39 = 6,699 with identical seq_id sets. Four other weeks (2011-03, 2015-03, 2020-03, 2024-03) also matched exactly. So 7-day windows are used for all history. As a safety net a window that returns 9,000 rows or more is re-read day by day (never triggered).
@@ -366,3 +388,4 @@ Stored bars are therefore **back-adjusted as of their download date**. Fresh Ang
 
 - New in the built set, not measured in planning (single trials still to be tested out of sample): `atr_14_pct` -7.58 (t -26) and `downside_vol_63`, `idio_vol_63`, `range_pct` all around -6.5 to -7.5 on y_oc; `fut_basis` +4.46 and `atm_iv` -4.59 on y_oc (F&O names, 2024-07 onward only); `hi52_prox` +5.89 and `days_since_hi52` -4.58 on y_c2o_20; `ind_mom_21` +3.95 on y_c2o_20.
 - Verdict: the panel, features and labels reproduce the independent planning measurements. Market-wide features show NaN in the table because a cross-sectional correlation is undefined for a value that is the same for all stocks on a date; they are tested in the models, not here.
+
