@@ -196,10 +196,11 @@ class SpecialSession(_Frozen):
 
 
 class Schedule(BaseModel):
-    """Only the part the calendar needs; T10.4 adds the job table (extra keys allowed until then)."""
+    """config/schedule.toml: special sessions plus the raw `[[job]]` rows (parsed by live.schedule)."""
 
     model_config = ConfigDict(frozen=True, extra="allow")
     special_sessions: tuple[SpecialSession, ...] = ()
+    job: tuple[dict[str, Any], ...] = ()
 
 
 class Secrets(BaseSettings):

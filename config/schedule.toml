@@ -1,8 +1,185 @@
-# Stub. T10.4 completes this file with the full job schedule.
-# Extra trading sessions (weekend specials, Muhurat) go here, e.g.:
+# T10.4: the all-day job table (IST). One [[job]] per scheduled activity.
+#   name            job key in job_runs (a job with several `at` times is keyed name@HH:MM)
+#   fn              implementation in live.jobs.JOBS (default: name)
+#   at              "HH:MM[:SS]" or a list of them
+#   every_s / until repeat every N seconds from `at` up to `until`; for one-shot jobs `until` ends the retries
+#   days            session | any | nonsession | saturday | first_saturday
+#   max_retries     extra attempts after a failed one; retry_backoff_s is the wait between attempts
+#   needs_market    only inside the session's open..close window
+#   late_after      a first run after this time is recorded as `skipped: late`
+#   after           run only once this job has finished for the day
+# Extra trading sessions (weekend specials, Muhurat) go in [[special_sessions]]:
 #   [[special_sessions]]
 #   date = "2027-02-01"
 #   open = "09:15"
 #   close = "15:30"
 #   tradable = true
 special_sessions = []
+
+[[job]]
+name = "preflight_start"
+fn = "preflight"
+at = "00:00"
+days = "any"
+max_retries = 2
+retry_backoff_s = 60
+
+[[job]]
+name = "preflight"
+at = "07:30"
+days = "any"
+max_retries = 2
+retry_backoff_s = 60
+
+[[job]]
+name = "broker_login"
+at = "07:40"
+days = "session"
+max_retries = 5
+retry_backoff_s = 120
+
+[[job]]
+name = "overnight_data"
+at = "07:45"
+days = "session"
+max_retries = 3
+retry_backoff_s = 300
+
+[[job]]
+name = "capital_am"
+at = "08:45"
+until = "09:05"
+days = "session"
+max_retries = 10
+retry_backoff_s = 120
+
+[[job]]
+name = "plan_open"
+at = "08:50"
+days = "session"
+max_retries = 2
+retry_backoff_s = 60
+
+[[job]]
+name = "preopen_capture"
+at = "09:00"
+until = "09:08"
+every_s = 60
+days = "session"
+
+[[job]]
+name = "s2_decide"
+at = "09:07"
+days = "session"
+late_after = "09:08"
+max_retries = 0
+retry_backoff_s = 30
+
+[[job]]
+name = "open_fills"
+at = "09:15:10"
+until = "09:25"
+days = "session"
+needs_market = true
+late_after = "09:25"
+max_retries = 10
+retry_backoff_s = 60
+
+[[job]]
+name = "market_loop"
+at = "09:16"
+until = "15:30"
+every_s = 60
+days = "session"
+needs_market = true
+
+[[job]]
+name = "spread_capture"
+at = ["09:20", "11:00", "13:00", "15:00"]
+days = "session"
+needs_market = true
+max_retries = 1
+retry_backoff_s = 60
+
+[[job]]
+name = "capital_pm"
+at = "15:05"
+days = "session"
+max_retries = 3
+retry_backoff_s = 60
+
+[[job]]
+name = "s1_entries"
+at = "15:10"
+days = "session"
+late_after = "15:20"
+max_retries = 2
+retry_backoff_s = 60
+
+[[job]]
+name = "s2_squareoff"
+at = "15:18"
+days = "session"
+needs_market = true
+max_retries = 3
+retry_backoff_s = 30
+
+[[job]]
+name = "close_fills"
+at = "15:22"
+until = "15:28"
+days = "session"
+needs_market = true
+max_retries = 6
+retry_backoff_s = 60
+
+[[job]]
+name = "eod_mark"
+at = "15:35"
+days = "session"
+max_retries = 3
+retry_backoff_s = 120
+
+[[job]]
+name = "eod_ingest"
+at = "18:30"
+until = "23:30"
+days = "session"
+max_retries = 40
+retry_backoff_s = 900
+
+[[job]]
+name = "eod_pipeline"
+at = "18:30"
+after = "eod_ingest"
+days = "session"
+max_retries = 5
+retry_backoff_s = 600
+
+[[job]]
+name = "housekeeping"
+at = "23:45"
+days = "any"
+max_retries = 1
+retry_backoff_s = 300
+
+[[job]]
+name = "weekly_research"
+at = "09:00"
+days = "saturday"
+max_retries = 0
+retry_backoff_s = 600
+
+[[job]]
+name = "monthly_kronos"
+at = "14:00"
+days = "first_saturday"
+max_retries = 0
+retry_backoff_s = 600
+
+[[job]]
+name = "collect_only"
+at = "08:00"
+until = "20:00"
+every_s = 600
+days = "nonsession"
