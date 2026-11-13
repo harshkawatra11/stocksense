@@ -628,15 +628,38 @@ def backtest() -> None:
 
 
 @app.command()
-def run() -> None:
-    """Run the daemon."""
-    _not_implemented(10)
+def run(
+    ctx: typer.Context,
+    once: Annotated[bool, typer.Option("--once", help="Process what is due now, then exit.")] = False,
+) -> None:
+    """Run the all-day daemon (single instance; exits 0 with 'already running' if one is up)."""
+    from stocksense.live.daemon import run as run_daemon
+
+    raise typer.Exit(run_daemon(_settings(ctx), once=once))
 
 
 @app.command()
-def job() -> None:
-    """Run one scheduled job."""
-    _not_implemented(10)
+def job(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Job key from config/schedule.toml, e.g. eod_pipeline.")],
+    on: Annotated[str | None, typer.Option("--date", help="Trade date YYYY-MM-DD (default: today).")] = None,
+) -> None:
+    """Run one scheduled job by hand through the daemon's recording wrapper."""
+    from stocksense.live.daemon import build_context
+    from stocksense.live.jobs import JOBS, execute_job
+    from stocksense.live.schedule import load_schedule
+
+    settings = _settings(ctx)
+    clock = SystemClock()
+    defs = {j.key: j for j in load_schedule(settings)}
+    fn = defs[name].fn if name in defs else name
+    if fn not in JOBS:
+        typer.echo(f"unknown job {name!r}; known: {', '.join(sorted(defs))}")
+        raise typer.Exit(2)
+    day = _parse_day(on, clock) if on else clock.today()
+    res = execute_job(build_context(settings, clock, log_console=None), name, fn, day)
+    typer.echo(f"{res.key} {day}: {res.status} {res.detail}")
+    raise typer.Exit(1 if res.status == "failed" else 0)
 
 
 @app.command()
@@ -646,9 +669,21 @@ def report() -> None:
 
 
 @app.command()
-def resume() -> None:
-    """Resume after an interruption."""
-    _not_implemented(10)
+def resume(
+    ctx: typer.Context,
+    book: Annotated[str, typer.Option("--book", help="Book name, e.g. main.")],
+) -> None:
+    """Clear a book's drawdown stop so its S1 policy may trade again."""
+    from stocksense.paper.ledger import is_valid_book
+    from stocksense.portfolio.construct import book_stop_key
+
+    if not is_valid_book(book):
+        typer.echo(f"unknown book {book!r}")
+        raise typer.Exit(2)
+    state = State(_settings(ctx))
+    state.migrate()
+    state.kv_set(book_stop_key(book), "0")
+    typer.echo(f"book {book}: drawdown stop cleared")
 
 
 def _broker_lines(settings: Settings) -> list[str]:
@@ -773,7 +808,8 @@ def doctor(ctx: typer.Context) -> None:
     hb = paths.heartbeat
     if hb.is_file():
         age = SystemClock().now() - datetime.fromtimestamp(hb.stat().st_mtime, IST)
-        out(f"heartbeat     {age.total_seconds():.0f} s ago")
+        alive = "alive" if age.total_seconds() < 60 else "STALE: the daemon is not running"
+        out(f"heartbeat     {age.total_seconds():.0f} s ago ({alive})")
     else:
         out("heartbeat     none")
     out("secrets")
