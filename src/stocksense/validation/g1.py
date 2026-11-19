@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import polars as pl
@@ -41,7 +41,13 @@ from stocksense.features.build import load_features
 from stocksense.features.events import CA_STRUCTURAL, RESULT_RE
 from stocksense.labels.forward import load_labels
 from stocksense.models.base import ModelSpec
-from stocksense.models.ensemble import blend_online, expected_return_map, rank_scores
+from stocksense.models.ensemble import (
+    blend_online,
+    expected_return_map,
+    expected_return_map_decile,
+    rank_scores,
+    smooth_scores,
+)
 from stocksense.portfolio.construct import (
     DayScores,
     EnginePanelAccess,
@@ -93,6 +99,9 @@ class G1Config:
     s1_targets: tuple[str, ...] = S1_TARGETS
     # backtest-only S1 variant (DECISIONS 2026-11-19): re-enter N sessions after the book-drawdown stop fired
     s1_auto_resume: int | None = None
+    # G2-C2: causal EMA span applied to the blended score, and the shape of the expected-return map
+    score_ema: int | None = None
+    er_map: Literal["linear", "decile"] = "linear"
 
     def resolved(self, settings: Settings) -> G1Config:
         caps = self.capitals if self.capitals is not None else tuple(settings.costs.grid.capital_inr)
@@ -248,15 +257,30 @@ def _disagreement(frames: Mapping[str, pl.DataFrame]) -> pl.DataFrame | None:
     return wide.select("date", "sid", pl.concat_list(list(frames)).list.std(ddof=1).alias("disagreement"))
 
 
-def _with_er(blend: pl.DataFrame, labels: pl.DataFrame, target: str) -> pl.DataFrame:
-    er = expected_return_map(blend, labels, target)
+def _with_er(blend: pl.DataFrame, labels: pl.DataFrame, target: str, er_map: str = "linear") -> pl.DataFrame:
+    if er_map == "decile":
+        er = expected_return_map_decile(blend, labels, target)
+    elif er_map == "linear":
+        er = expected_return_map(blend, labels, target)
+    else:
+        raise ValueError(f"unknown er_map {er_map!r}")
     return er.with_columns(pl.col("exp_ret").fill_nan(None))
 
 
-def blend_models(frames: Mapping[str, pl.DataFrame], labels: pl.DataFrame, target: str) -> Blended:
-    """The online blend (causal), the expected-return map and the models' disagreement for one target."""
+def blend_models(
+    frames: Mapping[str, pl.DataFrame],
+    labels: pl.DataFrame,
+    target: str,
+    *,
+    score_ema: int | None = None,
+    er_map: str = "linear",
+) -> Blended:
+    """The online blend (causal), the expected-return map and the models' disagreement for one target.
+    `score_ema` smooths the blended score (causal EMA, re-ranked) before the map; `er_map` picks the map."""
     blend, weights = blend_online(dict(frames), labels, target)
-    er = _with_er(blend, labels, target)
+    if score_ema is not None:
+        blend = smooth_scores(blend, score_ema)
+    er = _with_er(blend, labels, target, er_map)
     dis = _disagreement(frames)
     out = er if dis is None else er.join(dis, on=["date", "sid"], how="left")
     if "disagreement" not in out.columns:
@@ -569,6 +593,8 @@ def _spec_s1(
         "start": cfg.start, "end": cfg.end, "capitals": list(cfg.capitals or ()),
         "reference_capital": cfg.reference_capital, "stress": cfg.slippage_stress,
         **({"auto_resume_sessions": cfg.s1_auto_resume} if cfg.s1_auto_resume is not None else {}),
+        **({"score_ema": cfg.score_ema} if cfg.score_ema is not None else {}),
+        **({"er_map": cfg.er_map} if cfg.er_map != "linear" else {}),
         **extra,
     }  # fmt: skip
 
@@ -683,7 +709,7 @@ class G1Runner:
         self.clock = clock or SystemClock()
         self._world = world
         self._labels: dict[str, pl.DataFrame] = {}
-        self._blends: dict[tuple[str, tuple[str, ...]], Blended] = {}
+        self._blends: dict[tuple[Any, ...], Blended] = {}
         self.current_trial: str | None = None
 
     # -- shared inputs
@@ -700,11 +726,13 @@ class G1Runner:
         return self._labels[target]
 
     def blended(self, target: str, models: Sequence[str]) -> Blended:
-        key = (target, tuple(sorted(models)))
+        key = (target, tuple(sorted(models)), self.cfg.score_ema, self.cfg.er_map)
         if key not in self._blends:
             end = research_end(self.settings)
             frames = {m: load_oof(self.settings, m, end) for m in sorted(models)}
-            self._blends[key] = blend_models(frames, self.labels(target), target)
+            self._blends[key] = blend_models(
+                frames, self.labels(target), target, score_ema=self.cfg.score_ema, er_map=self.cfg.er_map
+            )
         return self._blends[key]
 
     # -- policy factories (a policy is stateful: one per run)
