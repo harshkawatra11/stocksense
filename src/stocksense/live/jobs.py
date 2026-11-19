@@ -540,7 +540,7 @@ def _stage_build_labels(ctx: JobContext, d: date) -> str:
     from stocksense.labels.forward import build_labels
 
     n = build_labels(ctx.settings)
-    return f"rows={n}"
+    return f"labels v{n}"
 
 
 def _stage_s1_plan(ctx: JobContext, d: date) -> str:

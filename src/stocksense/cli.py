@@ -610,7 +610,7 @@ def build_labels(ctx: typer.Context) -> None:
     """Build forward-return labels."""
     from stocksense.labels.forward import build_labels as _build
 
-    typer.echo(f"label rows {_build(_settings(ctx))}")
+    typer.echo(f"labels version {_build(_settings(ctx))}")
 
 
 @app.command()
