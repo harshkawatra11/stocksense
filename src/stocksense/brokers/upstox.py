@@ -118,8 +118,8 @@ class UpstoxClient:
     def quotes(self, instrument_keys: list[str]) -> list[Quote]:
         """Full market quotes (documented shape: data keyed `NSE_EQ:SYMBOL`).
 
-        2026-11-11 probe: the Analytics Token is refused here (HTTP 401, UDAPI100050), so this raises
-        BrokerError with the token the project has; kept for a token that is allowed.
+        Whether the Analytics Token is accepted by this full-quote endpoint is re-probed in card G2-H4;
+        a refusal surfaces as BrokerError.
         """
         out: list[Quote] = []
         for i in range(0, len(instrument_keys), QUOTE_CHUNK):

@@ -221,7 +221,7 @@ def make_candidate(runner: G1Runner, plan: TrialPlan, result: TrialResult) -> Ca
     sp = plan.spec
     models = sp["models"]
     blend = runner.blended(plan.target, models)
-    daily = result.daily().select("date", "net", "net_2x", "benchmark")
+    daily = result.daily().select("date", "net", "net_2x", "benchmark", "gross")
     return CandidateResult(
         candidate_id=str(plan.trial_id), family=plan.family, target=plan.target, daily=daily,
         ic={"mean_ic": float(blend.ic["mean_ic"]), "ic_tstat": float(blend.ic["ic_tstat"])},

@@ -1673,7 +1673,7 @@ Preconditions before anyone writes order code: `[paper]` gate passed on ≥ 60 s
 - [ ] P5 Costs and backtest engine (T5.1–T5.5) — T5.1–T5.5 committed
 - [ ] P6 Validation harness (T6.1–T6.8) — T6.1–T6.8 committed
 - [ ] P7 Models (T7.1–T7.6), including Kronos decisions — T7.1–T7.6 committed (Kronos track merged); Gate-dependent results not verified
-- [x] P9 Portfolio, risk, Gate G1 verdict (T9.1–T9.5) — T9.5 run 2026-11-13: both families FAIL the research gate (S1 net Sharpe 0.73, S2 DSR/PBO and strict_capture -4.1); S1 and S2 production models stored as `shadow`; see docs/RESULTS-G1.md
+- [x] P9 Portfolio, risk, Gate G1 verdict (T9.1–T9.5) — T9.5 run 2026-11-13: both families FAIL the research gate (S1 net Sharpe 0.73, S2 DSR/PBO and strict_capture -4.1); S1 and S2 production models stored as `shadow`; T9.6 done (auto-resume), still fails gate v1; see docs/RESULTS-G1.md
 - [ ] P10 Paper broker and daemon (T10.1–T10.6) — T10.1–T10.3 merged; T10.4–T10.6 not started; five unattended sessions: ____ ____ ____ ____ ____
 - [ ] P11 Daily learning (T11.1–T11.5)
 - [ ] P12 Decision records, report, API (T12.1–T12.3)
@@ -1681,6 +1681,7 @@ Preconditions before anyone writes order code: `[paper]` gate passed on ≥ 60 s
 - [ ] P13 Minute-bar intraday
 - [ ] P14 UI
 - [ ] P15 Optional hardware
+- [ ] Program G2 — see docs/PLAN-G2.md Part 9
 
 Execution order is the order of this list. Phase 9 deliberately precedes Phase 8.
 

@@ -5,6 +5,7 @@ import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,7 @@ import numpy as np
 import polars as pl
 
 from stocksense.backtest.metrics import ic_stats, perf_stats
-from stocksense.core.clock import Clock, SystemClock
+from stocksense.core.clock import IST, Clock, SystemClock
 from stocksense.core.config import Settings
 from stocksense.core.paths import Paths
 from stocksense.core.state import State
@@ -60,7 +61,8 @@ class GateLine:
 
 @dataclass(frozen=True)
 class GateReport:
-    """A gate result: `kind` is 'research' or 'lockbox'; `lockbox` holds the lockbox outcome if requested."""
+    """A gate result: `kind` is 'research-v1', 'research-v2' or 'lockbox'; `lockbox` holds the lockbox outcome
+    if requested."""
 
     candidate_id: str
     family: str
@@ -150,9 +152,62 @@ def _ic_values(c: CandidateResult) -> tuple[float, float]:
     return float(s["mean_ic"]), float(s["ic_tstat"])
 
 
-def evaluate_research_gate(candidate: CandidateResult, settings: Settings, state: State) -> GateReport:
-    """The nine research lines of T6.6 against config/gate.toml (never altered); one GateLine each."""
-    g = settings.gate.research
+# Families whose benchmark is zero by construction (the auction book is not a long-only equity exposure).
+ZERO_BENCHMARK_FAMILIES = ("g1-s2", "g2-s2strict")
+
+
+def exposure_matched_benchmark(gross: np.ndarray, benchmark: np.ndarray) -> np.ndarray:
+    """Gate v2 benchmark: b_t = gross_{t-1} * benchmark_t, the previous day's gross exposure of the book
+    times the day's equal-weight market return; the first day uses exposure 0."""
+    g = np.asarray(gross, dtype=float)
+    prev = np.concatenate([[0.0], g[:-1]]) if len(g) else g
+    return prev * np.asarray(benchmark, dtype=float)
+
+
+def _as_ist(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=IST) if ts.tzinfo is None else ts
+
+
+def _all_trials_since(state: State, trial_ids: tuple[str, ...], effective_from: datetime) -> bool:
+    """True if there is at least one trial id and every one was created at or after `effective_from`."""
+    if not trial_ids:
+        return False
+    con = state.connect()
+    try:
+        marks = ",".join("?" for _ in trial_ids)
+        rows = con.execute(
+            f"SELECT trial_id, created_at FROM trials WHERE trial_id IN ({marks})", tuple(trial_ids)
+        ).fetchall()
+    finally:
+        con.close()
+    if len(rows) != len(set(trial_ids)):
+        return False
+    return all(
+        r[1] is not None and _as_ist(datetime.fromisoformat(r[1])) >= _as_ist(effective_from) for r in rows
+    )
+
+
+def select_gate_version(candidate: CandidateResult, settings: Settings, state: State) -> int:
+    """2 when gate v2 is configured and every trial of the candidate was registered at or after its
+    `effective_from`; otherwise 1 (earlier trials stay judged by v1)."""
+    g2 = settings.gate_v2
+    if g2 is None:
+        return 1
+    return 2 if _all_trials_since(state, candidate.trial_ids, g2.effective_from) else 1
+
+
+def evaluate_research_gate(
+    candidate: CandidateResult, settings: Settings, state: State, version: int | None = None
+) -> GateReport:
+    """The nine research lines of T6.6. Version 1 reads config/gate.toml (never altered); version 2 reads
+    config/gate_v2.toml: DSR variance within the candidate's family and the excess t against an
+    exposure-matched benchmark (G2-B1). `version=None` selects by the candidates' trial creation times."""
+    ver = select_gate_version(candidate, settings, state) if version is None else version
+    if ver not in (1, 2):
+        raise ValueError(f"unknown gate version {ver}")
+    if ver == 2 and settings.gate_v2 is None:
+        raise ValueError("gate v2 is not configured (config/gate_v2.toml missing)")
+    g = settings.gate.research if ver == 1 else settings.gate_v2.research  # type: ignore[union-attr]
     daily = candidate.daily.sort("date")
     dates = daily["date"].to_list()
     net = daily["net"].to_numpy().astype(float)
@@ -160,6 +215,14 @@ def evaluate_research_gate(candidate: CandidateResult, settings: Settings, state
     bench = (
         daily["benchmark"].fill_null(0.0).to_numpy().astype(float) if "benchmark" in daily.columns else None
     )
+    if ver == 2 and g.excess_benchmark == "exposure_matched":  # type: ignore[union-attr]
+        if candidate.family.startswith(ZERO_BENCHMARK_FAMILIES):
+            bench = None
+        else:
+            if "gross" not in daily.columns:
+                raise ValueError("gate v2 needs gross")
+            gross = daily["gross"].fill_null(0.0).to_numpy().astype(float)
+            bench = exposure_matched_benchmark(gross, np.zeros(len(net)) if bench is None else bench)
     mean_ic, ic_t = _ic_values(candidate)
     st = perf_stats(net, bench, dates=dates)
     st2 = perf_stats(net2, None, dates=dates)
@@ -168,7 +231,12 @@ def evaluate_research_gate(candidate: CandidateResult, settings: Settings, state
     sr_daily = float(net.mean()) / sd if sd > 0 else 0.0
 
     n_all = n_trials(state)
-    var_sr = sharpe_variance_across_trials(state)
+    if ver == 2 and g.dsr_variance_scope == "family":  # type: ignore[union-attr]
+        var_sr = sharpe_variance_across_trials(state, family=candidate.family)
+        if not math.isfinite(var_sr):
+            var_sr = 1.0 / t if t else float("nan")
+    else:
+        var_sr = sharpe_variance_across_trials(state)
     dsr = deflated_sharpe(sr_daily, t, st["skew"], st["kurtosis"], n_all, var_sr)
 
     mat = _family_returns(state, candidate.family)
@@ -195,7 +263,7 @@ def evaluate_research_gate(candidate: CandidateResult, settings: Settings, state
         pbo_line,
         _line(9, "max_drawdown", st["max_drawdown"], g.max_drawdown, "<="),
     )
-    return GateReport(candidate.candidate_id, candidate.family, "research", lines)
+    return GateReport(candidate.candidate_id, candidate.family, f"research-v{ver}", lines)
 
 
 # ---- lockbox gate --------------------------------------------------------------------------------
@@ -265,6 +333,16 @@ def load_candidate_result(candidate_id: str, settings: Settings) -> CandidateRes
     )  # fmt: skip
 
 
+def _with_trial_gross(cand: CandidateResult, settings: Settings) -> CandidateResult:
+    """Candidates stored before G2-B1 have no `gross` column; when the candidate id is a G1 trial id, take it
+    from that trial's daily.parquet (same dates, same book). Otherwise return the candidate unchanged."""
+    path = Paths(settings).reports / "g1" / "trials" / cand.candidate_id / "daily.parquet"
+    if not path.is_file():
+        return cand
+    gross = pl.read_parquet(path).select("date", "gross")
+    return replace(cand, daily=cand.daily.join(gross, on="date", how="left"))
+
+
 # ---- the callable the CLI will wrap --------------------------------------------------------------
 
 
@@ -276,6 +354,7 @@ def validate_candidate(
     *,
     clock: Clock | None = None,
     lockbox_runner: LockboxRunner | None = None,
+    gate_version: int | None = None,
 ) -> GateReport:
     """Run the research gate for a stored candidate, write its validation.json and, with `open_lockbox`,
     run the lockbox only if all nine lines pass (otherwise the request is recorded as refused and nothing is
@@ -283,7 +362,12 @@ def validate_candidate(
     production-style walk-forward on [lockbox_start, last date]; it is called inside open_lockbox(...)."""
     clk = clock if clock is not None else SystemClock()
     cand = load_candidate_result(candidate_id, settings)
-    report = replace(evaluate_research_gate(cand, settings, state), generated_at=clk.now().isoformat())
+    if "gross" not in cand.daily.columns:
+        cand = _with_trial_gross(cand, settings)
+    report = replace(
+        evaluate_research_gate(cand, settings, state, version=gate_version),
+        generated_at=clk.now().isoformat(),
+    )
     if open_lockbox:
         if not report.passed:
             failed = [ln.number for ln in report.lines if not ln.passed]
@@ -315,6 +399,8 @@ __all__ = [
     "GateReport",
     "evaluate_lockbox_gate",
     "evaluate_research_gate",
+    "exposure_matched_benchmark",
+    "select_gate_version",
     "load_candidate_result",
     "save_candidate_result",
     "validate_candidate",

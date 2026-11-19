@@ -24,7 +24,8 @@ FEATURE_MODULES: tuple[str, ...] = (
     "derivs",
     "events",
     "intraday",
-    "kronos_feats",
+    # "kronos_feats" is deliberately absent (G2-A7: zero-shot Kronos added nothing); import
+    # stocksense.features.kronos_feats explicitly where its kr_* features are wanted.
 )
 
 

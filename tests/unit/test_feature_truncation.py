@@ -16,6 +16,7 @@ import pytest
 from stocksense import panel as panel_pkg
 from stocksense.core.clock import IST
 from stocksense.data import io
+from stocksense.features import kronos_feats  # noqa: F401  (G2-A7: not a default module; registered here)
 from stocksense.features.base import FeatureContext, FeatureSpec, feature
 from stocksense.features.registry import load_all
 from tests.fixtures.kronos import write_test_kronos_files

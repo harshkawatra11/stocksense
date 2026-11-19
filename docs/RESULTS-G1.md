@@ -302,3 +302,78 @@ strict_capture of g1-s2-y_oc-5a10006c3c: `{"auction_net_mean": 0.000514419339388
 **Models stored (production fit as of 2025-09-30, status `shadow`, `validated` = 0):** `s1-gbm-y_c2o_10-120055de-20250930` and `s2-gbm-y_oc-4fd8ff9b-20250930`.
 
 **Time:** the three missing GBM walk-forwards (y_c2o_20, y_oc, and the remaining 11 folds of y_c2o_10) ran with 3 seeds and no budget reduction, 40-60 s per fold for S1 and 2-4 minutes for S2; the finishing of 32 floor trials took 5 minutes; the G1 grid (18 trials, 4 capitals plus the 2x-slippage run each) took about 2.5 hours of CPU on a shared machine, with S2 trials about 50 minutes each.
+
+## 5.7 S1 with backtest auto-resume (T9.6)
+
+The original 13 S1 trials were flat from 2021 because the book-drawdown stop never cleared in a backtest (DECISIONS, 2026-11-13). T9.6 re-ran the same grid with `S1Policy(auto_resume_sessions=20)`: after the stop fires, it clears once 20 sessions have passed and the book is flat, and the NAV peak is re-based. N = 20 was chosen before any result was seen and is not tuned. These are new trials (spec key `auto_resume_sessions: 20`); the original trials and sections 5.1 to 5.6 stay as recorded. Source: `data_store/reports/g1/outcome_s1_auto_resume.json` and `reports/g1/trials/<id>/result.json`. The registry held 102 trials after the run; all of them count toward N for the DSR and PBO.
+
+### 5.7.1 All auto-resume S1 trials (reference capital INR 5,00,000)
+
+| Trial | Label | Target | k_max | Overlay | Sharpe (5L) | 2x slip | Excess t | Pos. years | Max DD | Turnover/day | Gross |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `g1-s1-y_c2o_5-53640afa10` | S1 y_c2o_5 k=10 overlay=off | y_c2o_5 | 10 | off | 0.160 | -0.250 | -3.03 | 0.42 | 0.165 | 0.098 | 0.194 |
+| `g1-s1-y_c2o_5-93f45000f1` | S1 y_c2o_5 k=10 overlay=on | y_c2o_5 | 10 | on | 0.162 | -0.279 | -3.04 | 0.42 | 0.163 | 0.097 | 0.192 |
+| `g1-s1-y_c2o_5-85c7022aa4` | S1 y_c2o_5 k=20 overlay=off | y_c2o_5 | 20 | off | 0.076 | -0.250 | -3.14 | 0.33 | 0.272 | 0.097 | 0.190 |
+| `g1-s1-y_c2o_5-a39b7acf4e` | S1 y_c2o_5 k=20 overlay=on | y_c2o_5 | 20 | on | 0.159 | -0.279 | -2.99 | 0.42 | 0.168 | 0.095 | 0.187 |
+| `g1-s1-y_c2o_10-87b9794e81` | S1 y_c2o_10 k=10 overlay=off | y_c2o_10 | 10 | off | 1.109 | 0.347 | -1.80 | 0.67 | 0.182 | 0.188 | 0.518 |
+| `g1-s1-y_c2o_10-ec35466fcf` | S1 y_c2o_10 k=10 overlay=on | y_c2o_10 | 10 | on | 1.021 | 0.572 | -1.99 | 0.67 | 0.257 | 0.169 | 0.456 |
+| `g1-s1-y_c2o_10-6413a036ce` | S1 y_c2o_10 k=20 overlay=off | y_c2o_10 | 20 | off | 0.819 | 0.621 | -2.40 | 0.67 | 0.185 | 0.154 | 0.441 |
+| `g1-s1-y_c2o_10-372ea6f06f` | S1 y_c2o_10 k=20 overlay=on | y_c2o_10 | 20 | on | 0.632 | 0.324 | -2.66 | 0.67 | 0.272 | 0.147 | 0.407 |
+| `g1-s1-y_c2o_20-4092717971` | S1 y_c2o_20 k=10 overlay=off | y_c2o_20 | 10 | off | 1.083 | 0.598 | -1.64 | 0.67 | 0.171 | 0.121 | 0.508 |
+| `g1-s1-y_c2o_20-9b3f969530` | S1 y_c2o_20 k=10 overlay=on | y_c2o_20 | 10 | on | 0.938 | 0.116 | -1.94 | 0.67 | 0.260 | 0.130 | 0.524 |
+| `g1-s1-y_c2o_20-319706deb6` | S1 y_c2o_20 k=20 overlay=off | y_c2o_20 | 20 | off | 0.720 | 0.119 | -2.45 | 0.67 | 0.231 | 0.115 | 0.476 |
+| `g1-s1-y_c2o_20-f5ce7678ba` | S1 y_c2o_20 k=20 overlay=on | y_c2o_20 | 20 | on | 0.743 | 0.088 | -2.43 | 0.67 | 0.255 | 0.121 | 0.476 |
+| `g1-s1-y_c2o_10-cce12fb757` | S1 y_c2o_10 k=10 overlay=off + meta-label | y_c2o_10 | 10 | off | 1.166 | 0.222 | -1.70 | 0.75 | 0.172 | 0.186 | 0.511 |
+
+The three S1 trials on y_c2o_5 are poor (net Sharpe 0.08 to 0.16, 2x-slippage Sharpe below 0). The y_c2o_10 and y_c2o_20 trials net 0.63 to 1.17 and lose most of it under doubled slippage (0.09 to 0.62). The best by net Sharpe is the meta-label variant (candidate); the plain y_c2o_10 k=10 trial nets 1.109.
+
+### 5.7.2 Capital grid of the candidate [g1-s1-y_c2o_10-cce12fb757]
+
+| Capital (INR) | Sharpe | CAGR | Cost drag/yr | Trades |
+|---|---|---|---|---|
+| 25,000 | 0.000 | 0.00% | 0.00% | 0 |
+| 100,000 | 0.187 | 0.63% | 1.97% | 85 |
+| 500,000 | 1.166 | 10.97% | 25.20% | 3256 |
+| 2,500,000 | 1.367 | 14.31% | 31.94% | 4722 |
+
+INR 25,000 buys no positions (0 trades). The annual cost-drag column divides cumulative costs by the starting capital and overstates the drag for a compounding book; read it as a relative measure across capitals only.
+
+### 5.7.3 Net return per calendar year of the candidate (reference capital)
+
+| Year | Net return | Sessions |
+|---|---|---|
+| 2014 | 8.38% | 244 |
+| 2015 | 19.78% | 248 |
+| 2016 | 10.17% | 247 |
+| 2017 | 28.38% | 248 |
+| 2018 | -1.66% | 246 |
+| 2019 | 11.85% | 245 |
+| 2020 | 3.89% | 252 |
+| 2021 | 20.10% | 248 |
+| 2022 | -1.81% | 248 |
+| 2023 | 26.56% | 246 |
+| 2024 | 14.05% | 249 |
+| 2025 | -6.89% | 187 |
+
+2025 covers 187 sessions to the research end of 2025-09-30. The book is no longer flat after 2020: 9 of 12 calendar years are positive (frac_positive_years 0.75 = 9/12).
+
+### 5.7.4 Research gate v1, candidate g1-s1-y_c2o_10-cce12fb757: FAIL
+
+Output of `stocksense validate g1-s1-y_c2o_10-cce12fb757` (gate v1, N = 102 trials used for the DSR):
+
+```
+research gate for g1-s1-y_c2o_10-cce12fb757: FAIL
+  1. PASS  mean_rank_ic 0.0786 >= 0.02
+  2. PASS  ic_tstat 27.6048 >= 3
+  3. PASS  net_sharpe 1.1655 >= 1
+  4. FAIL  net_sharpe_2x_slip 0.2216 >= 0.5
+  5. FAIL  excess_tstat -1.6987 >= 2
+  6. PASS  frac_positive_years 0.7500 >= 0.7
+  7. FAIL  dsr 0.0000 >= 0.95 (N=102 trials)
+  8. PASS  pbo 0.0805 <= 0.3 (26 trials, 2908 days)
+  9. PASS  max_drawdown 0.1719 <= 0.25
+```
+
+### 5.7.5 Verdict
+
+The auto-resume candidate fails gate v1 on lines 4, 5 and 7; lines 5 and 7 are addressed by gate v2 (PLAN-G2 4.3); line 4 is the turnover problem addressed by Phase C. Fixing the stop restored the 2021 to 2025 years and lifted the best net Sharpe from 0.73 to 1.17, but 2x-slippage Sharpe is 0.22 against a gate of 0.5: the strategy still gives most of its gross edge away to costs. Nothing here changes a threshold; the original verdict stands as recorded and these trials are additional, not replacements. The lockbox is not opened.

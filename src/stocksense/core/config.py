@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import tomllib
-from datetime import date, time
+from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import dotenv_values
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -126,6 +126,25 @@ class GateAuction(_Frozen):
 
 class Gate(_Frozen):
     research: GateResearch
+    lockbox: GateLockbox
+    paper: GatePaper
+    promotion: GatePromotion
+    auction: GateAuction
+
+
+class GateResearch2(GateResearch):
+    """Gate v2 research lines: the v1 numbers plus the two scope keys (G2-B1)."""
+
+    dsr_variance_scope: Literal["all", "family"]
+    excess_benchmark: Literal["raw", "exposure_matched"]
+
+
+class Gate2(_Frozen):
+    """config/gate_v2.toml: same thresholds as v1; `effective_from` decides which trials it judges."""
+
+    version: int
+    effective_from: datetime
+    research: GateResearch2
     lockbox: GateLockbox
     paper: GatePaper
     promotion: GatePromotion
@@ -254,6 +273,7 @@ class Settings(_Frozen):
     universe: Universe
     costs: Costs
     gate: Gate
+    gate_v2: Gate2 | None = None
     strategies: Strategies
     risk: Risk
     schedule: Schedule
@@ -296,6 +316,7 @@ def load_settings(config_dir: Path = Path("config"), env_file: Path = Path(".env
     gate_path = config_dir / "gate.toml"
     if not gate_path.is_file():
         raise ConfigError(f"gate.toml not found in {config_dir} (it is frozen, see T1.7)")
+    gate_v2_path = config_dir / "gate_v2.toml"
     sched_path = config_dir / "schedule.toml"
     env: dict[str, str] = {}
     if Path(env_file).is_file():
@@ -310,6 +331,7 @@ def load_settings(config_dir: Path = Path("config"), env_file: Path = Path(".env
         "universe": _read_toml(config_dir / "universe.toml"),
         "costs": _read_toml(config_dir / "costs.toml"),
         "gate": _read_toml(gate_path),
+        "gate_v2": _read_toml(gate_v2_path) if gate_v2_path.is_file() else None,
         "strategies": _read_toml(config_dir / "strategies.toml"),
         "risk": _read_toml(config_dir / "risk.toml"),
         "schedule": _read_toml(sched_path) if sched_path.is_file() else {},
