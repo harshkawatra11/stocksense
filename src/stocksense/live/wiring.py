@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 import numpy as np
 import polars as pl
@@ -470,6 +470,98 @@ def corp_actions_hook(ctx, d: date) -> list[CorpAction]:  # type: ignore[no-unty
     ]
 
 
+# ---- S2 measurement books -----------------------------------------------------------------------------
+
+S2_NOTE = "measurement only: S2 failed strict capture (RESULTS-G1)"
+S2_BOOKS = ("auction", "auction_strict")
+PREOPEN_END = time(9, 8)
+_S2_ACCESS: dict[date, object] = {}
+
+
+def _s2_access(settings: Settings, calendar, prev: date):  # type: ignore[no-untyped-def]
+    if prev not in _S2_ACCESS:
+        from stocksense.validation.g1 import build_world
+
+        _S2_ACCESS.clear()
+        world = build_world(settings, calendar, start=calendar.shift(prev, -60), end=prev, cut_events=False)
+        _S2_ACCESS[prev] = world.s2_access()
+    return _S2_ACCESS[prev]
+
+
+def s2_score_frame(settings: Settings, model_id: str, prev: date) -> pl.DataFrame:
+    """date, sid, score of the S2 production model on the u200 members of the decision date `prev`."""
+    mdir = store.model_dir(settings, model_id)
+    names = list(json.loads((mdir / "feature_manifest.json").read_text(encoding="utf-8"))["features"])
+    uni = io.read(settings, "panel_universe", start=prev, end=prev, columns=["date", "sid", "u200"]).collect()
+    uni = uni.filter(pl.col("u200").fill_null(False))
+    feats = load_features(settings, "production", start=prev, end=prev, columns=names).collect()
+    f = uni.select("date", "sid").join(feats, on=["date", "sid"], how="inner").sort("sid")
+    if f.is_empty():
+        raise DataNotAvailable(f"no S2 feature rows for {prev}")
+    X = f.select([pl.col(n).cast(pl.Float32) for n in names]).to_numpy().astype(np.float32)
+    return pl.DataFrame(
+        {"date": f["date"], "sid": f["sid"], "score": load_bag(settings, model_id).predict(X)}
+    )
+
+
+def hook_s2_orders(ctx, d: date, cap: float):  # type: ignore[no-untyped-def]
+    """09:07: S2 orders for the two measurement books (identical orders; never the main book)."""
+    from stocksense.costs.slippage import SlippageTable
+    from stocksense.portfolio.construct import AuctionRow, S2Config, plan_s2
+
+    s = ctx.settings
+    pre = io.read(s, "preopen", start=d, end=d).collect()
+    if pre.height:
+        pre = pre.filter((pl.col("ts").dt.date() == d) & (pl.col("ts").dt.time() <= PREOPEN_END))
+    pre = pre.drop_nulls("indicative_price")
+    if pre.is_empty():
+        return [(b, [], {"note": S2_NOTE, "why": "no pre-open capture"}) for b in S2_BOOKS]
+    prev = ctx.calendar.prev_session(d)
+    ids = live_ids(ctx.state)
+    mid = str(ids["live_model:s2"])
+    frame = s2_score_frame(s, mid, prev)
+    store.append_preds(s, mid, frame, "live", clock=ctx.clock)
+    sc = LiveScoreSource(s, ctx.state, "s2", "y_oc", er_map="linear").scores(prev)
+    if sc is None:
+        raise DataNotAvailable(f"no S2 scores for {prev}")
+    rows = _s2_access(s, ctx.calendar, prev).day(prev, d).rows  # type: ignore[attr-defined]
+    sym = _symbols(s, prev)
+    px = {
+        r["symbol"]: float(r["indicative_price"])
+        for r in pre.sort("ts").group_by("symbol", maintain_order=True).last().to_dicts()
+    }
+    auction = {}
+    for sid, row in rows.items():
+        p = px.get(sym.get(sid, ""))
+        if p is None or p <= 0 or sid not in sc.score or row.close <= 0:
+            continue
+        auction[sid] = AuctionRow(
+            p, p / row.close - 1.0, row.turnover_rank, row.med_turn_20, row.vol_21, row.in_fno, None
+        )
+    free = ctx.state.kv_get("free_cash_frac:auction")
+    free_cash = cap * (float(free) if free is not None else ctx.ledger.cash_frac("auction"))
+    cfg = S2Config.from_settings(s, SlippageTable.load_latest(s))
+    plan = plan_s2(d, sc.score, sc.er, auction, free_cash, cap, cfg)
+    orders = [
+        NewOrder(
+            o.sid,
+            sym.get(o.sid, str(o.sid)),
+            o.side,
+            "intraday",
+            "open",
+            d,
+            int(o.qty),
+            auction[o.sid].open,
+            o.reason,
+        )
+        for o in plan.orders
+    ]
+    payload = {"note": S2_NOTE, "plan_note": plan.note, "n_candidates": len(auction),
+               "orders": [{"sid": o.sid, "symbol": o.symbol, "side": o.side, "qty": o.qty, "ref": o.ref_price,
+                           "er": sc.er.get(o.sid)} for o in orders]}  # fmt: skip
+    return [(b, orders, payload) for b in S2_BOOKS]
+
+
 def production_hooks(settings: Settings) -> Mapping[str, object]:
     """The hooks `build_context` installs when none are injected."""
     from stocksense.live.jobs import u500_symbols
@@ -479,6 +571,7 @@ def production_hooks(settings: Settings) -> Mapping[str, object]:
         "predict": stage_predict,
         "s1_plan": hook_s1_plan,
         "s1_orders": hook_s1_orders,
+        "s2_orders": hook_s2_orders,
         "corp_actions": corp_actions_hook,
         "u500_symbols": u500_symbols,
     }
