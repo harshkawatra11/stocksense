@@ -551,13 +551,6 @@ def _stage_predict(ctx: JobContext, d: date) -> str:
     return str(fn(ctx, d))
 
 
-def _stage_predict(ctx: JobContext, d: date) -> str:
-    fn = ctx.hook("predict")
-    if fn is None:
-        return f"{NOT_IMPLEMENTED} (no live model wired)"
-    return str(fn(ctx, d))
-
-
 def _stage_s1_plan(ctx: JobContext, d: date) -> str:
     fn = ctx.hook("s1_plan")
     if fn is None:
@@ -567,49 +560,29 @@ def _stage_s1_plan(ctx: JobContext, d: date) -> str:
 
 
 def _stage_report(ctx: JobContext, d: date, catchup: bool = False) -> str:
-    """Minimal daily report (reports/<d>.md and .json) until T12.2 replaces it."""
+    """The daily report: reports/<d>.md and .json (see explain.report)."""
+    from stocksense.explain.report import build_report
+
     paths = Paths(ctx.settings)
     paths.reports.mkdir(parents=True, exist_ok=True)
-    books = {}
-    for b in ctx.ledger.books():
-        s = ctx.ledger.nav_series(b).filter(pl.col("date") == d)
-        if s.height:
-            r = s.row(0, named=True)
-            books[b] = {"nav": r["nav"], "day_ret": r["day_ret"], "n_pos": r["n_pos"], "gross": r["gross"]}
-    fills = ctx.ledger.fills_for_date(d)
-    con = ctx.state.connect()
-    try:
-        failed = [
-            r[0]
-            for r in con.execute(
-                "SELECT DISTINCT job FROM job_runs WHERE trade_date=? AND status='failed' "
-                "AND COALESCE(detail,'') NOT LIKE 'retry:%'",
-                (d.isoformat(),),
-            )
-        ]
-    finally:
-        con.close()
-    body = {
-        "date": d.isoformat(), "catch_up": catchup, "books": books, "fills": len(fills),
-        "reconciled": sum(f.reconciled for f in fills), "failed_jobs": failed,
-        "degraded": ctx.state.kv_get(f"quotes_degraded:{d.isoformat()}") is not None,
-    }  # fmt: skip
+    body, md = build_report(ctx, d, catchup)
     (paths.reports / f"{d.isoformat()}.json").write_text(
-        json.dumps(body, indent=1), encoding="utf-8", newline="\n"
+        json.dumps(body, indent=1, default=str), encoding="utf-8", newline="\n"
     )
-    lines = [f"# StockSense report {d}" + (" (catch-up)" if catchup else ""), ""]
-    for b, v in books.items():
-        lines.append(f"- {b}: NAV {v['nav']:.4f}, day {v['day_ret'] * 100:+.3f}%, positions {v['n_pos']}")
-    lines += [
-        f"- fills {body['fills']} (reconciled {body['reconciled']})",
-        f"- failed jobs: {failed or 'none'}",
-    ]
-    (paths.reports / f"{d.isoformat()}.md").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
-    )
-    nav = ", ".join(f"{b} {v['nav']:.2f}" for b, v in books.items()) or "no books"
+    (paths.reports / f"{d.isoformat()}.md").write_text(md, encoding="utf-8", newline="\n")
+    nav = ", ".join(f"{b} {v['nav']:.2f}" for b, v in body["books"].items()) or "no books"
     ctx.notifier.send(f"report {d}: {nav}")
-    return f"report written books={len(books)}"
+    return f"report written books={len(body['books'])}"
+
+
+def _stage_hook(name: str, label: str) -> Callable[[JobContext, date], str]:
+    def stage(ctx: JobContext, d: date) -> str:
+        fn = ctx.hook(name)
+        if fn is None:
+            return f"{NOT_IMPLEMENTED} (no {label} wired)"
+        return str(fn(ctx, d))
+
+    return stage
 
 
 def _stub(reason: str = NOT_IMPLEMENTED) -> Callable[[JobContext, date], str]:
@@ -624,14 +597,14 @@ STAGES: list[tuple[str, Callable[[JobContext, date], str]]] = [
     ("build_features", _stage_build_features),
     ("build_labels", _stage_build_labels),
     ("kronos_features", _stub()),
+    ("nightly_learn", _stage_hook("nightly_learn", "learning")),  # before predict: a fresh model scores today
     ("predict", _stage_predict),
     ("s1_plan", _stage_s1_plan),
-    ("nightly_learn", _stub()),
-    ("drift", _stub()),
+    ("drift", _stage_hook("drift", "live-IC monitor")),
     ("promote", _stub()),
     ("report", _stage_report),
 ]
-STUB_STAGES = ("kronos_features", "s1_plan", "nightly_learn", "drift", "promote")
+STUB_STAGES = ("kronos_features", "promote")
 
 
 def run_eod_pipeline(ctx: JobContext, d: date, catchup: bool = False) -> dict[str, str]:

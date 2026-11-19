@@ -378,6 +378,7 @@ def plan_s1(
     disagreement: Mapping[int, float] | None = None,
     meta: MetaLike | None = None,
     allow_entries: bool = True,
+    gross_scale: float = 1.0,
 ) -> S1Plan:
     """Everything S1 decides after the close of `t` (PLAN T9.1 steps 2-8)."""
     rows, d1, risk = panel_t.rows, panel_t.next_date, cfg.risk
@@ -399,6 +400,7 @@ def plan_s1(
         and panel_t.breadth_200 < OVERLAY_BREADTH and panel_t.mkt_ret_21 < 0
     ):  # fmt: skip
         gt *= OVERLAY_FACTOR
+    gt *= gross_scale  # live decay scale (G2-G4); 1.0 in every backtest
     if book.stopped or book.dd >= risk.book_dd_stop:
         gt = 0.0
     elif book.dd >= risk.book_dd_half:

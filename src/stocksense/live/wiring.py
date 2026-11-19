@@ -562,16 +562,128 @@ def hook_s2_orders(ctx, d: date, cap: float):  # type: ignore[no-untyped-def]
     return [(b, orders, payload) for b in S2_BOOKS]
 
 
+# ---- G2-G4: live IC, decay scale, weekly refit -------------------------------------------------------------
+
+DECAY_MIN_N = 20  # live ICs needed before the decay scale may leave 1.0
+REFIT_MAX_AGE_DAYS = 6
+SLOW_REFIT_SECONDS = 40 * 60
+
+
+def decay_scale(m60: float, t60: float) -> float:
+    """PLAN T11.2: 0 when t60 < -2, 0.5 when m60 < 0 and t60 < -1, else 1."""
+    if t60 < -2.0:
+        return 0.0
+    if m60 < 0.0 and t60 < -1.0:
+        return 0.5
+    return 1.0
+
+
+def hook_drift(ctx, d: date) -> str:  # type: ignore[no-untyped-def]
+    """Live IC of every decision date whose 10-session label ended today, then the decay scale."""
+    from scipy.stats import spearmanr
+
+    mid = str(live_ids(ctx.state)["live_model:s1"])
+    col, end = f"r_{S1_TARGET}", END_COLUMN[S1_TARGET]
+    lab = load_labels(ctx.settings, "production", end=d, columns=[col, end]).collect()
+    dec_dates = sorted(lab.filter(pl.col(end) == d)["date"].unique().to_list())
+    added = 0
+    if dec_dates:
+        try:
+            preds = io.read(ctx.settings, "preds", columns=["date", "sid", "score"], sub=mid).collect()
+        except (DataNotAvailable, FileNotFoundError, pl.exceptions.PolarsError):
+            preds = pl.DataFrame(schema={"date": pl.Date, "sid": pl.Int64, "score": pl.Float64})
+        con = ctx.state.connect()
+        try:
+            for s in dec_dates:
+                j = (
+                    preds.filter(pl.col("date") == s)
+                    .join(lab.filter(pl.col("date") == s).select("sid", col), on="sid")
+                    .drop_nulls()
+                )
+                if j.height < 10:
+                    continue
+                ic = float(spearmanr(j["score"].to_numpy(), j[col].to_numpy()).statistic)
+                con.execute(
+                    "INSERT OR REPLACE INTO live_ic(model_id, decision_date, target, ic, n) VALUES(?,?,?,?,?)",  # noqa: E501
+                    (mid, s.isoformat(), S1_TARGET, ic, j.height),
+                )
+                added += 1
+        finally:
+            con.close()
+    con = ctx.state.connect()
+    try:
+        ics = [
+            float(r[0])
+            for r in con.execute(
+                "SELECT ic FROM live_ic WHERE model_id=? AND target=? AND ic IS NOT NULL "
+                "ORDER BY decision_date DESC LIMIT 60",
+                (mid, S1_TARGET),
+            )
+        ]
+    finally:
+        con.close()
+    scale = 1.0
+    if len(ics) >= DECAY_MIN_N:
+        x = np.asarray(ics)
+        sd = float(x.std(ddof=1))
+        t60 = float(x.mean() / (sd / math.sqrt(len(x)))) if sd > 0 else 0.0
+        scale = decay_scale(float(x.mean()), t60)
+    ctx.state.kv_set(f"decay_scale:{BOOK}", repr(scale))
+    return f"live_ic added={added} n={len(ics)} decay_scale={scale}"
+
+
+def hook_nightly_learn(ctx, d: date) -> str:  # type: ignore[no-untyped-def]
+    """Fridays, or when the live S1 model is 6+ days old: refit it as of d and make the new bag live."""
+    import time as _time
+
+    from stocksense.learn.nightly import fit_production
+
+    if ctx.state.kv_get("live_refit_enabled") == "0":
+        return "skipped: weekly refit disabled (kv live_refit_enabled = 0)"
+    old = str(live_ids(ctx.state)["live_model:s1"])
+    con = ctx.state.connect()
+    try:
+        row = con.execute("SELECT created_at FROM models WHERE model_id=?", (old,)).fetchone()
+    finally:
+        con.close()
+    age_days = (ctx.clock.now() - datetime.fromisoformat(row[0])).total_seconds() / 86400 if row else 99.0
+    slow = float(ctx.state.kv_get("live_refit_seconds") or 0.0) > SLOW_REFIT_SECONDS
+    # a refit that took more than 40 minutes switches to fortnightly (PLAN-G2 card G4)
+    due = age_days >= 13.0 if slow else (d.weekday() == 4 or age_days >= REFIT_MAX_AGE_DAYS)
+    if not due:
+        return f"skipped: no refit due (age {age_days:.1f} d)"
+    spec = ModelSpec.from_dict(
+        json.loads((store.model_dir(ctx.settings, old) / "spec.json").read_text(encoding="utf-8"))
+    )
+    t0 = _time.monotonic()
+    try:
+        new = fit_production(
+            spec, ctx.settings, ctx.state, d, calendar=ctx.calendar, clock=ctx.clock,
+            allow_beyond_research=True, note="weekly refit",
+        )  # fmt: skip
+    except Exception as e:  # noqa: BLE001 - a failed refit must not stop today's predictions
+        log.exception("weekly_refit_failed")
+        ctx.notifier.send(f"weekly refit failed {d}: {ctx.scrub(repr(e))[:200]}")
+        return f"skipped: refit failed ({type(e).__name__}); the live model is unchanged"
+    ctx.state.kv_set("live_refit_seconds", repr(_time.monotonic() - t0))
+    if new != old:
+        store.set_status(ctx.state, new, "shadow", "weekly refit")
+        store.set_status(ctx.state, old, "retired", f"replaced by {new}")
+        ctx.state.kv_set("live_model:s1", new)
+    return new
+
+
 def production_hooks(settings: Settings) -> Mapping[str, object]:
     """The hooks `build_context` installs when none are injected."""
     from stocksense.live.jobs import u500_symbols
 
-    _ = u500_symbols
     return {
         "predict": stage_predict,
         "s1_plan": hook_s1_plan,
         "s1_orders": hook_s1_orders,
         "s2_orders": hook_s2_orders,
+        "drift": hook_drift,
+        "nightly_learn": hook_nightly_learn,
         "corp_actions": corp_actions_hook,
         "u500_symbols": u500_symbols,
     }
