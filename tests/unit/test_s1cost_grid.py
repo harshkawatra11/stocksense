@@ -98,7 +98,6 @@ def test_strategies_toml_carries_the_s1_policy_table_that_s1config_accepts(tmp_p
     s = load_settings(real, tmp_path / "no.env")
     pol = dict(s.strategies.s1.policy)
     assert pol, "[s1.policy] is written after the C5 verdict"
-    opts = dict(pol)
-    opts.pop("max_fixed_cost_bps", None)  # a Risk override, handled by S1Policy
-    cfg = S1Config.from_settings(s, 10, zero_slippage(), **opts)
+    cfg = S1Config.from_settings(s, 10, zero_slippage(), **pol)  # the live wiring passes it this way
     assert cfg.exit_rank == pol["exit_rank"]
+    assert cfg.risk.max_fixed_cost_bps == pol["max_fixed_cost_bps"] != s.risk.max_fixed_cost_bps

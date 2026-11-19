@@ -155,8 +155,11 @@ class S1Config:
         hysteresis: bool = True,
         **overrides: Any,
     ) -> S1Config:
+        risk = settings.risk
+        if "max_fixed_cost_bps" in overrides:  # a Risk override (G2-C5), not an S1Config field
+            risk = risk.model_copy(update={"max_fixed_cost_bps": float(overrides.pop("max_fixed_cost_bps"))})
         return cls(
-            h, k_max if k_max is not None else settings.strategies.s1.k_max, settings.risk,
+            h, k_max if k_max is not None else settings.strategies.s1.k_max, risk,
             settings.costs, slippage, overlay, hysteresis, **overrides,
         )  # fmt: skip
 
