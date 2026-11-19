@@ -315,6 +315,7 @@ def _read_capital_job(ctx: JobContext, d: date, *, final_at: time | None) -> str
     ctx.state.kv_set("capital_ref_inr", repr(cap))
     ctx.state.kv_set("capital_stale", "1" if stale else "0")
     ctx.state.kv_set("capital_date", d.isoformat())
+    ctx.state.kv_set("capital_read_at", ctx.clock.now().isoformat(timespec="seconds"))
     return f"capital read stale={int(stale)}"  # the amount is never written to a log or detail
 
 
@@ -550,11 +551,19 @@ def _stage_predict(ctx: JobContext, d: date) -> str:
     return str(fn(ctx, d))
 
 
+def _stage_predict(ctx: JobContext, d: date) -> str:
+    fn = ctx.hook("predict")
+    if fn is None:
+        return f"{NOT_IMPLEMENTED} (no live model wired)"
+    return str(fn(ctx, d))
+
+
 def _stage_s1_plan(ctx: JobContext, d: date) -> str:
     fn = ctx.hook("s1_plan")
     if fn is None:
         return f"{NOT_IMPLEMENTED} (no S1 planner wired)"
-    return f"planned={fn(ctx, d)}"
+    out = str(fn(ctx, d))
+    return out if out.startswith("skipped") else f"planned={out}"
 
 
 def _stage_report(ctx: JobContext, d: date, catchup: bool = False) -> str:

@@ -7,8 +7,9 @@ Everything here is paper only: orders are rows in the paper ledger, never broker
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import polars as pl
@@ -17,6 +18,7 @@ from stocksense.core.config import Settings
 from stocksense.core.errors import DataNotAvailable
 from stocksense.core.log import get_logger
 from stocksense.core.state import State
+from stocksense.costs.india import round_trip_cost_frac
 from stocksense.data import io
 from stocksense.features.build import load_features
 from stocksense.labels.forward import load_labels
@@ -24,9 +26,19 @@ from stocksense.learn.nightly import load_bag
 from stocksense.models import store
 from stocksense.models.base import ModelSpec, build_model
 from stocksense.models.ensemble import expected_return_map, expected_return_map_decile, rank_scores
+from stocksense.paper.broker import CorpAction
+from stocksense.paper.ledger import NewOrder
 from stocksense.portfolio.construct import (
+    BUY_CUSHION_INR,
     DayScores,
+    EnginePanelAccess,
+    Holding,
+    S1Book,
+    S1Config,
+    S1Plan,
+    plan_s1,
 )
+from stocksense.portfolio.risk import RiskContext, entries_allowed, pre_trade_checks
 from stocksense.validation.walkforward import END_COLUMN
 
 log = get_logger(__name__)
@@ -198,6 +210,266 @@ class LiveScoreSource:
         return out
 
 
+# ---- the S1 evening plan ------------------------------------------------------------------------------
+
+BOOK = "main"
+PLAN_CAPITAL_TOLERANCE = 0.05  # a stored plan is re-planned at 15:10 when capital moved by more than this
+_ACCESS: dict[date, EnginePanelAccess] = {}
+
+
+def live_panel_access(settings: Settings, calendar, d: date) -> EnginePanelAccess:  # type: ignore[no-untyped-def]
+    """The S1 panel access over the 260 sessions up to d with the u500 hysteresis flag (cached per date)."""
+    if d not in _ACCESS:
+        from stocksense.validation.g1 import build_world
+
+        _ACCESS.clear()
+        world = build_world(settings, calendar, start=calendar.shift(d, -260), end=d, cut_events=False)
+        _ACCESS[d] = world.s1_access(universe_flag=True)
+    return _ACCESS[d]
+
+
+def _vol_on(access: EnginePanelAccess, t: date, sid: int) -> float:
+    sl = access.p.day(t)
+    if sl is not None:
+        for j in range(*sl):
+            if int(access.p.sid[j]) == sid:
+                return float(access.p.vol_21[j])
+    return 0.02
+
+
+def ledger_book(ctx, d: date, book: str = BOOK, capital: float | None = None) -> S1Book:  # type: ignore[no-untyped-def]
+    """The planner's view of the paper ledger's delivery book as of the close of d."""
+    from stocksense.live.jobs import capital_ref
+
+    cal = ctx.calendar
+    cap = capital if capital is not None else capital_ref(ctx)[0]
+    if cap is None:
+        raise DataNotAvailable("capital not read yet")
+    pos = [p for p in ctx.ledger.positions(book) if p.product == "delivery" and p.qty > 0]
+    con = ctx.state.connect()
+    try:
+        fills = con.execute(
+            "SELECT o.sid, o.side, o.trade_date, f.price FROM fills f JOIN orders o ON o.order_id=f.order_id "
+            "WHERE o.book=? AND o.product='delivery' ORDER BY o.trade_date, f.ts, f.fill_id",
+            (book,),
+        ).fetchall()
+    finally:
+        con.close()
+    buys: dict[int, tuple[date, float]] = {}
+    sells: dict[int, date] = {}
+    for sid, side, td, price in fills:
+        if side == "BUY":
+            buys[int(sid)] = (date.fromisoformat(td), float(price))
+        else:
+            sells[int(sid)] = date.fromisoformat(td)
+    idx_d = cal.session_index(d)
+    access = live_panel_access(ctx.settings, cal, d) if pos else None
+    holdings: dict[int, Holding] = {}
+    for p in pos:
+        ed, px = buys.get(p.sid, (d, p.last_price))
+        vol = _vol_on(access, ed, p.sid) if access is not None else 0.02
+        held = max(idx_d - cal.session_index(ed), 0) if cal.is_session(ed) else 0
+        holdings[p.sid] = Holding(p.sid, int(round(p.qty)), px, held, vol if vol > 0 else 0.02)
+    nav = ctx.ledger.nav_series(book)
+    dd = 0.0
+    if nav.height:
+        peak = float(nav["nav"].max())
+        dd = max(0.0, 1.0 - float(nav["nav"][-1]) / peak) if peak > 0 else 0.0
+    recent = {
+        s: idx_d - cal.session_index(td)
+        for s, td in sells.items()
+        if cal.is_session(td) and 0 <= idx_d - cal.session_index(td) <= 10
+    }
+    stopped = ctx.state.kv_get(f"book_stop:{book}") == "1"
+    return S1Book(holdings, cap * ctx.ledger.cash_frac(book), dd, stopped, recent)
+
+
+def _symbols(settings: Settings, d: date) -> dict[int, str]:
+    rows = io.read(settings, "panel_daily", start=d, end=d, columns=["sid", "symbol"]).collect()
+    return dict(zip(rows["sid"].to_list(), rows["symbol"].to_list(), strict=True))
+
+
+def risk_context(ctx, d: date) -> RiskContext:  # type: ignore[no-untyped-def]
+    """The inputs of the eight pre-trade checks as the evening of d sees them (see DECISIONS, G2-G2)."""
+    s, cal, now = ctx.settings, ctx.calendar, ctx.clock.now()
+    lo = cal.shift(d, -9)
+    present = set(io.read(s, "panel_daily", start=lo, end=d, columns=["date"]).collect()["date"].to_list())
+    missing = [x for x in cal.sessions(lo, d) if x not in present]
+    feats = load_features(s, "production", start=lo, end=d, columns=[]).collect()
+    f_last = feats["date"].max() if feats.height else None
+    uni = io.read(s, "panel_universe", start=d, end=d, columns=["sid", "u500", "turnover_rank"]).collect()
+    # the u500 hysteresis flag holds ~560 names (members stay until rank 600): the check is about a collapsed
+    # or exploded universe, so it counts the flagged names within the nominal 500 (dry run 2026-11-19: 562)
+    n_u500 = int((uni["u500"].fill_null(False) & (uni["turnover_rank"].fill_null(10**9) <= 500)).sum())
+    mid = live_ids(ctx.state)["live_model:s1"]
+    con = ctx.state.connect()
+    try:
+        row = con.execute("SELECT created_at FROM models WHERE model_id=?", (mid,)).fetchone()
+    finally:
+        con.close()
+    fits = [datetime.fromisoformat(row[0])] if row and row[0] else []
+    std_today = std_prev = null_frac = None
+    live = io.read(s, "preds", end=d, columns=["date", "sid", "score"], sub=mid).collect()
+    if live.height:
+        stds = live.group_by("date").agg(pl.col("score").std().alias("sd")).sort("date")
+        today = stds.filter(pl.col("date") == d)
+        if today.height:
+            std_today = float(today["sd"][0])
+            prev = stds.filter(pl.col("date") < d).tail(60)["sd"].drop_nulls()
+            std_prev = float(prev.mean()) if len(prev) else std_today  # no history yet: compare with itself
+            day = live.filter(pl.col("date") == d)["score"]
+            null_frac = float((~day.is_finite()).mean())  # type: ignore[arg-type]
+    read_at = ctx.state.kv_get("capital_read_at")
+    cap_at = datetime.fromisoformat(read_at) if read_at else None  # the check compares its date with today
+    return RiskContext(
+        now=now, last_completed_session=d, panel_last_date=max(present) if present else None,
+        features_last_date=f_last, null_share_today={}, null_share_mean_60={}, model_fit_times=fits,
+        n_u500=n_u500, score_std_today=std_today, score_std_mean_60=std_prev, score_null_frac=null_frac,
+        capital_read_at=cap_at, last_quote_ts=None, market_open=False, missing_sessions_last10=missing,
+    )  # fmt: skip
+
+
+def compute_plan(ctx, d: date, cap: float, *, allow_entries: bool | None = None):  # type: ignore[no-untyped-def]
+    """(S1Plan, context dict) for the close of d at capital `cap`; the book is read from the ledger."""
+    from stocksense.costs.slippage import SlippageTable
+
+    pol = live_policy(ctx.state)
+    sc = LiveScoreSource(ctx.settings, ctx.state, er_map=pol.get("er_map")).scores(d)
+    if sc is None:
+        raise DataNotAvailable(f"no live scores for {d}")
+    access = live_panel_access(ctx.settings, ctx.calendar, d)
+    d1 = ctx.calendar.next_session(d)
+    book = ledger_book(ctx, d, capital=cap)
+    checks = pre_trade_checks(risk_context(ctx, d))
+    if book.dd >= ctx.settings.risk.book_dd_stop and not book.stopped:
+        ctx.state.kv_set(f"book_stop:{BOOK}", "1")
+        book = S1Book(book.holdings, book.cash, book.dd, True, book.recent_sells)
+    ok = entries_allowed(checks) if allow_entries is None else allow_entries
+    cfg = S1Config.from_settings(
+        ctx.settings, 10, SlippageTable.load_latest(ctx.settings), k_max=int(pol["k_max"]),
+        overlay=bool(pol["overlay"]), **dict(pol.get("policy") or {}),
+    )  # fmt: skip
+    panel_t = access.day(d, d1)
+    scale = float(ctx.state.kv_get(f"decay_scale:{BOOK}") or 1.0)
+    plan = plan_s1(d, sc.score, sc.er, book, cap, panel_t, cfg, allow_entries=ok, gross_scale=scale)
+    info = {
+        "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in checks],
+        "allow_entries": ok, "scores": sc, "panel": panel_t, "book": book,
+    }  # fmt: skip
+    return plan, info
+
+
+def _plan_json(ctx, d: date, cap: float, stale: bool, plan: S1Plan, info: dict) -> dict:  # type: ignore[no-untyped-def]
+    sc, pday = info["scores"], info["panel"]
+    sym = _symbols(ctx.settings, d)
+    ranked = sorted(sc.score, key=lambda x: (-sc.score[x], x))
+    rank = {x: i + 1 for i, x in enumerate(ranked)}
+    sells = [
+        {"sid": o.sid, "symbol": sym.get(o.sid, str(o.sid)), "qty": int(o.qty), "reason": o.reason,
+         "ref": pday.rows[o.sid].close if o.sid in pday.rows else None}
+        for o in plan.orders if o.side == "SELL"
+    ]  # fmt: skip
+    entries = [
+        {"sid": x, "symbol": sym.get(x, str(x)), "weight": w, "score": sc.score.get(x), "rank": rank.get(x),
+         "er": sc.er.get(x), "ref_close": pday.rows[x].close}
+        for x, w in sorted(plan.weights.items(), key=lambda kv: -sc.score.get(kv[0], 0.0))
+    ]  # fmt: skip
+    return {
+        "date": d.isoformat(), "next_date": ctx.calendar.next_session(d).isoformat(), "cap_ref": cap,
+        "stale": stale, "model": live_ids(ctx.state)["live_model:s1"], "note": plan.note, "k": plan.k,
+        "k_raw": plan.k_raw, "gross_target": plan.gross_target, "allow_entries": info["allow_entries"],
+        "checks": info["checks"], "exits": {str(k): v for k, v in plan.exits.items()},
+        "extended": list(plan.extended), "sells": sells, "entries": entries,
+        "policy": live_policy(ctx.state),
+    }  # fmt: skip
+
+
+def hook_s1_plan(ctx, d: date) -> str:  # type: ignore[no-untyped-def]
+    """Evening: plan S1 for the next session, store it (kv s1_plan:<d>), record the exits as SELL open
+    orders of the next session."""
+    from stocksense.live.jobs import capital_ref
+
+    cap, stale = capital_ref(ctx)
+    if cap is None:
+        return "skipped: no capital reference yet (entries are planned at 15:10)"
+    plan, info = compute_plan(ctx, d, cap)
+    body = _plan_json(ctx, d, cap, stale, plan, info)
+    ctx.state.kv_set(f"s1_plan:{d.isoformat()}", json.dumps(body))
+    d1 = ctx.calendar.next_session(d)
+    sells = [
+        NewOrder(
+            x["sid"], x["symbol"], "SELL", "delivery", "open", d1, x["qty"], x["ref"] or 0.0, x["reason"]
+        )
+        for x in body["sells"]
+    ]
+    if sells:
+        dec = ctx.ledger.record_decision(BOOK, "s1-exit", d1, cap, stale, {"checks": body["checks"]}, body)
+        ctx.ledger.add_orders(dec, BOOK, sells)
+    return f"exits={len(sells)} planned_entries={len(body['entries'])}"
+
+
+def hook_s1_orders(ctx, d: date, cap: float):  # type: ignore[no-untyped-def]
+    """15:10: today's BUY close orders from yesterday's plan, re-sized to today's capital and quotes."""
+    from stocksense.live.jobs import capital_ref
+
+    prev = ctx.calendar.prev_session(d)
+    raw = ctx.state.kv_get(f"s1_plan:{prev.isoformat()}")
+    plan = json.loads(raw) if raw else None
+    replanned = ""
+    if plan is None:
+        replanned = "no stored plan"
+    elif not plan.get("cap_ref") or abs(cap / plan["cap_ref"] - 1.0) > PLAN_CAPITAL_TOLERANCE:
+        replanned = "capital moved"
+    elif plan.get("policy") != live_policy(ctx.state):
+        replanned = "policy changed"
+    if replanned:
+        p, info = compute_plan(ctx, prev, cap)
+        plan = _plan_json(ctx, prev, cap, capital_ref(ctx)[1], p, info)
+        ctx.state.kv_set(f"s1_plan:{prev.isoformat()}", json.dumps(plan))
+    entries = plan["entries"] if plan["allow_entries"] else []
+    quotes = ctx.hub.get([e["symbol"] for e in entries]) if entries else {}
+    free = ctx.state.kv_get(f"free_cash_frac:{BOOK}")
+    budget = cap * (float(free) if free is not None else ctx.ledger.cash_frac(BOOK))
+    orders: list[NewOrder] = []
+    detail: list[dict] = []
+    dropped: list[str] = []
+    for e in entries:  # already in descending score order
+        q = quotes.get(e["symbol"])
+        ltp = float(q.ltp) if q is not None and q.ltp else float(e["ref_close"])
+        if q is not None and q.upper_circuit and ltp >= float(q.upper_circuit) - 0.05:
+            dropped.append(f"{e['symbol']}:upper_circuit")
+            continue
+        want = int(math.floor(e["weight"] * cap / ltp + 1e-9))
+        qty = min(want, int(math.floor(max(budget - BUY_CUSHION_INR, 0.0) / ltp)))
+        if qty <= 0:
+            dropped.append(f"{e['symbol']}:no_cash_or_qty")
+            continue
+        budget -= qty * ltp + BUY_CUSHION_INR
+        orders.append(NewOrder(e["sid"], e["symbol"], "BUY", "delivery", "close", d, qty, ltp, "entry"))
+        cost = round_trip_cost_frac("delivery", qty * ltp, ctx.settings.costs)
+        detail.append({**e, "qty": qty, "ref_price": ltp, "cost_frac": cost})
+    payload = {
+        "plan_date": prev.isoformat(), "note": plan["note"], "replanned": replanned, "dropped": dropped,
+        "allow_entries": plan["allow_entries"], "checks": plan["checks"], "orders": detail,
+    }  # fmt: skip
+    return [(BOOK, orders, payload)]
+
+
+def corp_actions_hook(ctx, d: date) -> list[CorpAction]:  # type: ignore[no-untyped-def]
+    """Ex-date `d` actions of the names held in any book (price factor and dividend per share)."""
+    held = {p.symbol: p.sid for b in ctx.ledger.books() for p in ctx.ledger.positions(b)}
+    if not held:
+        return []
+    ca = io.read(
+        ctx.settings, "corporate_actions", columns=["symbol", "ex_date", "factor_price", "dividend_amount"]
+    ).collect()  # fmt: skip
+    ca = ca.filter((pl.col("ex_date") == d) & pl.col("symbol").is_in(list(held)))
+    return [
+        CorpAction(held[r["symbol"]], float(r["factor_price"] or 1.0), float(r["dividend_amount"] or 0.0))
+        for r in ca.to_dicts()
+    ]
+
+
 def production_hooks(settings: Settings) -> Mapping[str, object]:
     """The hooks `build_context` installs when none are injected."""
     from stocksense.live.jobs import u500_symbols
@@ -205,4 +477,8 @@ def production_hooks(settings: Settings) -> Mapping[str, object]:
     _ = u500_symbols
     return {
         "predict": stage_predict,
+        "s1_plan": hook_s1_plan,
+        "s1_orders": hook_s1_orders,
+        "corp_actions": corp_actions_hook,
+        "u500_symbols": u500_symbols,
     }
