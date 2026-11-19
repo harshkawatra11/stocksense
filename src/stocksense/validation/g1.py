@@ -91,6 +91,8 @@ class G1Config:
     model_factory: ModelFactory | None = None
     meta_factory: Callable[[], MetaModel] | None = None
     s1_targets: tuple[str, ...] = S1_TARGETS
+    # backtest-only S1 variant (DECISIONS 2026-11-19): re-enter N sessions after the book-drawdown stop fired
+    s1_auto_resume: int | None = None
 
     def resolved(self, settings: Settings) -> G1Config:
         caps = self.capitals if self.capitals is not None else tuple(settings.costs.grid.capital_inr)
@@ -565,7 +567,9 @@ def _spec_s1(
         "g1": G1_VERSION, "strategy": "s1", "target": target, "k_max": k_max, "overlay": overlay,
         "blend": "online", "models": sorted(m.trial_id for m in models), "entry": "close",
         "start": cfg.start, "end": cfg.end, "capitals": list(cfg.capitals or ()),
-        "reference_capital": cfg.reference_capital, "stress": cfg.slippage_stress, **extra,
+        "reference_capital": cfg.reference_capital, "stress": cfg.slippage_stress,
+        **({"auto_resume_sessions": cfg.s1_auto_resume} if cfg.s1_auto_resume is not None else {}),
+        **extra,
     }  # fmt: skip
 
 
@@ -599,7 +603,7 @@ def plan_grid(
                         f"S1 {target} k={k} overlay={'on' if ov else 'off'}",
                     )  # fmt: skip
                 )
-    if s2_models:
+    if s2_models and cfg.s1_auto_resume is None:  # the auto-resume variant concerns S1 only
         for k in S2_K_MAX:
             plans.append(TrialPlan("s2", FAMILY_S2, S2_TARGET, _spec_s2(cfg, k, s2_models), f"S2 k={k}"))
     return plans
@@ -713,6 +717,7 @@ class G1Runner:
         *,
         meta: WalkForwardMeta | None = None,
         entry: str = "close",
+        auto_resume: int | None = None,
     ) -> Callable[[SlippageTable], Any]:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
@@ -720,7 +725,7 @@ class G1Runner:
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
                 spec, settings, source, world.s1_access(), settings.costs, slip,
-                k_max=k_max, overlay=overlay, meta=meta, state=None,
+                k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
             )  # fmt: skip
             pol: Any = _MetaDated(base, meta) if meta is not None else _PolicyWrapper(base)
             return _OpenEntry(pol) if entry == "open" else pol
@@ -740,14 +745,23 @@ class G1Runner:
             )
         if plan.kind == "ref-factor":
             b = factor_scores(self.settings, sp["factor"], sp["sign"], self.labels(plan.target), plan.target)
-            return self._s1_factory(plan.target, StoredScoreSource(b.frame), sp["k_max"], sp["overlay"])
+            return self._s1_factory(
+                plan.target, StoredScoreSource(b.frame), sp["k_max"], sp["overlay"],
+                auto_resume=sp.get("auto_resume_sessions"),
+            )  # fmt: skip
         b = self.blended(plan.target, sp["models"])
         src = StoredScoreSource(b.frame)
         meta: WalkForwardMeta | None = None
         if plan.kind == "s1-meta":
             meta = self._meta_for(sp["base_trial"])
         return self._s1_factory(
-            plan.target, src, sp["k_max"], sp["overlay"], meta=meta, entry=sp.get("entry", "close")
+            plan.target,
+            src,
+            sp["k_max"],
+            sp["overlay"],
+            meta=meta,
+            entry=sp.get("entry", "close"),
+            auto_resume=sp.get("auto_resume_sessions"),
         )
 
     def _meta_for(self, base_trial: str) -> WalkForwardMeta:

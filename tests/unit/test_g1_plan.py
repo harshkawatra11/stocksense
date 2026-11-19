@@ -150,3 +150,17 @@ class _Stub:
         import numpy as np
 
         return np.full(len(rows), 0.9)
+
+
+def test_auto_resume_grid_has_new_spec_hashes_and_no_s2(tmp_data_root, state):
+    s1, s2 = _models()
+    base = g1.plan_grid(CFG.resolved(tmp_data_root), s1, s2)
+    ar_cfg = G1Config(**{**CFG.__dict__, "s1_auto_resume": 20}).resolved(tmp_data_root)
+    var = g1.plan_grid(ar_cfg, s1, s2)
+    assert len(var) == 12 and {p.kind for p in var} == {"s1"} and {p.family for p in var} == {"g1-s1"}
+    assert all(p.spec["auto_resume_sessions"] == 20 for p in var)
+    assert all("auto_resume_sessions" not in p.spec for p in base)  # the original specs are unchanged
+    a = {p.trial_id for p in g1.register_plans(state, base)}
+    before = n_trials(state)
+    b = {p.trial_id for p in g1.register_plans(state, var)}
+    assert not (a & b) and n_trials(state) == before + 12  # new trials; the old ones are kept

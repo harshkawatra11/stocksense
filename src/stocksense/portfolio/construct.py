@@ -497,7 +497,13 @@ class S1Policy:
         state: StopFlags | None = None,
         book_name: str = "s1",
         entries_allowed: Callable[[date], bool] | None = None,
+        auto_resume_sessions: int | None = None,
     ) -> None:
+        if auto_resume_sessions is not None:
+            if auto_resume_sessions < 1:
+                raise ValueError("auto_resume_sessions must be >= 1")
+            if state is not None:
+                raise ValueError("auto-resume is backtest-only: a policy with a live state needs `resume`")
         km = k_max if k_max is not None else settings.strategies.s1.k_max
         h = horizon_of(getattr(spec, "target", spec))
         cfg = S1Config(h, km, settings.risk, costs, slippage, overlay, hysteresis)
@@ -506,6 +512,8 @@ class S1Policy:
         self._peak = 0.0
         self._stopped = False
         self._was_stopped = False
+        self.auto_resume_sessions = auto_resume_sessions  # backtest only (never with a state)
+        self._stop_idx: int | None = None  # session index at which the stop fired (auto-resume only)
         self._anchor: dict[int, date] = {}
         self._vol_at_entry: dict[int, float] = {}
         self._pending_vol: dict[int, float] = {}
@@ -527,12 +535,19 @@ class S1Policy:
         cal = book.calendar
         d1 = cal.next_session(t)
         stopped = self._read_stop()
+        if stopped and self.auto_resume_sessions is not None and self._stop_idx is not None:
+            flat = not any(p.product == "delivery" and p.qty > 0 for p in book.positions.values())
+            if flat and cal.session_index(t) - self._stop_idx >= self.auto_resume_sessions:
+                self._write_stop(False)  # backtest-only stand-in for `stocksense resume`
+                self._stop_idx = None
+                stopped = False
         if self._was_stopped and not stopped:  # `stocksense resume` cleared the flag: re-base the peak
             self._peak = capital_inr
         self._peak = max(self._peak, capital_inr)
         dd = 1.0 - capital_inr / self._peak if self._peak > 0 else 0.0
         if dd >= self.cfg.risk.book_dd_stop and not stopped:
             self._write_stop(True)
+            self._stop_idx = cal.session_index(t)
             stopped = True
         self._was_stopped = stopped
 

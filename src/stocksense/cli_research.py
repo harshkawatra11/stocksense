@@ -396,6 +396,12 @@ def finish_trials(ctx: typer.Context) -> None:
 def g1_run_command(
     ctx: typer.Context,
     production: Annotated[bool, typer.Option(help="Fit the two candidates in production mode.")] = True,
+    s1_auto_resume: Annotated[
+        int,
+        typer.Option(
+            help="Backtest-only S1 variant: re-enter N sessions after the book-drawdown stop (0 = off)."
+        ),
+    ] = 0,
 ) -> None:
     """Gate G1 (T9.5): portfolio grid, references, candidates, research gate, production fits."""
     from stocksense.validation.g1_run import run_g1
@@ -404,12 +410,18 @@ def g1_run_command(
     state = State(settings)
     state.migrate()
     cal = TradingCalendar.from_store(settings, SystemClock())
-    out = run_g1(settings, state, cal, specs=named_specs(settings), production=production)
+    from stocksense.validation.g1 import G1Config
+
+    cfg = G1Config(s1_auto_resume=s1_auto_resume or None)
+    out = run_g1(settings, state, cal, cfg, specs=named_specs(settings), production=production)
     for fam, rep in out.reports.items():
         typer.echo(f"{fam}: {out.candidates[fam]}")
         typer.echo(rep.table())
     for n in out.notes:
         typer.echo(f"note: {n}")
+    if s1_auto_resume:  # RESULTS-G1.md is edited by hand for this variant (sections 3 and 4 are not ours)
+        typer.echo("auto-resume variant: RESULTS-G1.md not rewritten")
+        return
     from stocksense.validation.g1_report import write_results
 
     docs = Path(__file__).resolve().parents[2] / "docs" / "RESULTS-G1.md"

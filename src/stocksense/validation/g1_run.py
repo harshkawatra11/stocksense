@@ -130,6 +130,11 @@ def reference_plans(
                     "capitals": sp["capitals"],
                     "reference_capital": sp["reference_capital"],
                     "stress": sp["stress"],
+                    **(
+                        {"auto_resume_sessions": sp["auto_resume_sessions"]}
+                        if "auto_resume_sessions" in sp
+                        else {}
+                    ),
                 },
                 f"single factor {'-' if sign < 0 else ''}{feat}",
             )  # fmt: skip
@@ -296,11 +301,12 @@ def run_g1(
     run_gate(runner, settings, state, out)
     if production:
         fit_candidates(settings, state, calendar, out, pick_candidates(out), fit)
-    write_outcome(settings, state, out)
+    write_outcome(settings, state, out, runner.cfg.s1_auto_resume)
     return out
 
 
-def write_outcome(settings: Settings, state: State, out: G1Outcome) -> Path:
+def write_outcome(settings: Settings, state: State, out: G1Outcome, auto_resume: int | None = None) -> Path:
+    """outcome.json; the auto-resume variant writes its own file and never touches the original run's."""
     d = g1.g1_dir(settings)
     d.mkdir(parents=True, exist_ok=True)
     doc = {
@@ -313,6 +319,6 @@ def write_outcome(settings: Settings, state: State, out: G1Outcome) -> Path:
             {"trial_id": p.trial_id, "kind": p.kind, "label": p.label, "target": p.target} for p in out.plans
         ],
     }
-    path = d / "outcome.json"
+    path = d / ("outcome.json" if auto_resume is None else "outcome_s1_auto_resume.json")
     g1._write_json(path, doc)
     return path
