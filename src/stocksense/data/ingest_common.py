@@ -27,6 +27,7 @@ class IngestResult:
     date: date
     rows: int
     status: str
+    detail: str = ""
 
 
 @dataclass

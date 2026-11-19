@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+import httpx
 import polars as pl
 
 from stocksense.brokers.angel import AngelClient
@@ -119,6 +120,29 @@ def _bars_frame(
     return out
 
 
+BAR_5M = timedelta(minutes=5)
+MAX_5M_FAILURES = 10
+
+
+def last_complete_bar_start(now: datetime, calendar: Any) -> datetime:
+    """Start of the last 5-minute bar that has fully closed by `now`.
+
+    During a session: floor(now to 5 min) - 5 min. After the close, before the open, or on a
+    non-session day: 15:25 (close - 5 min) of the last completed session."""
+    d = now.date()
+    if calendar.is_session(d):
+        o, c = calendar.session_times(d)
+        if o <= now < c:
+            floor = now.replace(minute=now.minute - now.minute % 5, second=0, microsecond=0)
+            cand = floor - BAR_5M
+            if cand >= o:
+                return cand
+        elif now >= c:
+            return c - BAR_5M
+    last = calendar.last_completed_session(now)
+    return calendar.session_times(last)[1] - BAR_5M
+
+
 def extend_5m(
     ctx: IngestContext,
     symbols: list[str] | None = None,
@@ -126,9 +150,14 @@ def extend_5m(
     angel: AngelClient | None = None,
     instruments: InstrumentMap | None = None,
     on_result: Callable[[IngestResult], None] | None = None,
+    max_seconds: float = 1800,
 ) -> list[IngestResult]:
-    """Extend each symbol's 5-minute bars from its last stored bar to now via Angel FIVE_MINUTE
-    (<= 100 days per request); source 'angel', adj_asof today."""
+    """Extend each symbol's 5-minute bars from its last stored bar via Angel FIVE_MINUTE
+    (<= 100 days per request); source 'angel', adj_asof today.
+
+    Only completed bars are requested and stored (end = last_complete_bar_start). The run stops after
+    MAX_5M_FAILURES consecutive symbol failures (one final 'failed' result) and after `max_seconds`
+    of wall time (one final 'skipped' result, detail 'wall budget'); bars already fetched are kept."""
     settings = ctx.settings
     syms = symbols if symbols is not None else stored_5m_symbols(settings)
     own_angel, own_map = angel is None, instruments is None
@@ -142,8 +171,11 @@ def extend_5m(
     last_ts = dict(zip(last["symbol"].to_list(), last["ts"].to_list(), strict=True))
     now = ctx.clock.now()
     today = ctx.clock.today()
+    end_dt = last_complete_bar_start(now, ctx.calendar)
+    t0 = now
     results: list[IngestResult] = []
     pending: list[pl.DataFrame] = []
+    consecutive = 0
 
     def flush() -> None:
         if pending:
@@ -152,32 +184,42 @@ def extend_5m(
 
     try:
         for n, sym in enumerate(syms, 1):
+            if (ctx.clock.now() - t0).total_seconds() >= max_seconds:
+                results.append(IngestResult(BARS_5M, today, 0, "skipped", "wall budget"))
+                break
             token = instruments.angel_token(sym)
             if token is None:
                 results.append(IngestResult(BARS_5M, today, 0, "skipped"))
                 continue
             start = last_ts.get(sym)
             start_dt = (
-                (start + timedelta(minutes=5))
-                if start
-                else datetime.combine(today - timedelta(days=90), time(9, 15), IST)
+                (start + BAR_5M) if start else datetime.combine(today - timedelta(days=90), time(9, 15), IST)
             )
-            if start_dt >= now:
+            if start_dt > end_dt:
                 results.append(IngestResult(BARS_5M, today, 0, "skipped"))
                 continue
             try:
-                df = angel.candles(token, "FIVE_MINUTE", start_dt, now)
-            except BrokerError as e:
+                df = angel.candles(token, "FIVE_MINUTE", start_dt, end_dt)
+            except (BrokerError, httpx.HTTPError) as e:
                 log.warning("extend_5m_failed", symbol=sym, error=str(e))
                 res = IngestResult(BARS_5M, today, 0, "failed")
+                consecutive += 1
             else:
-                df = df.filter(pl.col("ts") >= start_dt)
+                consecutive = 0
+                df = df.filter((pl.col("ts") >= start_dt) & (pl.col("ts") <= end_dt))
                 if df.height:
                     pending.append(_bars_frame(df, sym, "FIVE_MINUTE", "angel", today))
                 res = IngestResult(BARS_5M, today, df.height, "ok")
             results.append(res)
             if on_result:
                 on_result(res)
+            if consecutive >= MAX_5M_FAILURES:
+                results.append(
+                    IngestResult(
+                        BARS_5M, today, 0, "failed", f"aborted after {MAX_5M_FAILURES} consecutive failures"
+                    )
+                )
+                break
             if n % FLUSH_SYMBOLS == 0:
                 flush()
     finally:
@@ -255,6 +297,20 @@ def validate_month(df: pl.DataFrame, bhav: pl.DataFrame, symbol: str) -> dict[st
     }
 
 
+def _stored_last_dates(settings: Any, symbols: list[str], m0: date, m1: date) -> dict[str, date]:
+    """symbol -> date of its last stored 1-minute bar inside [m0, m1] (symbols with none are absent)."""
+    if not list_partitions(settings, BARS_1M):
+        return {}
+    df = (
+        read(settings, BARS_1M, start=m0, end=m1, columns=["symbol", "ts"])
+        .filter(pl.col("symbol").is_in(symbols))
+        .group_by("symbol")
+        .agg(pl.col("ts").max().dt.date().alias("last"))
+        .collect()
+    )
+    return dict(zip(df["symbol"].to_list(), df["last"].to_list(), strict=True))
+
+
 def backfill_1m(
     ctx: IngestContext,
     symbols: list[str],
@@ -287,6 +343,8 @@ def backfill_1m(
             todo = [s for s in symbols if ctx.state.job_status(job_name(s, m0), m0) != "done"]
             if not todo:
                 continue
+            final = month_end(m0) < today  # only a month fully in the past is final
+            stored_last = _stored_last_dates(settings, todo, m0, m1) if not final else {}
             bhav = (
                 read(
                     settings, "bhavcopy_eq", start=m0, end=m1, columns=["symbol", "series", "date", "volume"]
@@ -295,16 +353,19 @@ def backfill_1m(
                 .collect()
             )
 
-            def flush(m0: date = m0) -> None:
+            def flush(m0: date = m0, final: bool = final, m1: date = m1) -> None:
                 if not pending:
                     return
                 frames = [p[2] for p in pending if p[2].height]
                 if frames:
                     upsert(settings, BARS_1M, pl.concat(frames), clock=ctx.clock)
                 for sym, attempt, df, stats in pending:
-                    ctx.state.job_finish(
-                        job_name(sym, m0), m0, attempt, "done", json.dumps({"rows": df.height, **stats})
-                    )
+                    if final:
+                        ctx.state.job_finish(
+                            job_name(sym, m0), m0, attempt, "done", json.dumps({"rows": df.height, **stats})
+                        )
+                    else:
+                        ctx.state.job_finish(job_name(sym, m0), m0, attempt, "skipped", f"partial:{m1}")
                 pending.clear()
 
             for sym in todo:
@@ -312,9 +373,16 @@ def backfill_1m(
                 if key is None:
                     results.append(IngestResult(BARS_1M, m0, 0, "skipped"))
                     continue
+                a_sym = a
+                if sym in stored_last:  # partial month: resume the day after the last stored session
+                    a_sym = max(a, stored_last[sym] + timedelta(days=1))
                 attempt = ctx.state.job_start(job_name(sym, m0), m0)
+                if a_sym > m1:  # nothing new since the last run
+                    pending.append((sym, attempt, pl.DataFrame(), {}))
+                    results.append(IngestResult(BARS_1M, m0, 0, "ok"))
+                    continue
                 try:
-                    df = upstox.candles(key, "minutes", 1, a, m1)
+                    df = upstox.candles(key, "minutes", 1, a_sym, m1)
                 except BrokerError as e:
                     log.warning("bars_1m_failed", symbol=sym, month=f"{m0:%Y-%m}", error=str(e))
                     ctx.state.job_finish(job_name(sym, m0), m0, attempt, "failed", str(e)[:200])

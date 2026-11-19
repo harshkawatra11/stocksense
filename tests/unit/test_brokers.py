@@ -316,8 +316,77 @@ def test_instrument_map_parses_and_caches_daily(tmp_data_root):
 
     m = InstrumentMap(tmp_data_root, SteppingClock(T0), transport=httpx.MockTransport(handler))
     assert m.angel_token("TCS") == "11536" and m.angel_token("NOPE") is None
-    assert m.upstox_key("TCS") == "NSE_EQ|INE467B01029" and m.upstox_key("ZZ") is None
+    assert m.upstox_key("TCS") == "NSE_EQ|INE467B01029" and m.upstox_key("ZZ") == "NSE_EQ|ZZ"
     assert n["c"] == 2
     m2 = InstrumentMap(tmp_data_root, SteppingClock(T0), transport=httpx.MockTransport(handler))
     assert m2.angel_token("TCS") == "11536"
     assert n["c"] == 2  # today's cache files are reused
+
+
+def _masters(angel, up, calls=None):
+    def handler(req):
+        if calls is not None:
+            calls.append(str(req.url))
+        if "NSE.json.gz" in str(req.url):
+            body = up if isinstance(up, bytes) else gzip.compress(json.dumps(up).encode())
+            return httpx.Response(200, content=body)
+        return httpx.Response(200, content=json.dumps(angel).encode())
+
+    return httpx.MockTransport(handler)
+
+
+ANGEL_ROWS = [
+    {"exch_seg": "NSE", "symbol": "ABC-EQ", "token": "100"},
+    {"exch_seg": "NSE", "symbol": "XYZ-BE", "token": "200"},
+    {"exch_seg": "NSE", "symbol": "QQ-BZ", "token": "300"},
+    {"exch_seg": "NSE", "symbol": "DUP-BE", "token": "401"},
+    {"exch_seg": "NSE", "symbol": "DUP-EQ", "token": "400"},
+]
+UPSTOX_ROWS = [
+    {"segment": "NSE_EQ", "instrument_type": "EQ", "trading_symbol": "ABC", "instrument_key": "NSE_EQ|ABC"},
+    {"segment": "NSE_EQ", "instrument_type": "BE", "trading_symbol": "XYZ", "instrument_key": "NSE_EQ|XYZ"},
+    {"segment": "NSE_EQ", "instrument_type": "BZ", "trading_symbol": "QQ", "instrument_key": "NSE_EQ|QQ"},
+    {"segment": "NSE_EQ", "instrument_type": "XX", "trading_symbol": "ODD", "instrument_key": "NSE_EQ|ODD"},
+]
+
+
+def test_instrument_map_maps_eq_be_bz_and_exposes_series(tmp_data_root):
+    m = InstrumentMap(tmp_data_root, SteppingClock(T0), transport=_masters(ANGEL_ROWS, UPSTOX_ROWS))
+    assert m.angel_token("ABC") == "100" and m.angel_token("XYZ") == "200" and m.angel_token("QQ") == "300"
+    assert m.angel_token("DUP") == "400"  # EQ preferred over BE whatever the row order
+    assert m.upstox_key("XYZ") == "NSE_EQ|XYZ" and m.upstox_key("ODD") is None
+    assert m.series_of("ABC") == "EQ" and m.series_of("XYZ") == "BE" and m.series_of("QQ") == "BZ"
+    assert m.series_of("DUP") == "EQ" and m.series_of("NOPE") is None
+
+
+def test_instrument_map_keeps_yesterdays_upstox_cache_when_download_is_corrupt(tmp_data_root, caplog):
+    d = tmp_data_root.paths.data_root / "cache" / "instruments"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "upstox-2026-11-10.json.gz").write_bytes(gzip.compress(json.dumps(UPSTOX_ROWS).encode()))
+    m = InstrumentMap(tmp_data_root, SteppingClock(T0), transport=_masters(ANGEL_ROWS, b"not gzip at all"))
+    with caplog.at_level("WARNING"):
+        assert m.upstox_key("ABC") == "NSE_EQ|ABC"
+    rec = [r for r in caplog.records if r.getMessage() == "instruments_upstox_failed"]
+    assert len(rec) == 1 and rec[0].fields["error"]
+    assert not (d / "upstox-2026-11-11.json.gz").exists()  # the corrupt download is never cached
+
+
+def test_instrument_map_upstox_failure_without_cache_is_empty_not_fatal(tmp_data_root):
+    m = InstrumentMap(tmp_data_root, SteppingClock(T0), transport=_masters(ANGEL_ROWS, b"junk"))
+    assert m.upstox_key("ABC") is None and m.angel_token("ABC") == "100"
+
+
+def test_instrument_map_cache_write_is_atomic(tmp_data_root, monkeypatch):
+    d = tmp_data_root.paths.data_root / "cache" / "instruments"
+    d.mkdir(parents=True, exist_ok=True)
+    old = d / "angel-2026-11-10.json"
+    old.write_bytes(b"[]")
+
+    def boom(src, dst):
+        raise OSError("crash between write and replace")
+
+    monkeypatch.setattr("stocksense.brokers.instruments.os.replace", boom)
+    m = InstrumentMap(tmp_data_root, SteppingClock(T0), transport=_masters(ANGEL_ROWS, UPSTOX_ROWS))
+    assert m.angel_token("ABC") == "100"  # parsed data is still used
+    assert old.read_bytes() == b"[]"
+    assert not (d / "angel-2026-11-11.json").exists()  # no half-written file at the final path
