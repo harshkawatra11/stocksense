@@ -239,3 +239,40 @@ def test_top_symbols_by_year_is_union_of_yearly_top_n(tmp_data_root):
         pl.concat([eq(2022, {"A": 9, "B": 8, "C": 1}), eq(2023, {"A": 1, "B": 2, "C": 9})]),
     )
     assert top_symbols_by_year(tmp_data_root, 2022, 2023, n=1) == ["A", "C"]
+
+
+# ---- G2-A3: the current month is re-fetched ---------------------------------------------------------------
+
+
+def _ctx_at(settings, now):
+    clock = FixedClock(now)
+    state = State(settings, clock)
+    state.migrate()
+    return IngestContext(settings, clock, TradingCalendar.from_dates([date(2026, 11, 9)]), None, state)  # type: ignore[arg-type]
+
+
+def test_backfill_1m_marks_current_month_partial_and_refetches_from_last_day(tmp_data_root):
+    ctx = _ctx_at(tmp_data_root, datetime(2026, 11, 19, 20, 0, tzinfo=IST))
+    up = FakeUpstox()
+    backfill_1m(ctx, ["AAA"], date(2026, 10, 1), upstox=up, instruments=FakeMap())
+    assert [c[1:] for c in up.calls] == [
+        (date(2026, 11, 1), date(2026, 11, 18)),
+        (date(2026, 10, 1), date(2026, 10, 31)),
+    ]
+    assert ctx.state.job_status("bars_1m:AAA:2026-10", date(2026, 10, 1)) == "done"
+    assert ctx.state.job_status("bars_1m:AAA:2026-11", date(2026, 11, 1)) == "skipped"
+    con = ctx.state.connect()
+    try:
+        (detail,) = con.execute(
+            "SELECT detail FROM job_runs WHERE job='bars_1m:AAA:2026-11' ORDER BY attempt DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        con.close()
+    assert detail == "partial:2026-11-18"
+    # next day: only November, only from the day after the last stored bar (October is not requested)
+    ctx2 = _ctx_at(tmp_data_root, datetime(2026, 11, 20, 20, 0, tzinfo=IST))
+    up2 = FakeUpstox()
+    backfill_1m(ctx2, ["AAA"], date(2026, 10, 1), upstox=up2, instruments=FakeMap())
+    assert [c[1:] for c in up2.calls] == [(date(2026, 11, 19), date(2026, 11, 19))]
+    df = read(tmp_data_root, "bars_1m").collect()
+    assert df.select(pl.col("ts").dt.date().max()).item() == date(2026, 11, 19)
