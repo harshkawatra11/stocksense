@@ -269,8 +269,8 @@ def test_full_session_runs_every_job_in_order_and_ends_with_report_marks_and_rec
         "s1_entries", "s2_squareoff", "close_fills", "eod_mark", "eod_ingest", "eod_pipeline",
         "eod_pipeline.build_panel", "eod_pipeline.reconcile", "eod_pipeline.marks",
         "eod_pipeline.build_features", "eod_pipeline.build_labels",
-        "eod_pipeline.kronos_features", "eod_pipeline.predict",
-        "eod_pipeline.s1_plan", "eod_pipeline.nightly_learn", "eod_pipeline.drift",
+        "eod_pipeline.kronos_features", "eod_pipeline.nightly_learn", "eod_pipeline.predict",
+        "eod_pipeline.s1_plan", "eod_pipeline.drift",
         "eod_pipeline.promote", "eod_pipeline.report", "housekeeping",
     ]  # fmt: skip
     assert seen == expected
@@ -280,7 +280,8 @@ def test_full_session_runs_every_job_in_order_and_ends_with_report_marks_and_rec
     unresolved = [j for j, (s, x) in final.items() if s == "failed" and not (x or "").startswith("retry:")]
     assert unresolved == [], unresolved
     assert final["eod_ingest"][0] == "done" and final["eod_pipeline"][0] == "done"
-    stubs = {j for j, (s, x) in final.items() if s == "skipped" and x == "skipped: not implemented"}
+    ni = "skipped: not implemented"
+    stubs = {j for j, (s, x) in final.items() if s == "skipped" and (x or "").startswith(ni)}
     assert {"plan_open", "eod_pipeline.predict", "eod_pipeline.drift"} <= stubs
     # eod_ingest waited for the 18:50 publication: 18:30 and 18:45 retried, 19:00 succeeded
     ing = [r for r in e.job_rows("eod_ingest")]

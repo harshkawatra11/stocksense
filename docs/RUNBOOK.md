@@ -1,19 +1,20 @@
 # StockSense runbook
 
-The daemon is one Windows scheduled task named `StockSense`. It runs `scripts/run-daemon.ps1`, which starts
-`stocksense run`. It places no orders anywhere: every fill is a paper fill in `data_store/state/stocksense.sqlite`.
+StockSense runs only when you start it by hand. Nothing starts it automatically and no scheduled task is
+installed (`scripts/install-task.ps1` and `uninstall-task.ps1` stay in the repo but are NOT USED). The daemon
+places no orders anywhere: every fill is a paper fill in `data_store/state/stocksense.sqlite`.
 
-## Install and remove
-
-Run once from PowerShell in the repository (not elevated is fine; the task runs as you):
+## Start and stop
 
 ```powershell
-.\scripts\install-task.ps1      # registers 'StockSense' (at logon and daily 07:25) and starts it
-.\scripts\uninstall-task.ps1    # stops and removes it
+scripts\run-daemon.ps1                             # start (leave the terminal open)
+.venv\Scripts\python.exe -m stocksense run         # the same thing without the script
 ```
 
-Never install it on a machine you do not want running all day; the plan's "runs itself" proof starts only
-after the install.
+Stop with Ctrl+C in that terminal, or find the python PID (`Get-Process python`) and run
+`taskkill /F /T /PID <pid>`. A second start prints "already running" and exits. At its next start the daemon
+catches up on missed days (data, stale orders, missed evening pipelines). Keep the laptop on and awake from
+before 09:15 until the evening pipeline has finished.
 
 ## Is it alive?
 
@@ -42,12 +43,7 @@ Quick look at today's jobs:
 .venv\Scripts\python.exe -c "import sqlite3,datetime as d;c=sqlite3.connect('data_store/state/stocksense.sqlite');[print(r) for r in c.execute('select job,attempt,status,detail from job_runs where trade_date=? order by rowid',(d.date.today().isoformat(),))]"
 ```
 
-## Start and stop
-
-```powershell
-Stop-ScheduledTask  -TaskName StockSense     # stop (the heartbeat goes stale within a minute)
-Start-ScheduledTask -TaskName StockSense     # start; a second start prints "already running" and exits
-```
+## Manual runs
 
 Before a manual restart after a crash, make sure no stray process is left:
 `taskkill /F /T /IM python.exe` kills every Python process, so prefer finding the daemon first
@@ -113,5 +109,5 @@ daemon retries them and they are not errors. Anything else is a real failure; th
 | `eod_pipeline.reconcile` retry: no official rows | The panel for the day is not built yet | It follows `build_panel`; rerun the job |
 | `s2_decide`, `s1_entries`, `plan_open`, and the `predict`, `s1_plan`, `nightly_learn`, `drift`, `promote` stages show `skipped: not implemented` | Not built yet (listed in `docs/DECISIONS.md`) | Expected until their tasks land |
 | `skipped: late` | The daemon started after the job's cut-off | Expected after a late start |
-| Heartbeat `STALE` | Daemon not running | `Start-ScheduledTask -TaskName StockSense`; if it exits at once look at the last lines of the day's log |
+| Heartbeat `STALE` | Daemon not running | Start it by hand (`scripts\run-daemon.ps1`); if it exits at once look at the last lines of the day's log |
 | "already running" | Another daemon holds `state/daemon.lock` | Nothing; there is already one |
