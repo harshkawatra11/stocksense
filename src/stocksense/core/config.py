@@ -159,6 +159,11 @@ class S1(_Frozen):
     universe: str
     long_only: bool
     k_max: int
+    # G2-C5 winner (docs/RESULTS-G2.md section 1): S1Policy options (`[s1.policy]`) and the score shaping that
+    # goes with them; the live wiring reads them, the defaults are the pre-G2 behaviour
+    policy: dict[str, Any] = Field(default_factory=dict)
+    score_ema: int | None = None
+    er_map: Literal["linear", "decile"] = "linear"
 
 
 class S2(_Frozen):
