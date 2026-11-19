@@ -229,6 +229,10 @@ def build_context(
     state = State(settings, clock)
     state.migrate()
     cal = TradingCalendar.from_store(settings, clock)
+    if "hooks" not in overrides:
+        from stocksense.live.wiring import production_hooks
+
+        overrides["hooks"] = dict(production_hooks(settings))
     return JobContext(settings, clock, state, cal, log_console=log_console, **overrides)  # type: ignore[arg-type]
 
 
