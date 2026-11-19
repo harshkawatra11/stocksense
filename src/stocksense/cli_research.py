@@ -172,16 +172,22 @@ def validate(
         str, typer.Argument(help="Candidate id (models/<candidate>/candidate_result.json).")
     ],
     open_lockbox: Annotated[bool, typer.Option("--open-lockbox")] = False,
+    gate_version: Annotated[
+        int | None,
+        typer.Option("--gate-version", min=1, max=2, help="1 or 2; default: by trial creation times."),
+    ] = None,
 ) -> None:
-    """Run the research gate for a stored candidate (T6.6)."""
+    """Run the research gate for a stored candidate (T6.6; gate v2 is G2-B1)."""
     from stocksense.validation.gate import validate_candidate
 
     settings = _settings(ctx)
     state = State(settings)
     state.migrate()
     try:
-        report = validate_candidate(candidate, settings, state, open_lockbox=open_lockbox)
-    except (FileNotFoundError, NotImplementedError) as e:
+        report = validate_candidate(
+            candidate, settings, state, open_lockbox=open_lockbox, gate_version=gate_version
+        )
+    except (FileNotFoundError, NotImplementedError, ValueError) as e:
         typer.echo(f"cannot validate {candidate!r}: {e}", err=True)
         raise typer.Exit(1) from e
     typer.echo(report.table())

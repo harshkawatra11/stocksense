@@ -1,0 +1,28 @@
+version = 2
+effective_from = "2026-11-20T00:00:00+05:30"   # trials registered before this are judged by v1
+[research]
+min_mean_rank_ic        = 0.02
+min_ic_tstat            = 3.0
+min_net_sharpe          = 1.0
+min_net_sharpe_2x_slip  = 0.5
+min_excess_tstat        = 2.0
+min_frac_positive_years = 0.70
+min_dsr                 = 0.95
+max_pbo                 = 0.30
+max_drawdown            = 0.25
+reference_capital_inr   = 500000
+dsr_variance_scope      = "family"     # v1 behaviour was "all"
+excess_benchmark        = "exposure_matched"   # v1 behaviour was "raw"
+[lockbox]
+min_net_sharpe          = 0.5
+min_net_return          = 0.0
+[paper]
+min_sessions            = 60
+min_net_sharpe          = 0.5
+max_drawdown            = 0.10
+max_ic_shortfall        = 0.5
+[promotion]
+min_shadow_sessions     = 20
+max_p_value             = 0.10
+[auction]
+min_strict_capture      = 0.5
