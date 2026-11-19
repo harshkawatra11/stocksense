@@ -60,7 +60,8 @@ def test_wf_run_wall_cap_stops_before_any_fold(world, tmp_path):
     assert "stopped: 0/2 folds done" in res.output
 
 
-def test_wf_run_and_select_take_the_gpu_lock(world, tmp_path):
+def test_wf_run_and_select_take_the_gpu_lock_for_gpu_models(world, tmp_path, monkeypatch):
+    monkeypatch.setattr("stocksense.core.gpu.spec_uses_gpu", lambda spec: True)
     p = _spec_file(tmp_path, params={"y": 2})
     with gpu_lock(world.settings):
         res = _run(
@@ -74,6 +75,22 @@ def test_wf_run_and_select_take_the_gpu_lock(world, tmp_path):
             "--fold", "f2", "--custom-folds", FOLDS,
         )  # fmt: skip
         assert res.exit_code == 3 and "gpu busy" in res.output
+
+
+def test_wf_run_and_select_ignore_the_gpu_lock_for_cpu_models(world, tmp_path):
+    p = _spec_file(tmp_path, params={"y": 3})
+    with gpu_lock(world.settings):
+        res = _run(
+            world, "research", "wf-run", "--spec-json", str(p), "--folds", "f1", "--custom-folds", FOLDS
+        )
+        assert res.exit_code == 0 and "gpu busy" not in res.output
+        cfg = tmp_path / "c.json"
+        cfg.write_text(json.dumps([{"alphas": [1.0]}]), encoding="utf-8")
+        res = _run(
+            world, "research", "select-nn", "--family", "ridge", "--target", "y_oc", "--configs", str(cfg),
+            "--fold", "f2", "--custom-folds", FOLDS,
+        )  # fmt: skip
+        assert res.exit_code == 0 and "gpu busy" not in res.output
 
 
 def test_select_nn_scores_configs_on_inner_validation_and_registers_nothing(world, tmp_path):
