@@ -7,16 +7,19 @@ Usage: python scripts/t75d_compute.py time            # time the first 3 dates (
 
 from __future__ import annotations
 
+import msvcrt
 import sys
 import time
 from datetime import date
 
 from stocksense.core.config import load_settings
+from stocksense.core.paths import Paths
 from stocksense.features import kronos_feats as kf
 from stocksense.features.base import FeatureContext
 from stocksense.models import kronos_model as km
 
 START, END = date(2016, 1, 4), date(2025, 9, 30)
+MAX_WALL_SECONDS = 2 * 3600  # hard cap on GPU wall time; the run is resumable per date
 TAG = "small-zs-r150"
 
 
@@ -49,7 +52,14 @@ def main() -> None:
         ds = decision_dates(s, every)
         cfg = kf.KronosConfig(lookback=128, n_paths=n_paths, max_rank=150)
         print(f"run: {len(ds)} dates, n_paths={n_paths}, every={every}", flush=True)
+        lock = open(Paths(s).state / "gpu.lock", "a+b")  # noqa: SIM115 - held until the process exits
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)  # raises if another GPU job holds it
+        t0 = time.time()
         for i, d in enumerate(ds):
+            if time.time() - t0 > MAX_WALL_SECONDS:
+                print(f"STOPPED: wall cap {MAX_WALL_SECONDS}s reached before {d}", flush=True)
+                break
             t = time.time()
             done = kf.compute_kronos_range(s, [d], TAG, bundle, config=cfg)
             print(f"{i + 1}/{len(ds)} {d} computed={bool(done)} sec={time.time() - t:.1f}", flush=True)
