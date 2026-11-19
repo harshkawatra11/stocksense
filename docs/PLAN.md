@@ -1681,6 +1681,7 @@ Preconditions before anyone writes order code: `[paper]` gate passed on ≥ 60 s
 - [ ] P13 Minute-bar intraday
 - [ ] P14 UI
 - [ ] P15 Optional hardware
+- [ ] Program G2 — see docs/PLAN-G2.md Part 9
 
 Execution order is the order of this list. Phase 9 deliberately precedes Phase 8.
 

@@ -22,6 +22,7 @@ An autonomous NSE quant research and paper-trading system. Built from zero on 20
 - Run tests: `.venv\Scripts\python.exe -m pytest tests -q`
 - Commits: author Harsh Kawatra <harshkawatra11@gmail.com>; add no attribution lines.
 - "Kronos" in this project means `github.com/shiyu-coder/Kronos`, never Amazon Chronos.
+- Program G2 (audit + plan to win): docs/PLAN-G2.md
 
 ## How it works and what each source is for (full table: `docs/PLAN.md` A.6)
 
