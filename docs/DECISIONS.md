@@ -211,3 +211,11 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 
 ## Phase 13
 - T2.8 retry (2026-11-13): the 17 failed windows (2012-09-05..2012-10-02 four windows, 2015-01-21..2015-04-21 thirteen windows) were re-run one window each with `ingest announcements --from <a> --to <a+6>`; all 17 succeeded (14,948 rows in total) and are now cached. The earlier note that they "succeeded on retry" was wrong: the original run left them failed, this retry fixed them. No code change.
+
+## Phase 9 (T9.5)
+
+- 2026-11-13 T9.5: `strict_capture` = mean strict net return / mean auction net return over the S2 trades that have both 5-minute bars. The code was right and the first test expectation was wrong: the strict leg keeps only part of the gross move but pays the full cost, so the ratio is below 1 and can be negative (a strict net return below zero is a finding, not an error). It is defined only when the auction net mean is positive; otherwise it is reported as `null` with a note, and the two net means are still stored. The test now asserts `< 1` and the identity strict/auction.
+- 2026-11-13 T9.5: `learn/nightly.py` holds only the production-fit piece of T11.1 (`fit_production`, `ModelBag`, `load_bag`), which T9.5 step 6 needs; it is kept and now has tests (`tests/integration/test_nightly_fit.py`). The rest of T11.1 stays for Phase 11.
+- 2026-11-13 T9.5: GBM walk-forwards missing after P60 (`y_c2o_20`, `y_oc`, 11 folds of `y_c2o_10`) were run with 3 seeds, no time-budget reduction needed (one fold 40-60 s for S1, 2-4 min for S2). Floor and GBM trials were finished (status `done`, top-10 backtest metrics) by `stocksense research finish-trials`; the walk-forward CLI does not finish a trial by itself.
+- 2026-11-13 T9.5 FINDING: in every S1 backtest the book-drawdown stop (`book_dd_stop` 0.15) fires in 2020 and never clears, because the backtest has no `resume` and a flat book never regains its peak. All 13 S1 trials are flat from 2021. The G1 verdict stands as run (FAIL); a backtest-only auto-resume variant must be registered as new trials (counted toward N), not used to overwrite these. Not done in T9.5.
+- 2026-11-13 T9.5: S2 `strict_capture` is -5.77 (k=5) and -4.10 (k=10): the auction-open edge is not capturable at 09:20 after costs. Both candidates stored as `shadow`, `validated=0`; lockbox not opened.
