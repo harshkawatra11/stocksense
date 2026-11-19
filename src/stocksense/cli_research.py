@@ -434,6 +434,27 @@ def g1_run_command(
     typer.echo(f"wrote {write_results(settings, state, docs)}")
 
 
+@research_app.command("s1-cost")
+def s1_cost(
+    ctx: typer.Context,
+    targets: Annotated[str, typer.Option(help="Comma-separated S1 targets.")] = "y_c2o_10,y_c2o_20",
+) -> None:
+    """G2-C5: the g2-s1cost grid (8 policy variants x targets); stores the best as a candidate."""
+    from stocksense.validation.g1_run import run_s1_cost
+
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    cal = TradingCalendar.from_store(settings, SystemClock())
+    out = run_s1_cost(settings, state, cal, targets=[t.strip() for t in targets.split(",") if t.strip()])
+    for n in out.notes:
+        typer.echo(f"note: {n}")
+    for p in out.plans:
+        r = out.results[str(p.plan.trial_id)]
+        typer.echo(f"{p.variant:<3} {p.plan.target:<9} {p.plan.trial_id}  net {r.ref_sharpe:+.3f}")
+    typer.echo(f"candidate: {out.candidate}")
+
+
 # ---- Program G2 model sweep (cards D0.5-D0.7) ---------------------------------------------------------
 
 

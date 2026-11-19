@@ -594,7 +594,11 @@ class S1Policy:
                 raise ValueError("auto-resume is backtest-only: a policy with a live state needs `resume`")
         km = k_max if k_max is not None else settings.strategies.s1.k_max
         h = horizon_of(getattr(spec, "target", spec))
-        cfg = S1Config(h, km, settings.risk, costs, slippage, overlay, hysteresis, **(policy_opts or {}))
+        opts = dict(policy_opts or {})
+        risk = settings.risk
+        if "max_fixed_cost_bps" in opts:  # G2-C5: a risk override, not an S1Config field
+            risk = risk.model_copy(update={"max_fixed_cost_bps": float(opts.pop("max_fixed_cost_bps"))})
+        cfg = S1Config(h, km, risk, costs, slippage, overlay, hysteresis, **opts)
         self.cfg, self.source, self.access, self.meta = cfg, score_source, panel_access, meta
         self.state, self.book_name, self._entries_allowed = state, book_name, entries_allowed
         self._peak = 0.0

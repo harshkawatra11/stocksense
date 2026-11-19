@@ -55,6 +55,7 @@ from stocksense.portfolio.construct import (
     PanelDay,
     S1Policy,
     S2Policy,
+    horizon_of,
 )
 from stocksense.portfolio.meta import MetaModel, build_meta_samples, size_multiplier, veto
 from stocksense.validation.lockbox import research_end
@@ -104,6 +105,9 @@ class G1Config:
     er_map: Literal["linear", "decile"] = "linear"
     # G2-C3: S1 universe membership follows the u500 hysteresis flag of panel_universe, not rank <= 500
     universe_flag: bool = False
+    # G2-C5: S1Policy(policy_opts=) for the g2-s1cost grid, and the trial family S1 plans register under
+    s1_policy: Mapping[str, Any] | None = None
+    family_s1: str = FAMILY_S1
 
     def resolved(self, settings: Settings) -> G1Config:
         caps = self.capitals if self.capitals is not None else tuple(settings.costs.grid.capital_inr)
@@ -605,6 +609,7 @@ def _spec_s1(
         **({"score_ema": cfg.score_ema} if cfg.score_ema is not None else {}),
         **({"er_map": cfg.er_map} if cfg.er_map != "linear" else {}),
         **({"universe_flag": True} if cfg.universe_flag else {}),
+        **({"policy": dict(cfg.s1_policy)} if cfg.s1_policy else {}),
         **extra,
     }  # fmt: skip
 
@@ -633,7 +638,7 @@ def plan_grid(
                 plans.append(
                     TrialPlan(
                         "s1",
-                        FAMILY_S1,
+                        cfg.family_s1,
                         target,
                         _spec_s1(cfg, target, k, ov, models),
                         f"S1 {target} k={k} overlay={'on' if ov else 'off'}",
@@ -643,6 +648,65 @@ def plan_grid(
         for k in S2_K_MAX:
             plans.append(TrialPlan("s2", FAMILY_S2, S2_TARGET, _spec_s2(cfg, k, s2_models), f"S2 k={k}"))
     return plans
+
+
+@dataclass(frozen=True)
+class S1CostPlan:
+    """One trial of the g2-s1cost grid: the variant name, the G1Config that produced its spec and the plan."""
+
+    variant: str
+    cfg: G1Config
+    plan: TrialPlan
+
+
+FAMILY_S1COST = "g2-s1cost"
+S1COST_TARGETS = ("y_c2o_10", "y_c2o_20")
+
+
+def s1cost_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """The eight variants of card C5: name -> (policy options, G1Config overrides). h = target horizon."""
+    v1 = {"exit_rank": 50, "min_hold": h // 2}
+    v2 = {**v1, "free_extension": True, "rebuy_block": 5}
+    v5 = {**v2, "switch_hurdle": True}
+    return {
+        "V1": (v1, {}),
+        "V2": (v2, {}),
+        "V3": (v2, {"score_ema": 3}),
+        "V4": (v2, {"score_ema": 5}),
+        "V5": (v5, {"score_ema": 5}),
+        "V6": (v5, {"score_ema": 5, "er_map": "decile"}),
+        "V7": ({**v5, "exit_rank": 75}, {"score_ema": 5, "er_map": "decile"}),
+        "V8": ({**v5, "max_fixed_cost_bps": 10}, {"score_ema": 5, "er_map": "decile"}),
+    }
+
+
+def plan_s1cost(
+    cfg: G1Config,
+    s1_models: Mapping[str, Sequence[ModelTrial]],
+    *,
+    k_max: int,
+    overlay: bool,
+    auto_resume: int = 20,
+    targets: Sequence[str] = S1COST_TARGETS,
+) -> list[S1CostPlan]:
+    """Card C5: 8 variants x targets on the fixed GBM scores (base: k_max/overlay of the best G1 S1 trial,
+    auto-resume 20, hysteresis universe flag). A target without models contributes nothing."""
+    out: list[S1CostPlan] = []
+    for target in targets:
+        models = s1_models.get(target, ())
+        if not models:
+            continue
+        for name, (opts, over) in s1cost_variants(horizon_of(target)).items():
+            vcfg = replace(
+                cfg, family_s1=FAMILY_S1COST, s1_auto_resume=auto_resume, universe_flag=True,
+                s1_policy=opts, **over,
+            )  # fmt: skip
+            plan = TrialPlan(
+                "s1", FAMILY_S1COST, target, _spec_s1(vcfg, target, k_max, overlay, models),
+                f"S1 cost {name} {target} k={k_max}",
+            )  # fmt: skip
+            out.append(S1CostPlan(name, vcfg, plan))
+    return out
 
 
 def register_plans(state: State, plans: Sequence[TrialPlan]) -> list[TrialPlan]:
@@ -756,6 +820,7 @@ class G1Runner:
         meta: WalkForwardMeta | None = None,
         entry: str = "close",
         auto_resume: int | None = None,
+        policy_opts: Mapping[str, Any] | None = None,
     ) -> Callable[[SlippageTable], Any]:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
@@ -764,6 +829,7 @@ class G1Runner:
             base = S1Policy(
                 spec, settings, source, world.s1_access(self.cfg.universe_flag), settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
+                policy_opts=policy_opts,
             )  # fmt: skip
             pol: Any = _MetaDated(base, meta) if meta is not None else _PolicyWrapper(base)
             return _OpenEntry(pol) if entry == "open" else pol
@@ -800,6 +866,7 @@ class G1Runner:
             meta=meta,
             entry=sp.get("entry", "close"),
             auto_resume=sp.get("auto_resume_sessions"),
+            policy_opts=sp.get("policy"),
         )
 
     def _meta_for(self, base_trial: str) -> WalkForwardMeta:
