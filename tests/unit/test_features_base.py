@@ -463,3 +463,10 @@ def test_load_features_purposes(built):
     ).collect()
     assert set(sub.columns) == {"date", "sid", "ret_1"}
     assert sub["date"].min() >= m.sessions[10] and sub["date"].max() <= m.sessions[20]
+
+
+def test_kronos_feats_not_in_default_registry_modules():
+    """G2-A7: zero-shot Kronos features added nothing; the module stays importable but is not default."""
+    from stocksense.features.registry import FEATURE_MODULES
+
+    assert "kronos_feats" not in FEATURE_MODULES
