@@ -25,7 +25,12 @@ from stocksense.labels.forward import load_labels
 from stocksense.learn.nightly import load_bag
 from stocksense.models import store
 from stocksense.models.base import ModelSpec, build_model
-from stocksense.models.ensemble import expected_return_map, expected_return_map_decile, rank_scores
+from stocksense.models.ensemble import (
+    expected_return_map,
+    expected_return_map_decile,
+    rank_scores,
+    smooth_scores,
+)
 from stocksense.paper.broker import CorpAction
 from stocksense.paper.ledger import NewOrder
 from stocksense.portfolio.construct import (
@@ -89,12 +94,19 @@ def live_ids(state: State) -> dict[str, str | None]:
     return out
 
 
-def live_policy(state: State) -> dict:
-    """The live S1 policy (kv JSON `live_policy:s1`): k_max, overlay, S1Config overrides under `policy`,
-    optional `er_map` ('linear' | 'decile'). Default: the g1-s1-y_c2o_10-cce12fb757 spec (k_max 10, no
-    overlay) with every other option at its default."""
+def live_policy(state: State, settings: Settings | None = None) -> dict:
+    """The live S1 policy: k_max, overlay, S1Config overrides under `policy`, `er_map` ('linear' | 'decile')
+    and `score_ema` (span or None).
+
+    Source of truth (G2-G5 prep): `[s1.policy]` and `[s1] score_ema / er_map` of config/strategies.toml (C5
+    winner), k_max 10 and no overlay (the winner's spec; the `[s1] k_max` of the research grid is not used).
+    kv JSON `live_policy:s1` overrides key by key when set. Without `settings` (old callers) the pre-C5
+    defaults apply."""
+    base: dict = {"k_max": 10, "overlay": False, "policy": {}, "er_map": "linear", "score_ema": None}
+    if settings is not None:
+        s1 = settings.strategies.s1
+        base.update(policy=dict(s1.policy), er_map=s1.er_map, score_ema=s1.score_ema)
     raw = state.kv_get("live_policy:s1")
-    base = {"k_max": 10, "overlay": False, "policy": {}, "er_map": "linear"}
     if raw:
         base.update(json.loads(raw))
     return base
@@ -127,12 +139,74 @@ def predict_frame(settings: Settings, model_id: str, d: date) -> pl.DataFrame:
     return pl.DataFrame({"date": f["date"], "sid": f["sid"], "score": score})
 
 
+BACKFILL_SESSIONS = 15
+MIN_LIVE_HISTORY = 5  # consecutive live pred dates needed before the score EMA is meaningful
+
+
+def consecutive_live_dates(settings: Settings, calendar, model_id: str, end: date) -> int:  # type: ignore[no-untyped-def]
+    """How many consecutive sessions ending at `end` have live preds of `model_id`."""
+    try:
+        have = set(
+            io.read(settings, "preds", end=end, columns=["date"], sub=model_id).collect()["date"].to_list()
+        )
+    except (DataNotAvailable, FileNotFoundError, pl.exceptions.PolarsError):
+        return 0
+    n, cur = 0, end
+    while cur in have:
+        n += 1
+        try:
+            cur = calendar.prev_session(cur)
+        except ValueError:
+            break
+    return n
+
+
+def backfill_live_preds(  # type: ignore[no-untyped-def]
+    ctx_or_settings, state: State, end_date: date, n_sessions: int = BACKFILL_SESSIONS, *,
+    calendar=None, clock=None,
+) -> int:  # fmt: skip
+    """Score the last `n_sessions` completed sessions up to `end_date` with the live bag (mode 'live') so the
+    score EMA has history. Idempotent: sessions that already have preds are skipped, sessions without
+    features are skipped. Returns the number of sessions scored. The scores of the oldest sessions are
+    partly in-sample for the bag (fitted as of the last session); that only shapes the EMA warm-up."""
+    settings = getattr(ctx_or_settings, "settings", ctx_or_settings)
+    cal = calendar or getattr(ctx_or_settings, "calendar", None)
+    if cal is None:
+        from stocksense.core.calendar import TradingCalendar
+
+        cal = TradingCalendar.from_store(settings, clock)
+    clk = clock or getattr(ctx_or_settings, "clock", None)
+    mid = str(live_ids(state)["live_model:s1"])
+    sessions = cal.sessions(cal.shift(end_date, -(n_sessions - 1)), end_date)
+    try:
+        have = set(
+            io.read(settings, "preds", end=end_date, columns=["date"], sub=mid).collect()["date"].to_list()
+        )
+    except (DataNotAvailable, FileNotFoundError, pl.exceptions.PolarsError):
+        have = set()
+    done = 0
+    for t in sessions:
+        if t in have:
+            continue
+        try:
+            frame = predict_frame(settings, mid, t)
+        except DataNotAvailable:
+            continue
+        store.append_preds(settings, mid, frame, "live", clock=clk)
+        done += 1
+    return done
+
+
 def stage_predict(ctx, d: date) -> str:  # type: ignore[no-untyped-def]
     ids = live_ids(ctx.state)
     mid = str(ids["live_model:s1"])
     frame = predict_frame(ctx.settings, mid, d)
     store.append_preds(ctx.settings, mid, frame, "live", clock=ctx.clock)
-    return f"s1:{frame.height} names"
+    out = f"s1:{frame.height} names"
+    if consecutive_live_dates(ctx.settings, ctx.calendar, mid, d) < MIN_LIVE_HISTORY:
+        n = backfill_live_preds(ctx, ctx.state, d, BACKFILL_SESSIONS)
+        out += f", backfilled {n} sessions"
+    return out
 
 
 # ---- the live score source ----------------------------------------------------------------------------
@@ -144,14 +218,16 @@ class LiveScoreSource:
     score: the day's live score ranked to [-0.5, 0.5]. er: `max(0, b) * score` with b the through-the-origin
     slope of the raw label on the score over the trailing 504 dates whose label ended before d, computed on
     the union of the calibration walk-forward trial's stored predictions (ranked per date) and the live
-    predictions; with `er_map == 'decile'` the isotonic decile map is used instead. Cached per date."""
+    predictions; with `score_ema` the ranked blend is smoothed (`models.ensemble.smooth_scores`) first; with
+    `er_map == 'decile'` the isotonic decile map is used instead. Cached per date."""
 
     def __init__(
         self, settings: Settings, state: State, strategy: str = "s1", target: str = S1_TARGET,
-        er_map: str | None = None,
+        er_map: str | None = None, score_ema: int | None = None,
     ) -> None:  # fmt: skip
         self.settings, self.state, self.strategy, self.target = settings, state, strategy, target
         self.er_map = er_map
+        self.score_ema = score_ema
         self._cache: dict[date, DayScores | None] = {}
 
     def _frames(self, d: date) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -193,7 +269,11 @@ class LiveScoreSource:
             start=blend["date"].min(),
             columns=[self.target, END_COLUMN[self.target]],
         ).collect()
-        er_map = self.er_map or live_policy(self.state).get("er_map", "linear")
+        pol = live_policy(self.state, self.settings) if self.strategy == "s1" else {}
+        er_map = self.er_map or pol.get("er_map", "linear")
+        span = self.score_ema if self.score_ema is not None else pol.get("score_ema")
+        if span:  # the research smoother itself: causal EMA per sid (restart after a gap), re-ranked per date
+            blend = smooth_scores(blend, int(span))
         if er_map == "decile":
             er = expected_return_map_decile(blend, lab, self.target)
         else:
@@ -333,8 +413,10 @@ def compute_plan(ctx, d: date, cap: float, *, allow_entries: bool | None = None)
     """(S1Plan, context dict) for the close of d at capital `cap`; the book is read from the ledger."""
     from stocksense.costs.slippage import SlippageTable
 
-    pol = live_policy(ctx.state)
-    sc = LiveScoreSource(ctx.settings, ctx.state, er_map=pol.get("er_map")).scores(d)
+    pol = live_policy(ctx.state, ctx.settings)
+    sc = LiveScoreSource(
+        ctx.settings, ctx.state, er_map=pol.get("er_map"), score_ema=pol.get("score_ema")
+    ).scores(d)
     if sc is None:
         raise DataNotAvailable(f"no live scores for {d}")
     access = live_panel_access(ctx.settings, ctx.calendar, d)
@@ -380,7 +462,7 @@ def _plan_json(ctx, d: date, cap: float, stale: bool, plan: S1Plan, info: dict) 
         "k_raw": plan.k_raw, "gross_target": plan.gross_target, "allow_entries": info["allow_entries"],
         "checks": info["checks"], "exits": {str(k): v for k, v in plan.exits.items()},
         "extended": list(plan.extended), "sells": sells, "entries": entries,
-        "policy": live_policy(ctx.state),
+        "policy": live_policy(ctx.state, ctx.settings),
     }  # fmt: skip
 
 
@@ -420,7 +502,7 @@ def hook_s1_orders(ctx, d: date, cap: float):  # type: ignore[no-untyped-def]
         replanned = "no stored plan"
     elif not plan.get("cap_ref") or abs(cap / plan["cap_ref"] - 1.0) > PLAN_CAPITAL_TOLERANCE:
         replanned = "capital moved"
-    elif plan.get("policy") != live_policy(ctx.state):
+    elif plan.get("policy") != live_policy(ctx.state, ctx.settings):
         replanned = "policy changed"
     if replanned:
         p, info = compute_plan(ctx, prev, cap)

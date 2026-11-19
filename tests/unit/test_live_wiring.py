@@ -16,6 +16,7 @@ from stocksense.data import io
 from stocksense.features.build import load_features
 from stocksense.learn.nightly import fit_production
 from stocksense.live import wiring
+from stocksense.models import store
 from stocksense.models.base import ModelSpec
 from stocksense.validation.walkforward import run_walk_forward
 from tests.fixtures.g1_world import LOCKBOX_START, build_g1_world
@@ -77,9 +78,129 @@ def test_predict_stage_writes_live_preds_for_every_u500_name(env):
     out = wiring.stage_predict(env.ctx, env.last)
     uni = io.read(env.w.settings, "panel_universe", start=env.last, end=env.last).collect()
     n = int(uni["u500"].sum())
-    assert out == f"s1:{n} names"
+    assert out.startswith(f"s1:{n} names")
     p = io.read(env.w.settings, "preds", start=env.last, end=env.last, sub=env.mid).collect()
     assert p.height == n and set(p["mode"]) == {"live"}
+    # no live history yet: the predict stage backfilled the last sessions (G2-G5 prep)
+    assert wiring.consecutive_live_dates(env.ctx.settings, env.ctx.calendar, env.mid, env.last) >= 5
+
+
+def test_predict_stage_does_not_backfill_when_history_exists(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(wiring, "backfill_live_preds", lambda *a, **k: calls.append(1))
+    wiring.stage_predict(env.ctx, env.last)
+    assert calls == []
+
+
+def test_backfill_scores_the_last_sessions_and_is_idempotent(env):
+    cal = env.w.calendar
+    sess = cal.sessions(cal.shift(env.last, -7), env.last)
+    before = io.read(env.w.settings, "preds", sub=env.mid).collect().sort("date", "sid")
+    out = wiring.backfill_live_preds(env.ctx, env.st, env.last, n_sessions=8)
+    after = io.read(env.w.settings, "preds", sub=env.mid).collect().sort("date", "sid")
+    assert out == 0  # everything is already there (the predict stage backfilled it)
+    assert after.equals(before)  # rows, scores and made_at untouched
+    assert set(sess) <= set(after["date"].unique().to_list())
+    assert set(after.filter(pl.col("date").is_in(sess))["mode"]) == {"live"}
+
+
+def test_backfill_fills_a_missing_session(env):
+    cal = env.w.calendar
+    gone = cal.shift(env.last, -3)
+    p = io.read(env.w.settings, "preds", sub=env.mid).collect()
+    keep = p.filter(pl.col("date") != gone)
+    for f in io.list_partitions(env.w.settings, "preds", sub=env.mid):
+        f.unlink()
+    store.append_preds(
+        env.w.settings, env.mid, keep.select("date", "sid", "score"), "live", clock=env.ctx.clock
+    )
+    assert gone not in io.read(env.w.settings, "preds", sub=env.mid).collect()["date"].to_list()
+    assert wiring.backfill_live_preds(env.ctx, env.st, env.last, n_sessions=8) == 1
+    assert wiring.backfill_live_preds(env.ctx, env.st, env.last, n_sessions=8) == 0
+    assert gone in io.read(env.w.settings, "preds", sub=env.mid).collect()["date"].to_list()
+
+
+def test_score_ema_matches_a_hand_computed_causal_ema(env, monkeypatch):
+    cal = env.w.calendar
+    dates = cal.sessions(cal.shift(env.last, -5), env.last)
+    live = (
+        io.read(env.w.settings, "preds", end=env.last, columns=["date", "sid", "score"], sub=env.mid)
+        .collect()
+        .filter(pl.col("date").is_in(dates))
+        .sort("date", "sid")
+    )
+    src = wiring.LiveScoreSource(env.w.settings, env.st, er_map="linear", score_ema=5)
+    monkeypatch.setattr(src, "_frames", lambda d: (live.filter(pl.col("date") <= d), live.clear()))
+    got = src.scores(env.last)
+    ranked = {
+        d: dict(
+            zip(
+                g["sid"].to_list(),
+                ((g["score"].rank("average") - 1) / (g.height - 1) - 0.5).to_list(),
+                strict=True,
+            )
+        )
+        for d in dates
+        for g in [live.filter(pl.col("date") == d)]
+    }
+    a = 2.0 / (5 + 1)
+    ema: dict[int, float] = {}
+    for d in dates:
+        for sid, v in ranked[d].items():
+            ema[sid] = v if sid not in ema else a * v + (1 - a) * ema[sid]
+    sids = sorted(ema)
+    s = pl.Series([ema[x] for x in sids])
+    want = dict(zip(sids, ((s.rank("average") - 1) / (len(sids) - 1) - 0.5).to_list(), strict=True))
+    assert set(got.score) == set(want)
+    for sid, v in want.items():
+        assert got.score[sid] == pytest.approx(v, abs=1e-9)
+    plain = wiring.LiveScoreSource(env.w.settings, env.st, er_map="linear", score_ema=0)
+    monkeypatch.setattr(plain, "_frames", lambda d: (live.filter(pl.col("date") <= d), live.clear()))
+    assert plain.scores(env.last).score != got.score  # smoothing changes the ranks
+
+
+def test_score_ema_uses_the_same_function_as_the_research_smoother(env):
+    from stocksense.models.ensemble import smooth_scores
+
+    assert wiring.smooth_scores is smooth_scores
+
+
+def test_live_policy_defaults_come_from_strategies_toml_and_kv_overrides(env):
+    s = env.w.settings
+    pol = wiring.live_policy(env.st, s)
+    assert pol["er_map"] == "decile" and pol["score_ema"] == 5
+    assert pol["k_max"] == 10 and pol["overlay"] is False
+    assert pol["policy"] == dict(s.strategies.s1.policy)
+    assert pol["policy"]["max_fixed_cost_bps"] == 10
+    env.st.kv_set("live_policy:s1", json.dumps({"er_map": "linear", "score_ema": None}))
+    try:
+        o = wiring.live_policy(env.st, s)
+        assert o["er_map"] == "linear" and o["score_ema"] is None and o["policy"] == pol["policy"]
+    finally:
+        con = env.st.connect()
+        try:
+            con.execute("DELETE FROM kv WHERE key='live_policy:s1'")
+        finally:
+            con.close()
+
+
+def test_policy_options_reach_s1config_including_max_fixed_cost_bps(env):
+    from stocksense.costs.slippage import SlippageTable
+    from stocksense.portfolio.construct import S1Config
+
+    s = env.w.settings
+    pol = wiring.live_policy(env.st, s)
+    cfg = S1Config.from_settings(
+        s, 10, SlippageTable.load_latest(s), k_max=pol["k_max"], overlay=pol["overlay"], **pol["policy"]
+    )
+    assert (cfg.exit_rank, cfg.min_hold, cfg.free_extension, cfg.rebuy_block, cfg.switch_hurdle) == (
+        50,
+        5,
+        True,
+        5,
+        True,
+    )
+    assert cfg.risk.max_fixed_cost_bps == 10 and cfg.k_max == 10
 
 
 def test_live_score_source_ranks_and_gives_nonnegative_er(env):
@@ -89,9 +210,7 @@ def test_live_score_source_ranks_and_gives_nonnegative_er(env):
     v = np.array(list(sc.score.values()))
     assert v.min() >= -0.5 - 1e-9 and v.max() <= 0.5 + 1e-9
     assert min(sc.er.values()) >= 0.0 and max(sc.er.values()) > 0.0
-    assert (
-        wiring.LiveScoreSource(env.w.settings, env.st).scores(env.w.calendar.prev_session(env.last)) is None
-    )
+    assert wiring.LiveScoreSource(env.w.settings, env.st).scores(env.w.calendar.shift(env.last, -20)) is None
 
 
 def test_decile_er_map_option(env):
@@ -221,7 +340,7 @@ def test_plan_without_capital_reference_is_skipped(env, lctx):
 def _stored_plan(env, cap_ref):
     plan = {
         "date": env.last.isoformat(), "cap_ref": cap_ref, "allow_entries": True, "note": "", "checks": [],
-        "policy": wiring.live_policy(env.st),
+        "policy": wiring.live_policy(env.st, env.w.settings),
         "entries": [
             {"sid": 1, "symbol": "AAA", "weight": 0.10, "score": 0.4, "rank": 1, "er": 0.01, "ref_close": 100.0},  # noqa: E501
             {"sid": 2, "symbol": "BBB", "weight": 0.10, "score": 0.3, "rank": 2, "er": 0.01, "ref_close": 50.0},  # noqa: E501
@@ -566,16 +685,16 @@ def test_stored_plan_is_replanned_when_the_policy_or_capital_changed(env, lctx):
     d = env.w.calendar.next_session(env.last)
     _stored_plan(env, CAP)
     p = json.loads(env.st.kv_get(f"s1_plan:{env.last.isoformat()}"))
-    p["policy"] = wiring.live_policy(env.st)
+    p["policy"] = wiring.live_policy(env.st, env.w.settings)
     env.st.kv_set(f"s1_plan:{env.last.isoformat()}", json.dumps(p))
     lctx._hub = FakeHub({})
     [(_, _o, payload)] = wiring.hook_s1_orders(lctx, d, CAP)
     assert payload["replanned"] == ""  # same capital, same policy: the stored plan stands
-    env.st.kv_set("live_policy:s1", json.dumps({"er_map": "decile"}))
+    env.st.kv_set("live_policy:s1", json.dumps({"er_map": "linear"}))
     try:
         [(_, _o, payload)] = wiring.hook_s1_orders(lctx, d, CAP)
         assert payload["replanned"] == "policy changed"
-        assert json.loads(env.st.kv_get(f"s1_plan:{env.last.isoformat()}"))["policy"]["er_map"] == "decile"
+        assert json.loads(env.st.kv_get(f"s1_plan:{env.last.isoformat()}"))["policy"]["er_map"] == "linear"
         [(_, _o, payload)] = wiring.hook_s1_orders(lctx, d, CAP * 2)
         assert payload["replanned"] == "capital moved"
     finally:

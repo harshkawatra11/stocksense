@@ -414,15 +414,15 @@ Card format: Goal · Depends on · Provides · Files · Spec · Tests (each with
 **Tests:** live IC row inserted from a hand-made preds/labels pair (IC computed by hand for 5 names: perfect order → 1.0); decay scale thresholds; report renders from a fixture ledger with the first-line sentence and every number equal to the JSON.
 **Commit:** `G2-G4: live IC, decay scale, weekly refit, daily report`.
 
-### G5 Go live and the five-session proof
-**Depends:** G1–G4 merged; suite green; A2 done.
+### G5 Go live and the five-session proof (manual start, no scheduled task)
+**Depends:** G1-G4 merged; suite green; A2 done; `G2-G5prep` merged (winner policy and score EMA wired, fresh model).
+**Decision (2026-11-20):** nothing starts by itself. No Windows scheduled task is installed (`scripts\install-task.ps1` stays unused). The user starts the daemon by hand, when they decide, from the "Go-live checklist" in `docs/RUNBOOK.md`.
 **Spec:**
-1. Before install: `stocksense job eod_pipeline --date <last completed session>` runs every stage (stubs excepted) and writes `reports/<date>.md`; `stocksense job s1_entries --date <today>` is only run by the daemon.
-2. Fit a fresh production model up to the last completed session: `.venv\Scripts\python.exe -c "..."` calling `fit_production(spec, settings, state, as_of=<last session>, allow_beyond_research=True, note='go-live')`; set kv `live_model:s1` to it.
-3. Install: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-task.ps1`. Verify: `Get-ScheduledTask -TaskName StockSense | Select-Object State`; `stocksense doctor` heartbeat < 60 s.
-4. Tell the user (in the report): laptop on, plugged in, lid "Do nothing", sleep never on AC; deposit determines K (₹ table in Part 1).
-5. The orchestrator checks once per session for five consecutive sessions: `reports/<d>.md` exists; `job_runs` has no unresolved `failed`; fills reconciled (`fills.reconciled = 1` for that date); `data-status` fresh. Record the five dates in `docs/PLAN.md` Part H P10 and in Part 9 here.
-**Commit:** `G2-G5: go live on paper` (docs only).
+1. Prep (done by G5prep, no broker call): live policy read from `config/strategies.toml` (`[s1.policy]`, `score_ema`, `er_map`; kv `live_policy:s1` overrides), `LiveScoreSource` implements the score EMA, the predict stage backfills the last 15 sessions of live preds when fewer than 5 consecutive exist, a fresh production model fitted as of the last completed session and set as kv `live_model:s1`, an offline dry run of `eod_pipeline`.
+2. Go live (user, by hand): the checklist in `docs/RUNBOOK.md` (`stocksense doctor`, then `scriptsun-daemon.ps1`).
+3. Tell the user: laptop on, plugged in, lid "Do nothing", sleep never on AC; the deposit determines K (Rs table in Part 1); the research gate failed, so the system is paper-only and unvalidated.
+4. The orchestrator checks once per session for five consecutive sessions: `reports/<d>.md` exists; `job_runs` has no unresolved `failed`; fills reconciled (`fills.reconciled = 1` for that date); `data-status` fresh. Record the five dates in `docs/PLAN.md` Part H P10 and in Part 9 here.
+**Commit:** `G2-G5: go live on paper` (docs only), after the user has started it.
 
 ---
 
