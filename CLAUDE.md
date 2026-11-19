@@ -22,3 +22,15 @@ An autonomous NSE quant research and paper-trading system. Built from zero on 20
 - Run tests: `.venv\Scripts\python.exe -m pytest tests -q`
 - Commits: author Harsh Kawatra <harshkawatra11@gmail.com>; add no attribution lines.
 - "Kronos" in this project means `github.com/shiyu-coder/Kronos`, never Amazon Chronos.
+
+## How it works and what each source is for (full table: `docs/PLAN.md` A.6)
+
+Every evening: download official NSE files, rebuild the split-adjusted panel, compute features, score stocks with models trained only on past data. Before the close: read the broker account's cash, size paper positions from it, record each paper trade with a reason. Next open: sell. Overnight: learn. Paper only; no order code exists.
+
+- **NSE archive files + NSE JSON APIs**: the permanent record (prices, delivery, F&O, indices, corporate actions, announcements). All research is built from these.
+- **Angel One**: the account's capital (`funds`, `holdings`), live quotes with bid/ask and circuit limits, 5-minute bars. Read methods only; never orders.
+- **Upstox Analytics Token** (read-only, 1 year): 1-minute history from 2022, a second live-quote source. The old API key/secret and daily access token are not used.
+- **NSE MCP `cm-market`**: delayed quote for held positions only when both brokers fail. **NSE MCP `nse-bhavcopy`**: spot-checks 20 stored prices against our own data. Neither is a research data source.
+- **Telegram** (optional alerts), **stooq** (optional macro series), **RSS** (Phase 8 news), **Hugging Face** (Kronos weights).
+- **Kronos**: zero-shot tested, no added value (2026-11-19). Code stays vendored for fine-tune and 5-minute tests only.
+- A source with no job in A.6 does not belong in the project: remove it rather than leave it half-wired.

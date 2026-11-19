@@ -54,6 +54,31 @@ Every new session read the old branches, the old plan, the old instruction files
 4. Optional: a Telegram bot token and chat id for a morning and evening message.
 5. Check one real Angel One contract note for the delivery brokerage actually charged (Angel's own pages disagree: ₹0 on one page, "lower of ₹20 or 0.1%, minimum ₹5" on another). T5.1 uses the costlier figure until told otherwise.
 
+## A.6 How StockSense works, and what each connected source is for (verified live 2026-11-19)
+
+**The loop, in one paragraph.** Every evening StockSense downloads the day's official NSE files, rebuilds a split-adjusted price panel, computes features, and scores every stock with models trained only on past data. Before the close it reads the real broker account's cash, sizes paper positions from it, and records each paper trade with a plain-English reason. Next morning it sells at the open, and overnight it learns from what happened. It is **paper only**: nothing in the system can place, modify or cancel an order (rule 2, enforced by `tests/unit/test_no_orders.py`).
+
+**Every outside source, and its single job.** A source with no job below is removed from the project.
+
+| Source | Status | What it is used for | What it is NOT used for |
+|---|---|---|---|
+| **NSE archive files** (`nsearchives.nseindia.com`: bhavcopy, delivery, F&O, indices, symbol changes, listings, price bands, participant OI) | primary | The permanent record of prices, volume, delivery, derivatives and index levels. All research, features, labels and backtests are built from these. Refreshed nightly (`eod_ingest`, from 18:30 IST). | Live prices (they appear only after the close). |
+| **NSE JSON APIs** (`www.nseindia.com/api`) | primary | Corporate actions (needed for correct returns), announcements, board meetings, results index, holidays, FII/DII, the 09:00–09:08 pre-open auction snapshot. | Anything intraday after 09:08. |
+| **Angel One SmartAPI** (API key, client code, password, TOTP secret in `.env`) | working, primary broker source | (1) **Capital**: `funds()` and `holdings()` read the account's cash at decision time; position sizes come from it (rule 6). (2) **Live quotes** (FULL mode): last price, bid/ask, depth, circuit limits, used for paper fills, spreads and risk checks. (3) **5-minute bars** that extend `intraday_bars`. (4) Instrument master (symbol to token). | **Placing, modifying or cancelling orders.** The same login could technically trade; only read methods exist in `src/`. |
+| **Upstox Analytics Token** (`STOCKSENSE_UPSTOX_ANALYTICS_TOKEN`, read-only, valid one year, tested 2026-11-19) | working, secondary | (1) **1-minute history** from January 2022 (`bars_1m`) for the minute-bar work in Phase 13. (2) **Second live-quote source**, so one broker failing does not blind the system. (3) Daily-candle cross-check. | Orders (the token cannot place them), and any need for a static IP. Needs yearly renewal (RUNBOOK). The API key/secret and daily access token are **not** used and were removed from `.env`. |
+| **NSE MCP: market data** (`cm-market`, `https://mcp.nseindia.in/cmmkt/mcp`) | working, last resort | One delayed quote per symbol (`cm_get_stock_quote`), used **only** for held positions when Angel and Upstox both fail (`NseMcpQuotes`, source `nse_mcp_delayed`). | Bulk data, bid/ask, circuit limits, research. |
+| **NSE MCP: historical** (`nse-bhavcopy`, `https://mcp.nseindia.in/bhavcopy/cm/mcp`) | working, verification only | An independent check on our own ingestion: 20 random (symbol, date) close prices compared with the stored data (T2.3 step 8). Non-blocking. | A data source for anything else. One price per call is far too slow for research. |
+| **Telegram bot** (token and allowed chat/user id in `.env`) | working, optional | Morning/evening summaries and failure alerts (`live/notify.py`). Silent no-op if unset. | Receiving commands. |
+| **stooq.com** | optional | Daily macro series (USDINR, Brent, S&P 500, Nasdaq, US 10Y, DXY, gold) for market-state features. | Anything required: failure is a warning. |
+| **RSS news feeds** | Phase 8 | Headlines for the event/news sleeve (no LLM in the decision path). | Trading directly. |
+| **Hugging Face** (`NeoQuasar/Kronos-*`) | used for research | Kronos model weights (see below). | n/a |
+
+**Kronos (decision 2026-11-19).** Zero-shot Kronos was tested on 242 dates and did **not** add information to the project's own models (`docs/RESULTS-G1.md` section 4). It is not in the production feature set. The vendored code (`third_party/kronos`) stays only for the two open tests: fine-tuning on NSE data (T7.5e) and 5-minute bars (T13.3). Neither is on the critical path.
+
+**Current research status (Gate G1, 2026-11-19).** Both strategies fail the research gate as run: S1 loses most of its gross edge to costs; S2's edge exists only at the official opening price. See `docs/RESULTS-G1.md`. Nothing is validated, so every book is an unvalidated shadow.
+
+**Ownership of secrets.** All of the above credentials live only in `.env` (rule 8). Names are listed, never values, by `stocksense doctor`.
+
 ---
 
 # PART B — Facts established on 2026-11-11
