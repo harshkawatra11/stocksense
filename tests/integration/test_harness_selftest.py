@@ -86,7 +86,7 @@ def _candidate(world, state, spec, factory, label):
         f"selftest-{label}", spec.family, spec.target, bt.daily,
         ic={"mean_ic": res.ic["mean_ic"], "ic_tstat": res.ic["ic_tstat"]}, trial_ids=(res.trial_id,),
     )  # fmt: skip
-    return res, bt, evaluate_research_gate(cand, world.settings, state)
+    return res, bt, evaluate_research_gate(cand, world.settings, state, version=1)
 
 
 def _show(label: str, report: GateReport) -> None:
@@ -143,7 +143,7 @@ def test_leaky_feature_is_rejected_by_the_truncation_checker_first(world, tmp_pa
         backtest_walk_forward(res, spec, w.settings, st, calendar=w.calendar).daily,
         ic={"mean_ic": res.ic["mean_ic"], "ic_tstat": res.ic["ic_tstat"]},
     )  # fmt: skip
-    rep = evaluate_research_gate(cand, w.settings, st)
+    rep = evaluate_research_gate(cand, w.settings, st, version=1)
     assert rep.lines[0].passed and rep.lines[1].passed
     assert res.ic["mean_ic"] > 0.3
 

@@ -1,3 +1,4 @@
+# NOT USED: the user starts StockSense manually
 # Registers and starts the 'StockSense' scheduled task (daemon at logon and daily at 07:25).
 # Run once from a normal PowerShell in the repo. Re-running replaces the task.
 $repo = Split-Path -Parent $PSScriptRoot
