@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +272,69 @@ def fit_candidates(
             store.set_status(state, model_id, "shadow", note)
             ids.append(model_id)
         out.production[fam] = ids
+
+
+# ---- G2-C5: the g2-s1cost grid ---------------------------------------------------------------------------
+
+# the pre-C5 best S1 trial: its k_max and overlay are the base
+S1COST_BASE_TRIAL = "g1-s1-y_c2o_10-cce12fb757"
+
+
+@dataclass
+class S1CostOutcome:
+    plans: list[g1.S1CostPlan] = field(default_factory=list)
+    results: dict[str, TrialResult] = field(default_factory=dict)
+    candidate: str | None = None
+    notes: list[str] = field(default_factory=list)
+
+
+def run_s1_cost(
+    settings: Settings,
+    state: State,
+    calendar: TradingCalendar,
+    cfg: G1Config | None = None,
+    *,
+    targets: Sequence[str] = g1.S1COST_TARGETS,
+    base_trial: str = S1COST_BASE_TRIAL,
+    k_max: int | None = None,
+    overlay: bool | None = None,
+    runner: G1Runner | None = None,
+) -> S1CostOutcome:
+    """Register the 8 x len(targets) trials of family g2-s1cost (all before any runs), run each (finished
+    trials are skipped), then store the best net Sharpe at the reference capital as a candidate. The fixed
+    GBM scores, k_max and overlay are those of the best G1 S1 trial; the meta-label stage is not applied."""
+    out = S1CostOutcome()
+    base = runner or G1Runner(settings, state, calendar, cfg)
+    if k_max is None or overlay is None:
+        bs = _trial_spec(state, base_trial)
+        k_max, overlay = int(bs["k_max"]), bool(bs["overlay"])
+    models = {t: g1.surviving_models(state, "s1", t) for t in targets}
+    for t, ms in models.items():
+        out.notes.append(f"{t}: models {[m.trial_id for m in ms]}" if ms else f"{t}: no surviving S1 model")
+    plans = g1.plan_s1cost(base.cfg, models, k_max=k_max, overlay=overlay, targets=targets)
+    ids = register_trial_ids(state, [p.plan for p in plans])
+    out.plans = [replace(p, plan=p.plan.with_id(i)) for p, i in zip(plans, ids, strict=True)]
+    runners: dict[str, G1Runner] = {}
+    for p in out.plans:
+        key = f"{p.cfg.score_ema}/{p.cfg.er_map}"
+        if key not in runners:  # runners share the (expensive) world; blends depend on ema and map
+            runners[key] = G1Runner(settings, state, calendar, p.cfg, world=base.world)
+        r = runners[key]
+        r.cfg = p.cfg  # the variant's own config (policy options, family) for factory_for / _ensure_finished
+        out.results[str(p.plan.trial_id)] = r.run_trial(p.plan)
+        log.info("s1cost_trial_done", trial=p.plan.trial_id, label=p.plan.label)
+    best = _best([p.plan for p in out.plans], out.results)
+    if best is not None:
+        bp = next(p for p in out.plans if p.plan.trial_id == best.trial_id)
+        run = runners[f"{bp.cfg.score_ema}/{bp.cfg.er_map}"]
+        cand = make_candidate(run, best, out.results[str(best.trial_id)])
+        save_candidate_result(cand, settings)
+        out.candidate = cand.candidate_id
+    return out
+
+
+def register_trial_ids(state: State, plans: Sequence[TrialPlan]) -> list[str]:
+    return [str(p.trial_id) for p in g1.register_plans(state, plans)]
 
 
 # ---- the run -----------------------------------------------------------------------------------------
