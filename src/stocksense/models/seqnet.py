@@ -124,6 +124,7 @@ class _Halt(Exception):
 
 class SeqNetModel(Model):
     target_prefix = "z_"
+    needs_keys = True
 
     def __init__(
         self,

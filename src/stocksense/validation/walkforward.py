@@ -127,17 +127,33 @@ def run_walk_forward(
     clock: Clock | None = None,
     inner_months: int = 12,
     embargo_sessions: int = 5,
+    trial_family: str | None = None,
+    fold_names: Sequence[str] | None = None,
+    refit_every: int = 1,
+    should_stop: Callable[[], bool] | None = None,
 ) -> WFResult:
     """Register the trial, then fit/predict every fold not yet done. `registry` is accepted for symmetry
     with build_features (the feature kinds are read from the store's manifest, which that registry built);
-    `folds` defaults to the 12 calendar years of walk_forward_folds."""
+    `folds` defaults to the 12 calendar years of walk_forward_folds.
+
+    G2 options (defaults reproduce the old behaviour exactly): `trial_family` is the family string the
+    trial is registered under (default `spec.family`); `fold_names` keeps only those folds; with
+    `refit_every=n` the selected folds form consecutive groups of n, the model is fitted once per group on
+    its first fold's training rows and predicts every pending fold of the group (preds are still written
+    per fold); `should_stop()` is polled before each group and ends the run cleanly (resumable)."""
     del registry
+    if refit_every < 1:
+        raise ValueError("refit_every must be >= 1")
     clk = clock if clock is not None else SystemClock()
-    trial_id = register_trial(state, spec.family, spec.target, spec.to_dict())  # before any evaluation
+    family = trial_family if trial_family is not None else spec.family
+    trial_id = register_trial(state, family, spec.target, spec.to_dict())  # before any evaluation
     model_id = trial_id
     factory = model_factory if model_factory is not None else build_model
     cal = calendar if calendar is not None else TradingCalendar.from_store(settings, clk)
     fold_list = list(folds) if folds is not None else walk_forward_folds(settings, cal)
+    if fold_names is not None:
+        keep = set(fold_names)
+        fold_list = [f for f in fold_list if f.name in keep]
 
     label_col = f"{factory(spec).target_prefix}{spec.target}"
     end_col = END_COLUMN[spec.target]
@@ -153,6 +169,7 @@ def run_walk_forward(
         lab = lab.join(uni.filter(pl.col(spec.universe)).select("date", "sid"), on=["date", "sid"])
 
     done = _done_folds(settings, model_id)
+    groups = [fold_list[i : i + refit_every] for i in range(0, len(fold_list), refit_every)]
     pending = [f for f in fold_list if f.name not in done]
     parts: dict[str, pl.DataFrame] = {}
     extra: dict[str, dict[str, Any]] = {}
@@ -174,18 +191,30 @@ def run_walk_forward(
         dates_np = dates.to_numpy()
         y_all = df[label_col].to_numpy().astype(np.float64)
         X_all = df.select([pl.col(n).cast(pl.Float32) for n in names]).to_numpy().astype(np.float32)
-        for fold in pending:
+        if factory(spec).needs_keys:  # sequence / cube models look rows up by (sid, day)
+            from stocksense.models.seqnet import add_keys
+
+            X_all = add_keys(X_all, sid_all.to_numpy(), dates_np)
+        for group in groups:
+            todo = [f for f in group if f.name not in done]
+            if not todo:
+                continue
+            if should_stop is not None and should_stop():
+                log.info("walkforward_stopped", trial=trial_id, next_fold=todo[0].name)
+                break
+            fold = group[0]  # the model is fitted on the group's first fold (its training window)
             tr = train_mask(
                 end, fold, embargo_sessions, calendar=cal, dates=dates, dev_start=settings.research.dev_start
             ).to_numpy()
-            te = ((dates >= fold.test_start) & (dates <= fold.test_end)).to_numpy()
-            if not tr.any() or not te.any():
+            tes = {f.name: ((dates >= f.test_start) & (dates <= f.test_end)).to_numpy() for f in todo}
+            if not tr.any() or not any(m.any() for m in tes.values()):
                 reason = "no training rows" if not tr.any() else "no test rows"
-                log.info("walkforward_fold_skipped", fold=fold.name, reason=reason)
-                extra[fold.name] = {"skipped": reason}
+                for f in todo:
+                    log.info("walkforward_fold_skipped", fold=f.name, reason=reason)
+                    extra[f.name] = {"skipped": reason}
                 continue
             t0 = time.perf_counter()
-            itr, ite = np.flatnonzero(tr), np.flatnonzero(te)
+            itr = np.flatnonzero(tr)
             d_tr, end_tr = dates.filter(pl.Series(tr)), end.filter(pl.Series(tr))
             inner_tr, inner_va = inner_validation_split(
                 d_tr, end_tr, inner_months, embargo_sessions, calendar=cal
@@ -193,33 +222,43 @@ def run_walk_forward(
             a, b = inner_tr.to_numpy(), inner_va.to_numpy()
             X_tr, y_tr, dn_tr = X_all[itr], y_all[itr], dates_np[itr]
             w_tr = sample_weights(d_tr, fold, cal)
-            X_te = X_all[ite]
-            scores: dict[str, np.ndarray] = {}
+            models: dict[int, Model] = {}
             fit_params: dict[str, Any] = {}
             for s in seeds:
                 model = factory(spec)
                 model.configure(names, kinds)
                 info = model.fit(X_tr[a], y_tr[a], w_tr[a], dn_tr[a], X_tr[b], y_tr[b], dn_tr[b], seed=int(s))
                 model.refit_full(X_tr, y_tr, w_tr, dn_tr, info, seed=int(s))
-                scores[f"s{s}"] = np.asarray(model.predict(X_te))
+                models[int(s)] = model
                 fit_params = info.params
-            sc = _rank_average(scores, dates.filter(pl.Series(te)), sid_all.filter(pl.Series(te)))
-            out = sc.with_columns(
-                pl.lit(clk.now()).alias("made_at"),
-                pl.lit("walkforward").alias("mode"),
-                pl.lit(fold.name).alias("fold"),
-            )
-            io.upsert(settings, "preds", out, sub=model_id, clock=clk)
-            done.add(fold.name)
-            _mark_done(settings, model_id, done)
-            parts[fold.name] = out.select("date", "sid", "score", "fold")
-            extra[fold.name] = {
-                "n_train": int(tr.sum()),
-                "n_inner_val": int(b.sum()),
-                "seconds": time.perf_counter() - t0,
-                "fit_params": fit_params,
-            }
-            log.info("walkforward_fold_done", fold=fold.name, trial=trial_id)
+            fit_seconds = time.perf_counter() - t0
+            for f in todo:
+                te = tes[f.name]
+                if not te.any():
+                    log.info("walkforward_fold_skipped", fold=f.name, reason="no test rows")
+                    extra[f.name] = {"skipped": "no test rows"}
+                    continue
+                t1 = time.perf_counter()
+                ite = np.flatnonzero(te)
+                X_te = X_all[ite]
+                scores = {f"s{s}": np.asarray(m.predict(X_te)) for s, m in models.items()}
+                sc = _rank_average(scores, dates.filter(pl.Series(te)), sid_all.filter(pl.Series(te)))
+                out = sc.with_columns(
+                    pl.lit(clk.now()).alias("made_at"),
+                    pl.lit("walkforward").alias("mode"),
+                    pl.lit(f.name).alias("fold"),
+                )
+                io.upsert(settings, "preds", out, sub=model_id, clock=clk)
+                done.add(f.name)
+                _mark_done(settings, model_id, done)
+                parts[f.name] = out.select("date", "sid", "score", "fold")
+                extra[f.name] = {
+                    "n_train": int(tr.sum()),
+                    "n_inner_val": int(b.sum()),
+                    "seconds": (fit_seconds if f is fold else 0.0) + time.perf_counter() - t1,
+                    "fit_params": fit_params,
+                }
+                log.info("walkforward_fold_done", fold=f.name, trial=trial_id)
 
     for fold in fold_list:
         if fold.name in parts or fold.name not in done:

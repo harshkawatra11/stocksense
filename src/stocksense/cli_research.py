@@ -434,6 +434,152 @@ def g1_run_command(
     typer.echo(f"wrote {write_results(settings, state, docs)}")
 
 
+# ---- Program G2 model sweep (cards D0.5-D0.7) ---------------------------------------------------------
+
+
+def parse_fold_names(text: str) -> list[str]:
+    """'2016..2025' -> ['2016', ..., '2025']; 'a,b,c' -> ['a', 'b', 'c']."""
+    if ".." in text:
+        a, b = text.split("..")
+        return [str(y) for y in range(int(a), int(b) + 1)]
+    return [p.strip() for p in text.split(",") if p.strip()]
+
+
+@research_app.command("model-eval")
+def model_eval(
+    ctx: typer.Context,
+    trial: Annotated[str, typer.Option(help="Model trial id (a finished walk-forward).")],
+    base: Annotated[str | None, typer.Option(help="Baseline GBM trial id (default: target's GBM).")] = None,
+    k_max: Annotated[int, typer.Option(help="S1 k_max of the portfolio backtest.")] = 10,
+    overlay: Annotated[bool, typer.Option(help="S1 overlay of the portfolio backtest.")] = False,
+    no_backtest: Annotated[bool, typer.Option("--no-backtest", help="Skip the S1 backtest.")] = False,
+) -> None:
+    """Every EP metric of Part 4.2 of PLAN-G2 -> reports/g2/models/<trial>/eval.json."""
+    from stocksense.validation.g2_eval import S1Policy, evaluate_model, table
+
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    cal = TradingCalendar.from_store(settings, SystemClock())
+    try:
+        out = evaluate_model(
+            trial, settings, state, cal, base_id=base, backtest=not no_backtest,
+            policy=S1Policy(k_max=k_max, overlay=overlay),
+        )  # fmt: skip
+    except (KeyError, LookupError) as e:
+        typer.echo(f"cannot evaluate {trial!r}: {e}", err=True)
+        raise typer.Exit(1) from e
+    typer.echo(table([out]))
+    typer.echo(f"{out['reason']}  (base {out['base_trial']})")
+
+
+@research_app.command("g2-table")
+def g2_table(ctx: typer.Context) -> None:
+    """Print the evaluation row of every G2 model trial that has an eval.json."""
+    from stocksense.validation.g2_eval import load_evals, table
+
+    rows = load_evals(_settings(ctx))
+    typer.echo(table(rows) if rows else "no evaluated G2 trials")
+
+
+@research_app.command("wf-run")
+def wf_run(
+    ctx: typer.Context,
+    spec_json: Annotated[Path, typer.Option("--spec-json", help="JSON file of a ModelSpec.")],
+    trial_family: Annotated[str | None, typer.Option(help="Registered family, e.g. g2-master.")] = None,
+    folds: Annotated[str, typer.Option(help="Fold names: 2016..2025 or a,b,c.")] = "2016..2025",
+    refit_every: Annotated[int, typer.Option(min=1, help="Refit once per this many folds.")] = 1,
+    max_hours: Annotated[float, typer.Option(help="Wall cap; the run stops between fold groups.")] = 8.0,
+    seeds: Annotated[str, typer.Option(help="Comma separated seeds.")] = "1,2,3",
+    inner_months: Annotated[int, typer.Option(help="Inner-validation months.")] = 12,
+    custom_folds: Annotated[
+        str | None, typer.Option(help="Custom folds 'name:start:end,...' (tests).", hidden=True)
+    ] = None,
+) -> None:
+    """Walk-forward of a spec under the GPU lock, resumable per fold, stopping after the wall cap."""
+    import time
+
+    from stocksense.core.gpu import gpu_lock
+    from stocksense.validation.walkforward import run_walk_forward
+
+    settings = _settings(ctx)
+    ms = ModelSpec.from_dict(json.loads(spec_json.read_text(encoding="utf-8")))
+    state = State(settings)
+    state.migrate()
+    clock = SystemClock()
+    cal = TradingCalendar.from_store(settings, clock)
+    fold_list = parse_folds(custom_folds, cal) if custom_folds else walk_forward_folds(settings, cal)
+    names = parse_fold_names(folds)
+    deadline = time.monotonic() + max_hours * 3600.0
+    try:
+        with gpu_lock(settings):
+            res = run_walk_forward(
+                ms, settings, state, purpose="research", seeds=[int(x) for x in seeds.split(",")],
+                folds=fold_list, calendar=cal, clock=clock, inner_months=inner_months,
+                trial_family=trial_family, fold_names=names, refit_every=refit_every,
+                should_stop=lambda: time.monotonic() >= deadline,
+            )  # fmt: skip
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3) from e
+    typer.echo(f"trial {res.trial_id}")
+    done = 0
+    for m in res.fold_metrics:
+        ic = m.get("mean_ic")
+        done += ic is not None
+        line = f"IC {ic:+.4f} t {m['ic_tstat']:+.1f}" if ic is not None else "-"
+        typer.echo(f"  fold {m['fold']}: {line}")
+    if done < len(res.fold_metrics):
+        typer.echo(f"stopped: {done}/{len(res.fold_metrics)} folds done (wall cap); rerun to resume")
+    typer.echo(f"mean IC {res.ic['mean_ic']:+.4f}  t {res.ic['ic_tstat']:+.2f}  dates {res.ic['n_dates']}")
+
+
+@research_app.command("select-nn")
+def select_nn_command(
+    ctx: typer.Context,
+    family: Annotated[str, typer.Option(help="Registry key of the family, e.g. master.")],
+    target: Annotated[str, typer.Option(help="Training target, e.g. y_c2o_10.")],
+    configs: Annotated[Path, typer.Option(help="JSON list of at most 6 parameter dicts.")],
+    max_hours: Annotated[float, typer.Option(help="Wall cap for the whole selection.")] = 2.0,
+    fold: Annotated[str, typer.Option(help="Fold whose inner split is used.")] = "2016",
+    inner_months: Annotated[int, typer.Option(help="Inner-validation months.")] = 12,
+    custom_folds: Annotated[
+        str | None, typer.Option(help="Custom folds 'name:start:end,...' (tests).", hidden=True)
+    ] = None,
+) -> None:
+    """Pick the best config on the inner validation of fold 2016 (no test fold, no trial registered)."""
+    import time
+
+    from stocksense.core.gpu import gpu_lock
+    from stocksense.validation.g2_select import select_nn, selection_path
+
+    settings = _settings(ctx)
+    cfgs = json.loads(configs.read_text(encoding="utf-8"))
+    if not isinstance(cfgs, list) or not all(isinstance(c, dict) for c in cfgs):
+        typer.echo("--configs must be a JSON list of objects", err=True)
+        raise typer.Exit(2)
+    clock = SystemClock()
+    cal = TradingCalendar.from_store(settings, clock)
+    folds = parse_folds(custom_folds, cal) if custom_folds else None
+    deadline = time.monotonic() + max_hours * 3600.0
+    try:
+        with gpu_lock(settings):
+            res = select_nn(
+                family, target, cfgs, settings, fold_name=fold, folds=folds, calendar=cal, clock=clock,
+                inner_months=inner_months, should_stop=lambda: time.monotonic() >= deadline,
+            )  # fmt: skip
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(3) from e
+    except ValueError as e:
+        typer.echo(f"select-nn: {e}", err=True)
+        raise typer.Exit(2) from e
+    for row in res["table"]:
+        ic = row.get("val_ic")
+        typer.echo(("      -  " if ic is None else f"{ic:+.4f}  ") + json.dumps(row["config"]))
+    typer.echo(f"selected {res['best']} -> {selection_path(settings, family)}")
+
+
 def register(app: typer.Typer) -> None:
     """Hook for cli.py: replace the placeholder train/validate and add the `research` group."""
     app.registered_commands = [

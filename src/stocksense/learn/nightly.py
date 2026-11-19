@@ -211,6 +211,10 @@ def fit_production(
     y = rows[label_col].to_numpy().astype(np.float64)
     X = rows.select([pl.col(n).cast(pl.Float32) for n in names]).to_numpy().astype(np.float32)
     dn = dates.to_numpy()
+    if factory(spec).needs_keys:  # sequence / cube models look rows up by (sid, day)
+        from stocksense.models.seqnet import add_keys
+
+        X = add_keys(X, rows["sid"].to_numpy(), dn)
     fold = Fold("production", cal.prev_session(as_of), as_of, as_of)
     w = sample_weights(dates, fold, cal)
     inner_tr, inner_va = inner_validation_split(dates, end, inner_months, embargo_sessions, calendar=cal)
