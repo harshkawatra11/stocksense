@@ -1,0 +1,8 @@
+[
+  {"d_model": 128, "dropout": 0.3, "lr": 0.0001, "amp": true},
+  {"d_model": 128, "dropout": 0.5, "lr": 0.0001, "amp": true},
+  {"d_model": 256, "dropout": 0.3, "lr": 0.0001, "amp": true},
+  {"d_model": 256, "dropout": 0.5, "lr": 0.0001, "amp": true},
+  {"d_model": 256, "dropout": 0.5, "lr": 0.00003, "amp": true},
+  {"d_model": 128, "dropout": 0.3, "lr": 0.00003, "amp": true}
+]
