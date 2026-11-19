@@ -520,7 +520,7 @@ def wf_run(
     """Walk-forward of a spec under the GPU lock, resumable per fold, stopping after the wall cap."""
     import time
 
-    from stocksense.core.gpu import gpu_lock
+    from stocksense.core import gpu
     from stocksense.validation.walkforward import run_walk_forward
 
     settings = _settings(ctx)
@@ -533,7 +533,7 @@ def wf_run(
     names = parse_fold_names(folds)
     deadline = time.monotonic() + max_hours * 3600.0
     try:
-        with gpu_lock(settings):
+        with gpu.gpu_lock_if(settings, gpu.spec_uses_gpu(ms)):
             res = run_walk_forward(
                 ms, settings, state, purpose="research", seeds=[int(x) for x in seeds.split(",")],
                 folds=fold_list, calendar=cal, clock=clock, inner_months=inner_months,
@@ -571,7 +571,7 @@ def select_nn_command(
     """Pick the best config on the inner validation of fold 2016 (no test fold, no trial registered)."""
     import time
 
-    from stocksense.core.gpu import gpu_lock
+    from stocksense.core import gpu
     from stocksense.validation.g2_select import select_nn, selection_path
 
     settings = _settings(ctx)
@@ -584,7 +584,8 @@ def select_nn_command(
     folds = parse_folds(custom_folds, cal) if custom_folds else None
     deadline = time.monotonic() + max_hours * 3600.0
     try:
-        with gpu_lock(settings):
+        probe = ModelSpec(family=f"s1-{family}", target=target, params=dict(cfgs[0]) if cfgs else {})
+        with gpu.gpu_lock_if(settings, gpu.spec_uses_gpu(probe)):
             res = select_nn(
                 family, target, cfgs, settings, fold_name=fold, folds=folds, calendar=cal, clock=clock,
                 inner_months=inner_months, should_stop=lambda: time.monotonic() >= deadline,
