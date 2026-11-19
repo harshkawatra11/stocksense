@@ -86,3 +86,18 @@ def test_s1_cost_command_is_registered():
 
     r = CliRunner().invoke(app, ["research", "s1-cost", "--help"])
     assert r.exit_code == 0 and "--targets" in r.output
+
+
+def test_strategies_toml_carries_the_s1_policy_table_that_s1config_accepts(tmp_path):
+    from pathlib import Path
+
+    from stocksense.core.config import load_settings
+    from stocksense.portfolio.construct import S1Config
+
+    real = Path(__file__).resolve().parents[2] / "config"
+    s = load_settings(real, tmp_path / "no.env")
+    pol = dict(s.strategies.s1.policy)
+    assert pol, "[s1.policy] is written after the C5 verdict"
+    cfg = S1Config.from_settings(s, 10, zero_slippage(), **pol)  # the live wiring passes it this way
+    assert cfg.exit_rank == pol["exit_rank"]
+    assert cfg.risk.max_fixed_cost_bps == pol["max_fixed_cost_bps"] != s.risk.max_fixed_cost_bps
