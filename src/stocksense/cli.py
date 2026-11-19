@@ -598,15 +598,19 @@ def build_panel(ctx: typer.Context) -> None:
 
 
 @app.command("build-features")
-def build_features() -> None:
+def build_features(ctx: typer.Context) -> None:
     """Build the feature store."""
-    _not_implemented(4)
+    from stocksense.features.build import build_features as _build
+
+    typer.echo(f"features version {_build(_settings(ctx))}")
 
 
 @app.command("build-labels")
-def build_labels() -> None:
+def build_labels(ctx: typer.Context) -> None:
     """Build forward-return labels."""
-    _not_implemented(4)
+    from stocksense.labels.forward import build_labels as _build
+
+    typer.echo(f"label rows {_build(_settings(ctx))}")
 
 
 @app.command()
@@ -819,5 +823,6 @@ def doctor(ctx: typer.Context) -> None:
     out("brokers")
     for line in _broker_lines(settings):
         out(f"  {line}")
+
 
 __import__("stocksense.cli_research").cli_research.register(app)  # research cmds
