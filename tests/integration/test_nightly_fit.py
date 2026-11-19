@@ -93,3 +93,40 @@ def test_fit_saves_a_bag_and_is_idempotent(world, state):
 
 def test_last_research_session_is_before_the_lockbox(world):
     assert nightly.last_research_session(world.settings, world.calendar) < LOCKBOX_START
+
+
+def test_fit_production_appends_keys_for_needs_keys_models(world, state):
+    from stocksense.models.base import FitInfo, Model
+
+    seen: list[int] = []
+
+    class Probe(Model):
+        needs_keys = True
+        target_prefix = "r_"
+
+        def fit(self, X, y, w, dates, X_val=None, y_val=None, dates_val=None, seed=0):
+            seen.append(X.shape[1])
+            return FitInfo(best_iteration=1)
+
+        def refit_full(self, X, y, w, dates, fit_info, seed):
+            seen.append(X.shape[1])
+
+        def predict(self, X):
+            return np.zeros(len(X))
+
+        def save(self, dir):
+            dir.mkdir(parents=True, exist_ok=True)
+            (dir / "weights.bin").write_bytes(b"0")
+
+        def load(self, dir):
+            pass
+
+    _, names, _, _ = nightly.production_training_rows(
+        SPEC, world.settings, world.calendar.prev_session(LOCKBOX_START), world.calendar
+    )
+    spec = ModelSpec(family="s1-probekeys", target="y_c2o_5", universe="u500", entry="close")
+    nightly.fit_production(
+        spec, world.settings, state, world.calendar.prev_session(LOCKBOX_START), seeds=(1,),
+        calendar=world.calendar, inner_months=2, model_factory=lambda s: Probe(),
+    )  # fmt: skip
+    assert seen and all(n == len(names) + 2 for n in seen)

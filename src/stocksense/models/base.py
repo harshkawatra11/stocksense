@@ -7,6 +7,7 @@ A model family registers a factory with `register_model`; `build_model(spec)` re
 
 from __future__ import annotations
 
+import importlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -57,6 +58,10 @@ class Model(ABC):
 
     #: label prefix used for the training target: 'r_' (rank in [-0.5, 0.5]), 'z_' (robust z) or '' (raw)
     target_prefix: str = "r_"
+    #: the runner appends two key columns (sid, days since epoch) to X (`models.seqnet.add_keys`)
+    needs_keys: bool = False
+    #: the model reads windows from a `features.cube.FeatureCube` (it also needs the keys)
+    needs_cube: bool = False
 
     def configure(self, feature_names: Sequence[str], kinds: Sequence[str]) -> None:  # noqa: B027
         """Told by the runner which column is which feature and its kind ('xs' or 'mkt'); default: ignore."""
@@ -111,14 +116,26 @@ def register_model(key: str, factory: ModelFactory) -> None:
     MODELS[key] = factory
 
 
+MODEL_MODULES = (
+    "gbm", "linear", "seqnet", "master", "hist", "gats", "tra", "tabm", "ipca", "cae", "factorvae", "dens",
+)  # fmt: skip
+
+
 def build_model(spec: ModelSpec) -> Model:
-    """Instance for `spec.family` (registered under the family's last '-' segment)."""
+    """Instance for `spec.family` (registered under the family's last '-' segment). `gbm` and `linear`
+    (which registers several keys) are always loaded; any other module of MODEL_MODULES is imported only
+    when its name is the key. An unknown key, or a listed module not written yet, raises KeyError."""
     import stocksense.models.gbm  # noqa: F401  (registers 'gbm')
     import stocksense.models.linear  # noqa: F401  (registers the linear families)
 
     key = spec.family.rsplit("-", 1)[-1]
-    if key == "seqnet":
-        import stocksense.models.seqnet  # noqa: F401  (torch is imported only when asked for)
+    if key not in MODELS and key in MODEL_MODULES:
+        mod = f"stocksense.models.{key}"
+        try:
+            importlib.import_module(mod)
+        except ModuleNotFoundError as e:
+            if e.name != mod:
+                raise
     if key not in MODELS:
         raise KeyError(f"no model registered for family {spec.family!r}")
     return MODELS[key](spec)
