@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import date
 
 import polars as pl
@@ -46,10 +47,15 @@ _SCHEMA = {
 }
 
 
-def status_table(settings: Settings, calendar: TradingCalendar, clock: Clock) -> pl.DataFrame:
-    """One row per stored dataset: date span, row count, missing sessions, freshness, issue count."""
+def status_table(
+    settings: Settings, calendar: TradingCalendar, clock: Clock, datasets: Iterable[str] | None = None
+) -> pl.DataFrame:
+    """One row per stored dataset (or only `datasets`): date span, rows, gaps, freshness, issues."""
     rows = []
+    only = None if datasets is None else set(datasets)
     for spec in CATALOG.values():
+        if only is not None and spec.name not in only:
+            continue
         row = _dataset_row(settings, spec, calendar, clock)
         if row is not None:
             rows.append(row)

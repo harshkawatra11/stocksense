@@ -16,10 +16,7 @@ NOT_IMPL = {
     "build-features": 4,
     "build-labels": 4,
     "backtest": 5,
-    "run": 10,
-    "job": 10,
     "report": 12,
-    "resume": 10,
 }
 
 
