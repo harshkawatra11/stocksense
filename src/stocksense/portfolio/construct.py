@@ -126,6 +126,13 @@ class S1Config:
     slippage: SlippageTable
     overlay: bool = False
     hysteresis: bool = True  # False = naive daily re-ranking (a test/reference knob, not a strategy)
+    # G2-C1 options; the defaults reproduce the pre-G2 behaviour exactly
+    exit_rank: int | None = None  # rank_decay fires at rank > exit_rank (default 3*k)
+    min_hold: int = S1_RANK_DECAY_MIN_HELD  # sessions held before rank_decay / a switch may fire
+    extend_rank: int | None = None  # rank limit for an extension at the horizon (default k)
+    free_extension: bool = False  # extend on er > 0 and the non-cost filters only (nothing trades)
+    rebuy_block: int = 0  # a sid sold within the last `rebuy_block` sessions is not bought again
+    switch_hurdle: bool = False  # swap a weak holding for a better candidate when the gain beats the cost
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -145,10 +152,11 @@ class S1Config:
         k_max: int | None = None,
         overlay: bool = False,
         hysteresis: bool = True,
+        **overrides: Any,
     ) -> S1Config:
         return cls(
             h, k_max if k_max is not None else settings.strategies.s1.k_max, settings.risk,
-            settings.costs, slippage, overlay, hysteresis,
+            settings.costs, slippage, overlay, hysteresis, **overrides,
         )  # fmt: skip
 
 
@@ -197,6 +205,7 @@ class S1Book:
     cash: float  # free cash (cash minus reserved)
     dd: float = 0.0  # drawdown of the book NAV from its peak, as a positive fraction
     stopped: bool = False  # the book-drawdown stop flag is set (until `stocksense resume`)
+    recent_sells: Mapping[int, int] = field(default_factory=dict)  # sid -> sessions since it was sold
 
 
 @dataclass(frozen=True)
@@ -208,7 +217,7 @@ class S1Plan:
     port_vol: float
     min_pos: float
     cap: float
-    exits: dict[int, str]  # sid -> reason (stop, horizon, rank_decay, universe_exit)
+    exits: dict[int, str]  # sid -> reason (stop, horizon, rank_decay, universe_exit, switch)
     extended: list[int]
     weights: dict[int, float]  # new entries
     entries: list[dict[str, Any]]  # features of each new entry (the meta-label sample log)
@@ -276,23 +285,84 @@ def _slip(row: NameRow, value: float, when: str, table: SlippageTable) -> float:
     return slip_frac(row.turnover_rank, max(row.vol_21, 1e-6), value, max(row.med_turn_20, 1.0), when, table)  # type: ignore[arg-type]
 
 
-def _s1_entry_ok(sid: int, row: NameRow, er: float | None, value: float, cfg: S1Config) -> bool:
-    """Entry eligibility other than 'not already held / not sold today' (the caller handles those)."""
+def _s1_entry_ok(
+    sid: int, row: NameRow, er: float | None, value: float, cfg: S1Config, *, cost_hurdle: bool = True
+) -> bool:
+    """Entry eligibility other than 'not already held / not sold today' (the caller handles those).
+    `cost_hurdle=False` (free extension) keeps every filter except the round-trip cost test and asks only
+    er > 0."""
     if not row.in_universe or row.stale or row.locked_up or er is None or not math.isfinite(er):
         return False
     if row.close <= 0:
         return False
-    net = (
-        er
-        - round_trip_cost_frac("delivery", value, cfg.costs)
-        - 2.0 * _slip(row, value, "close", cfg.slippage)
-    )
-    if net <= 0:
+    if cost_hurdle:
+        net = (
+            er
+            - round_trip_cost_frac("delivery", value, cfg.costs)
+            - 2.0 * _slip(row, value, "close", cfg.slippage)
+        )
+        if net <= 0:
+            return False
+    elif er <= 0:
         return False
     n_split, n_res = cfg.risk.no_entry_sessions_before_split, cfg.risk.no_entry_sessions_before_results
     if row.days_to_split is not None and 0 <= row.days_to_split <= n_split:
         return False
     return not (row.days_to_results is not None and 0 <= row.days_to_results <= n_res)
+
+
+def _plan_switches(
+    rank: Mapping[int, int],
+    ranked: Sequence[int],
+    rows: Mapping[int, NameRow],
+    book: S1Book,
+    exits: dict[int, str],
+    extended: list[int],
+    er_t: Mapping[int, float],
+    k: int,
+    target_value: float,
+    cfg: S1Config,
+    orders: list[Order],
+    d1: date,
+) -> list[int]:
+    """With no free slot, swap weak holdings for better candidates while the expected gain beats the round
+    trip plus two closing slippages. Adds `switch` exits (SELL at the next open) to `exits`/`orders` and
+    returns the candidates to enter (best er first). At most max(1, k // 4) swaps a day."""
+    remaining = [s for s in book.holdings if s not in exits]
+    if k - len(remaining) > 0:
+        return []  # free slots exist: ordinary entries handle them
+    ok_hold = [
+        s for s in remaining
+        if book.holdings[s].held >= cfg.min_hold and s in rows
+        and (e := er_t.get(s)) is not None and math.isfinite(e)
+    ]  # fmt: skip
+    ok_hold.sort(key=lambda s: (er_t[s], s))
+    cands = [
+        s for s in ranked
+        if s not in book.holdings and s not in exits
+        and not (cfg.rebuy_block > 0 and book.recent_sells.get(s, cfg.rebuy_block + 1) <= cfg.rebuy_block)
+        and _s1_entry_ok(s, rows[s], er_t.get(s), target_value, cfg)
+    ]  # fmt: skip
+    cands.sort(key=lambda s: (-er_t[s], rank[s]))
+    rt = round_trip_cost_frac("delivery", target_value, cfg.costs)
+    chosen: list[int] = []
+    for _ in range(max(1, k // 4)):
+        if not ok_hold or not cands:
+            break
+        weak, cand = ok_hold[0], cands[0]
+        if er_t[cand] - er_t[weak] <= rt + 2.0 * _slip(rows[cand], target_value, "close", cfg.slippage):
+            break
+        ok_hold.pop(0)
+        cands.pop(0)
+        exits[weak] = "switch"
+        hd = book.holdings[weak]
+        orders.append(
+            Order(weak, "SELL", "delivery", "open", hd.qty, trade_date=d1, priority=0.0, reason="switch")
+        )
+        chosen.append(cand)
+    if chosen:
+        extended[:] = [s for s in extended if s not in exits]
+    return chosen
 
 
 def plan_s1(
@@ -359,10 +429,18 @@ def plan_s1(
         elif scores_known:
             r = rank.get(sid, math.inf)
             if cfg.hysteresis:
-                if hd.held >= S1_RANK_DECAY_MIN_HELD and r > S1_RANK_DECAY_MULT * k:
+                exit_thr = 0 if k == 0 else (
+                    S1_RANK_DECAY_MULT * k if cfg.exit_rank is None else cfg.exit_rank
+                )  # fmt: skip
+                ext_thr = k if cfg.extend_rank is None else cfg.extend_rank
+                if hd.held >= cfg.min_hold and r > exit_thr:
                     reason = "rank_decay"
                 elif hd.held >= cfg.h - 1:
-                    if k > 0 and r <= k and _s1_entry_ok(sid, row, er_t.get(sid), target_value, cfg):
+                    if (
+                        k > 0 and r <= ext_thr
+                        and _s1_entry_ok(sid, row, er_t.get(sid), target_value, cfg,
+                                         cost_hurdle=not cfg.free_extension)
+                    ):  # fmt: skip
                         extended.append(sid)
                     else:
                         reason = "horizon"
@@ -375,6 +453,12 @@ def plan_s1(
             orders.append(
                 Order(sid, "SELL", "delivery", "open", hd.qty, trade_date=d1, priority=0.0, reason=reason)
             )
+
+    forced: list[int] = []  # switch candidates, entered first
+    if cfg.switch_hurdle and allow_entries and k > 0 and scores_known:
+        forced = _plan_switches(
+            rank, ranked, rows, book, exits, extended, er_t, k, target_value, cfg, orders, d1
+        )
 
     remaining = [s for s in book.holdings if s not in exits]
     px_of = {s: (rows[s].close if s in rows else book.holdings[s].entry_price) for s in book.holdings}
@@ -396,10 +480,12 @@ def plan_s1(
             ind_count[ind] = ind_count.get(ind, 0) + 1
         chosen: list[int] = []
         mult: dict[int, float] = {}
-        for sid in ranked:
+        for sid in forced + [s for s in ranked if s not in forced]:
             if len(chosen) >= slots:
                 break
             if sid in book.holdings or sid in exits:
+                continue
+            if cfg.rebuy_block > 0 and book.recent_sells.get(sid, cfg.rebuy_block + 1) <= cfg.rebuy_block:
                 continue
             row = rows[sid]
             if not _s1_entry_ok(sid, row, er_t.get(sid), target_value, cfg):
@@ -498,6 +584,7 @@ class S1Policy:
         book_name: str = "s1",
         entries_allowed: Callable[[date], bool] | None = None,
         auto_resume_sessions: int | None = None,
+        policy_opts: Mapping[str, Any] | None = None,
     ) -> None:
         if auto_resume_sessions is not None:
             if auto_resume_sessions < 1:
@@ -506,7 +593,7 @@ class S1Policy:
                 raise ValueError("auto-resume is backtest-only: a policy with a live state needs `resume`")
         km = k_max if k_max is not None else settings.strategies.s1.k_max
         h = horizon_of(getattr(spec, "target", spec))
-        cfg = S1Config(h, km, settings.risk, costs, slippage, overlay, hysteresis)
+        cfg = S1Config(h, km, settings.risk, costs, slippage, overlay, hysteresis, **(policy_opts or {}))
         self.cfg, self.source, self.access, self.meta = cfg, score_source, panel_access, meta
         self.state, self.book_name, self._entries_allowed = state, book_name, entries_allowed
         self._peak = 0.0
@@ -517,6 +604,7 @@ class S1Policy:
         self._anchor: dict[int, date] = {}
         self._vol_at_entry: dict[int, float] = {}
         self._pending_vol: dict[int, float] = {}
+        self._sold_idx: dict[int, int] = {}  # sid -> session index at which its disappearance was seen
         self.entry_log: list[dict[str, Any]] = []
         self.plans: dict[date, S1Plan] = {}
 
@@ -560,14 +648,19 @@ class S1Policy:
                 self._vol_at_entry[sid] = self._pending_vol.pop(sid, 0.02)
             held = cal.session_index(t) - cal.session_index(self._anchor[sid])
             holdings[sid] = Holding(sid, pos.qty, pos.entry_price, held, self._vol_at_entry[sid])
+        t_idx = cal.session_index(t)
         for sid in [s for s in self._anchor if s not in holdings]:
             self._anchor.pop(sid, None)
             self._vol_at_entry.pop(sid, None)
+            self._sold_idx[sid] = t_idx  # the sell filled at today's open: 0 sessions ago
+        keep = self.cfg.rebuy_block
+        self._sold_idx = {s: i for s, i in self._sold_idx.items() if t_idx - i <= keep}
+        recent = {s: t_idx - i for s, i in self._sold_idx.items()}
 
         panel_t = self.access.day(t, d1)
         sc = self.source.scores(t)
         allow = self._entries_allowed(t) if self._entries_allowed is not None else True
-        sbook = S1Book(holdings, book.cash - book.reserved, dd, stopped)
+        sbook = S1Book(holdings, book.cash - book.reserved, dd, stopped, recent)
         plan = plan_s1(
             t, sc.score if sc else {}, sc.er if sc else {}, sbook, capital_inr, panel_t, self.cfg,
             disagreement=sc.disagreement if sc else None, meta=self.meta,
