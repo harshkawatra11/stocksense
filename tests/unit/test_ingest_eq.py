@@ -379,7 +379,7 @@ def test_cross_check_missing_value_is_not_a_mismatch(tmp_data_root, bad):
         return {pairs[0]: 10.5, pairs[1]: bad}
 
     res = cross_check_mcp(tmp_data_root, pairs, closes_fn=closes)
-    assert res.status == "ok" and res.checked == 1
+    assert res.status == "partial" and res.checked == 1
 
 
 def test_tiny_special_day_file_is_not_a_session(tmp_data_root, monkeypatch):
@@ -405,3 +405,40 @@ def test_sample_pairs_skips_weekend_sessions(tmp_data_root):
     upsert(tmp_data_root, "bhavcopy_eq", pl.concat([_eq_rows(sat, 3), _eq_rows(mon, 3)]))
     pairs = sample_pairs(tmp_data_root, [sat, mon], n=20, seed=1)
     assert len(pairs) == 3 and {d for _, d in pairs} == {mon}
+
+
+def test_cross_check_empty_pairs_is_empty_status(tmp_data_root):
+    async def closes(p):
+        raise AssertionError("must not be called")
+
+    assert cross_check_mcp(tmp_data_root, [], closes_fn=closes) == McpCheck("empty", 0, [])
+
+
+def test_cross_check_partial_when_some_pairs_unchecked(tmp_data_root):
+    d = date(2026, 9, 29)
+    pairs = [*_stored_pairs(tmp_data_root), ("S0002", d)]
+
+    async def closes(p):
+        return {pairs[0]: 10.5, pairs[1]: 10.5}
+
+    res = cross_check_mcp(tmp_data_root, pairs, closes_fn=closes)
+    assert res.status == "partial" and res.checked == 2
+
+
+def test_cross_check_ok_only_when_every_pair_checked(tmp_data_root):
+    pairs = _stored_pairs(tmp_data_root)
+
+    async def closes(p):
+        return {k: 10.5 for k in p}
+
+    assert cross_check_mcp(tmp_data_root, pairs, closes_fn=closes).status == "ok"
+
+
+def test_cross_check_none_checked_is_partial(tmp_data_root):
+    pairs = _stored_pairs(tmp_data_root)
+
+    async def closes(p):
+        return {}
+
+    res = cross_check_mcp(tmp_data_root, pairs, closes_fn=closes)
+    assert res.status == "partial" and res.checked == 0

@@ -356,7 +356,9 @@ ClosesFn = Callable[[list[Pair]], Awaitable[dict[Pair, float | None]]]
 
 @dataclass(frozen=True)
 class McpCheck:
-    """status: ok | mismatch | unreachable. mismatches: (symbol, date, stored_close, mcp_close)."""
+    """status: ok | mismatch | partial | empty | unreachable.
+
+    mismatches: (symbol, date, stored_close, mcp_close)."""
 
     status: str
     checked: int
@@ -436,8 +438,10 @@ def cross_check_mcp(settings: Settings, pairs: list[Pair], closes_fn: ClosesFn |
 
     An unreachable server (or any transport failure) gives status 'unreachable' and never raises;
     a reachable server with any |difference| > 0.01 gives 'mismatch'. Pairs the server has no value
-    for are not counted.
+    for are not counted: 'ok' needs every pair checked, otherwise 'partial'; no pairs gives 'empty'.
     """
+    if not pairs:
+        return McpCheck("empty", 0, [])
     fn = closes_fn if closes_fn is not None else _mcp_closes
     try:
         got = asyncio.run(fn(list(pairs)))
@@ -467,7 +471,9 @@ def cross_check_mcp(settings: Settings, pairs: list[Pair], closes_fn: ClosesFn |
         checked += 1
         if abs(theirs - mine) > _TOLERANCE:
             bad.append((pair[0], pair[1], mine, theirs))
-    return McpCheck("mismatch" if bad else "ok", checked, bad)
+    if bad:
+        return McpCheck("mismatch", checked, bad)
+    return McpCheck("ok" if checked == len(pairs) else "partial", checked, bad)
 
 
 def sample_pairs(settings: Settings, days: list[date], n: int = 20, seed: int = 0) -> list[Pair]:
