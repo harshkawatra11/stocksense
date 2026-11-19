@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+import httpx
 import polars as pl
+import pytest
 
 from stocksense.core.calendar import TradingCalendar
-from stocksense.core.clock import IST, FixedClock
+from stocksense.core.clock import IST, FixedClock, SteppingClock
+from stocksense.core.errors import BrokerError
 from stocksense.core.state import State
 from stocksense.data.ingest_common import IngestContext
 from stocksense.data.ingest_intraday import (
     backfill_1m,
+    extend_5m,
+    last_complete_bar_start,
     load_bars,
     month_end,
     month_starts,
@@ -276,3 +281,112 @@ def test_backfill_1m_marks_current_month_partial_and_refetches_from_last_day(tmp
     assert [c[1:] for c in up2.calls] == [(date(2026, 11, 19), date(2026, 11, 19))]
     df = read(tmp_data_root, "bars_1m").collect()
     assert df.select(pl.col("ts").dt.date().max()).item() == date(2026, 11, 19)
+
+
+# ---- G2-A4: extend_5m ----------------------------------------------------------------------------------
+
+CAL5 = TradingCalendar.from_dates([date(2026, 11, d) for d in (9, 10, 11, 12, 13, 16, 17, 18)])
+
+
+@pytest.mark.parametrize(
+    ("now", "want"),
+    [
+        (datetime(2026, 11, 18, 10, 7, tzinfo=IST), datetime(2026, 11, 18, 10, 0, tzinfo=IST)),
+        (datetime(2026, 11, 18, 10, 10, tzinfo=IST), datetime(2026, 11, 18, 10, 5, tzinfo=IST)),
+        (datetime(2026, 11, 18, 16, 0, tzinfo=IST), datetime(2026, 11, 18, 15, 25, tzinfo=IST)),
+        (datetime(2026, 11, 18, 9, 16, tzinfo=IST), datetime(2026, 11, 17, 15, 25, tzinfo=IST)),
+        (datetime(2026, 11, 21, 11, 0, tzinfo=IST), datetime(2026, 11, 20, 15, 25, tzinfo=IST)),
+    ],
+)
+def test_last_complete_bar_start(now, want):
+    assert last_complete_bar_start(now, CAL5) == want
+
+
+class FakeAngel:
+    def __init__(self, fail=False, clock=None, advance=None):
+        self.calls: list[tuple[str, datetime, datetime]] = []
+        self.fail, self.clock, self.advance = fail, clock, advance
+
+    def candles(self, token, interval, start_dt, end_dt):
+        self.calls.append((token, start_dt, end_dt))
+        if self.clock is not None:
+            self.clock.advance(self.advance)
+        if self.fail:
+            raise BrokerError("boom")
+        ts = []
+        t = start_dt
+        while t <= end_dt + timedelta(minutes=5):  # a sloppy server that also returns the next bar
+            ts.append(t)
+            t += timedelta(minutes=5)
+        return pl.DataFrame(
+            {"ts": ts, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}
+        ).with_columns(pl.col("ts").dt.convert_time_zone("Asia/Kolkata").dt.cast_time_unit("us"))
+
+    def close(self):
+        pass
+
+
+class FiveMap:
+    def angel_token(self, s):
+        return f"T{s}"
+
+    def close(self):
+        pass
+
+
+def _ctx5(settings, clock):
+    state = State(settings, clock)
+    state.migrate()
+    return IngestContext(settings, clock, CAL5, None, state)  # type: ignore[arg-type]
+
+
+def _seed_5m(settings, symbols, last=datetime(2026, 11, 18, 9, 55, tzinfo=IST)):
+    rows = [{**_bars(s, date(2026, 11, 18), [1.0]).to_dicts()[0], "ts": last} for s in symbols]
+    upsert(settings, "intraday_bars", pl.DataFrame(rows))
+
+
+def test_extend_5m_aborts_after_ten_consecutive_failures(tmp_data_root):
+    syms = [f"S{i}" for i in range(15)]
+    _seed_5m(tmp_data_root, syms)
+    ctx = _ctx5(tmp_data_root, FixedClock(datetime(2026, 11, 18, 10, 7, tzinfo=IST)))
+    ang = FakeAngel(fail=True)
+    res = extend_5m(ctx, syms, angel=ang, instruments=FiveMap())
+    assert len(ang.calls) == 10
+    assert res[-1].status == "failed" and res[-1].detail == "aborted after 10 consecutive failures"
+    assert sum(1 for r in res if r.status == "failed") == 11
+
+
+def test_extend_5m_requests_only_complete_bars(tmp_data_root):
+    _seed_5m(tmp_data_root, ["AAA"])
+    ctx = _ctx5(tmp_data_root, FixedClock(datetime(2026, 11, 18, 10, 7, tzinfo=IST)))
+    ang = FakeAngel()
+    extend_5m(ctx, ["AAA"], angel=ang, instruments=FiveMap())
+    assert ang.calls[0][1:] == (
+        datetime(2026, 11, 18, 10, 0, tzinfo=IST),
+        datetime(2026, 11, 18, 10, 0, tzinfo=IST),
+    )
+    ts = read(tmp_data_root, "intraday_bars").collect()["ts"].to_list()
+    assert max(ts) == datetime(2026, 11, 18, 10, 0, tzinfo=IST)  # the 10:05 bar is not stored
+
+
+def test_extend_5m_wall_budget(tmp_data_root):
+    syms = [f"S{i}" for i in range(6)]
+    _seed_5m(tmp_data_root, syms)
+    clock = SteppingClock(datetime(2026, 11, 18, 10, 7, tzinfo=IST))
+    ctx = _ctx5(tmp_data_root, clock)
+    ang = FakeAngel(clock=clock, advance=timedelta(seconds=100))
+    res = extend_5m(ctx, syms, angel=ang, instruments=FiveMap(), max_seconds=250)
+    assert len(ang.calls) == 3
+    assert res[-1].status == "skipped" and res[-1].detail == "wall budget"
+
+
+def test_extend_5m_http_errors_count_as_failures(tmp_data_root):
+    _seed_5m(tmp_data_root, ["AAA"])
+    ctx = _ctx5(tmp_data_root, FixedClock(datetime(2026, 11, 18, 10, 7, tzinfo=IST)))
+
+    class Boom(FakeAngel):
+        def candles(self, *a):
+            raise httpx.ConnectError("x")
+
+    res = extend_5m(ctx, ["AAA"], angel=Boom(), instruments=FiveMap())
+    assert res[0].status == "failed"
