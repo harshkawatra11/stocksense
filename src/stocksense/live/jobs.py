@@ -543,6 +543,13 @@ def _stage_build_labels(ctx: JobContext, d: date) -> str:
     return f"labels v{n}"
 
 
+def _stage_predict(ctx: JobContext, d: date) -> str:
+    fn = ctx.hook("predict")
+    if fn is None:
+        return f"{NOT_IMPLEMENTED} (no live model wired)"
+    return str(fn(ctx, d))
+
+
 def _stage_s1_plan(ctx: JobContext, d: date) -> str:
     fn = ctx.hook("s1_plan")
     if fn is None:
@@ -608,14 +615,14 @@ STAGES: list[tuple[str, Callable[[JobContext, date], str]]] = [
     ("build_features", _stage_build_features),
     ("build_labels", _stage_build_labels),
     ("kronos_features", _stub()),
-    ("predict", _stub()),
+    ("predict", _stage_predict),
     ("s1_plan", _stage_s1_plan),
     ("nightly_learn", _stub()),
     ("drift", _stub()),
     ("promote", _stub()),
     ("report", _stage_report),
 ]
-STUB_STAGES = ("kronos_features", "predict", "s1_plan", "nightly_learn", "drift", "promote")
+STUB_STAGES = ("kronos_features", "s1_plan", "nightly_learn", "drift", "promote")
 
 
 def run_eod_pipeline(ctx: JobContext, d: date, catchup: bool = False) -> dict[str, str]:
