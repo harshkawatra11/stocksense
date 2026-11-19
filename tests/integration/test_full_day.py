@@ -150,7 +150,11 @@ class Env:
         self.hub = QuoteHub(srcs, self.clock)
         self.published: list[date] = []
         self.stage_log: list[tuple[str, date]] = []
-        self.hooks = {"capture_preopen": lambda ctx: 3, "stage:build_features": self._stage("build_features")}
+        self.hooks = {
+            "capture_preopen": lambda ctx: 3,
+            "stage:build_features": self._stage("build_features"),
+            "stage:build_labels": self._stage("build_labels"),
+        }
         self.hooks.update(hooks or {})
         self.ctx = self.new_ctx()
 
@@ -264,7 +268,8 @@ def test_full_session_runs_every_job_in_order_and_ends_with_report_marks_and_rec
         "spread_capture@11:00", "spread_capture@13:00", "spread_capture@15:00", "capital_pm",
         "s1_entries", "s2_squareoff", "close_fills", "eod_mark", "eod_ingest", "eod_pipeline",
         "eod_pipeline.build_panel", "eod_pipeline.reconcile", "eod_pipeline.marks",
-        "eod_pipeline.build_features", "eod_pipeline.kronos_features", "eod_pipeline.predict",
+        "eod_pipeline.build_features", "eod_pipeline.build_labels",
+        "eod_pipeline.kronos_features", "eod_pipeline.predict",
         "eod_pipeline.s1_plan", "eod_pipeline.nightly_learn", "eod_pipeline.drift",
         "eod_pipeline.promote", "eod_pipeline.report", "housekeeping",
     ]  # fmt: skip

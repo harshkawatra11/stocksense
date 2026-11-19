@@ -13,8 +13,6 @@ runner = CliRunner()
 
 NOT_IMPL = {
     "ingest": 2,
-    "build-features": 4,
-    "build-labels": 4,
     "backtest": 5,
     "report": 12,
 }
@@ -65,6 +63,18 @@ def test_unimplemented_commands_exit_2(tmp_data_root, cmd, phase):
     res = runner.invoke(app, [cmd], obj=tmp_data_root)
     assert res.exit_code == 2
     assert f"not implemented yet (phase {phase})" in res.output
+
+
+def test_build_features_and_labels_are_wired(tmp_data_root, monkeypatch):
+    import stocksense.features.build as fb
+    import stocksense.labels.forward as lf
+
+    monkeypatch.setattr(fb, "build_features", lambda settings, **kw: 7)
+    monkeypatch.setattr(lf, "build_labels", lambda settings, **kw: 7)
+    for cmd in ("build-features", "build-labels"):
+        res = runner.invoke(app, [cmd], obj=tmp_data_root)
+        assert res.exit_code == 0, res.output
+        assert "7" in res.output
 
 
 def test_version_still_works():

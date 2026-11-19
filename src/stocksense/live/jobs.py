@@ -536,6 +536,13 @@ def _stage_build_features(ctx: JobContext, d: date) -> str:
     return f"features v{v}"
 
 
+def _stage_build_labels(ctx: JobContext, d: date) -> str:
+    from stocksense.labels.forward import build_labels
+
+    n = build_labels(ctx.settings)
+    return f"rows={n}"
+
+
 def _stage_s1_plan(ctx: JobContext, d: date) -> str:
     fn = ctx.hook("s1_plan")
     if fn is None:
@@ -599,6 +606,7 @@ STAGES: list[tuple[str, Callable[[JobContext, date], str]]] = [
     ("reconcile", _stage_reconcile),
     ("marks", _stage_marks),
     ("build_features", _stage_build_features),
+    ("build_labels", _stage_build_labels),
     ("kronos_features", _stub()),
     ("predict", _stub()),
     ("s1_plan", _stage_s1_plan),
