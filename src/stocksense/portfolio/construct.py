@@ -33,6 +33,7 @@ COV_WINDOW = 126
 MIN_COV_ROWS = 60
 S1_RANK_DECAY_MULT = 3
 S1_RANK_DECAY_MIN_HELD = 2
+DAYS_SINCE_RESULT_CAP = 90
 OVERLAY_BREADTH = 0.30
 OVERLAY_FACTOR = 0.5
 CASH_HAIRCUT = 0.005  # expected sale proceeds are counted at 99.5% when sizing tomorrow's close buys
@@ -860,7 +861,12 @@ class EnginePanelAccess:
         market: Mapping[date, tuple[float | None, float | None]] | None = None,
         stale: set[tuple[date, int]] | None = None,
         universe_rank: int = 500,
+        u500: Mapping[date, set[int]] | None = None,
+        universe_flag: bool = False,
     ) -> None:
+        if universe_flag and u500 is None:
+            raise ValueError("universe_flag=True needs the u500 map (date -> set of sids)")
+        self.u500, self.universe_flag = u500 or {}, universe_flag
         self.p, self.cal = panel, calendar
         self.industry = industry or {}
         self.split_dates, self.result_dates = split_dates or {}, result_dates or {}
@@ -886,10 +892,23 @@ class EnginePanelAccess:
             return None
         return len(self.cal.sessions(t + timedelta(days=1), ev))
 
+    def _days_since(self, t: date, events: Sequence[date] | None) -> int:
+        """Sessions from the latest event on or before t to t (0 on the day itself); 90 when none or older."""
+        if not events:
+            return DAYS_SINCE_RESULT_CAP
+        i = bisect_right(list(events), t)
+        if i == 0:
+            return DAYS_SINCE_RESULT_CAP
+        ev = events[i - 1]
+        if (t - ev).days > 2 * DAYS_SINCE_RESULT_CAP:
+            return DAYS_SINCE_RESULT_CAP
+        return min(DAYS_SINCE_RESULT_CAP, len(self.cal.sessions(ev + timedelta(days=1), t)))
+
     def day(self, t: date, next_date: date) -> PanelDay:
         p = self.p
         sl = p.day(t)
         rows: dict[int, NameRow] = {}
+        members = self.u500.get(t, set()) if self.universe_flag else None
         if sl is not None:
             for j in range(*sl):
                 sid = int(p.sid[j])
@@ -898,10 +917,11 @@ class EnginePanelAccess:
                 r = rets[max(0, pos - COV_WINDOW) : pos]
                 rows[sid] = NameRow(
                     float(p.close[j]), float(p.vol_21[j]), int(p.rank[j]), float(p.med_turn_20[j]),
-                    self.industry.get(sid, "UNKNOWN"), int(p.rank[j]) <= self.universe_rank,
+                    self.industry.get(sid, "UNKNOWN"),
+                    (sid in members) if members is not None else int(p.rank[j]) <= self.universe_rank,
                     (t, sid) in self.stale, bool(p.locked_up[j]), sid in self.fno,
                     self._days_to(t, self.split_dates.get(sid)), self._days_to(t, self.result_dates.get(sid)),
-                    90, r,
+                    self._days_since(t, self.result_dates.get(sid)), r,
                 )  # fmt: skip
         b, m = self.market.get(t, (None, None))
         return PanelDay(t, next_date, rows, b, m)

@@ -17,7 +17,7 @@ import json
 import math
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -102,6 +102,8 @@ class G1Config:
     # G2-C2: causal EMA span applied to the blended score, and the shape of the expected-return map
     score_ema: int | None = None
     er_map: Literal["linear", "decile"] = "linear"
+    # G2-C3: S1 universe membership follows the u500 hysteresis flag of panel_universe, not rank <= 500
+    universe_flag: bool = False
 
     def resolved(self, settings: Settings) -> G1Config:
         caps = self.capitals if self.capitals is not None else tuple(settings.costs.grid.capital_inr)
@@ -380,11 +382,13 @@ class G1World:
     stale: set[tuple[date, int]]
     fno_by_date: dict[date, set[int]]
     benchmark: pl.DataFrame  # date, ew500_ret, nifty500_ret
+    u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
 
-    def s1_access(self) -> EnginePanelAccess:
+    def s1_access(self, universe_flag: bool = False) -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
             result_dates=self.result_dates, market=self.market, stale=self.stale,
+            u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -466,6 +470,10 @@ def build_world(
     }
     stale_rows = daily.filter(pl.col("flag_stale").fill_null(False)).select("date", "sid")
     stale = set(zip(stale_rows["date"].to_list(), stale_rows["sid"].to_list(), strict=True))
+    u500_by_date: dict[date, set[int]] = {}
+    u_rows = uni.filter(pl.col("u500").fill_null(False)).select("date", "sid")
+    for d, s in zip(u_rows["date"].to_list(), u_rows["sid"].to_list(), strict=True):
+        u500_by_date.setdefault(d, set()).add(int(s))
     fno: dict[date, set[int]] = {}
     f_rows = uni.filter(pl.col("in_fno").fill_null(False)).select("date", "sid")
     for d, s in zip(f_rows["date"].to_list(), f_rows["sid"].to_list(), strict=True):
@@ -486,6 +494,7 @@ def build_world(
     return G1World(
         settings, calendar, slippage or SlippageTable.load_latest(settings), panel, start, end, industry,
         splits, results, market, stale, fno, mk.select("date", "ew500_ret", "nifty500_ret"),
+        u500_by_date,
     )  # fmt: skip
 
 
@@ -595,6 +604,7 @@ def _spec_s1(
         **({"auto_resume_sessions": cfg.s1_auto_resume} if cfg.s1_auto_resume is not None else {}),
         **({"score_ema": cfg.score_ema} if cfg.score_ema is not None else {}),
         **({"er_map": cfg.er_map} if cfg.er_map != "linear" else {}),
+        **({"universe_flag": True} if cfg.universe_flag else {}),
         **extra,
     }  # fmt: skip
 
@@ -752,7 +762,7 @@ class G1Runner:
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(), settings.costs, slip,
+                spec, settings, source, world.s1_access(self.cfg.universe_flag), settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
             )  # fmt: skip
             pol: Any = _MetaDated(base, meta) if meta is not None else _PolicyWrapper(base)
