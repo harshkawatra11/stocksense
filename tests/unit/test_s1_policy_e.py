@@ -1,4 +1,4 @@
-"""G2-E1: the S1 vol model (vol21 | har | garch); every option defaults to the pre-E behaviour."""
+"""G2-E1 (vol model) and G2-E3 (Kelly sizing): S1Config options that default to the pre-E behaviour."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def row(vol=0.005, har=None, garch=None, ind="I") -> NameRow:
 
 def test_defaults_are_the_pre_e_behaviour():
     c = cfg()
-    assert c.vol_model == "vol21"
+    assert c.vol_model == "vol21" and c.sizing == "score_over_vol"
     r = row(0.01, har=0.02, garch=0.03)
     assert _sel_vol(r, c) == 0.01  # forecasts present but not selected
 
@@ -51,9 +51,11 @@ def test_vol_model_selects_the_forecast_and_falls_back_to_vol21():
     assert _sel_vol(row(0.01, har=0.0), cfg(vol_model="har")) == 0.01  # non-positive: fall back
 
 
-def test_unknown_vol_model_is_rejected():
+def test_unknown_vol_model_or_sizing_is_rejected():
     with pytest.raises(ValueError):
         cfg(vol_model="ewma")
+    with pytest.raises(ValueError):
+        cfg(sizing="martingale")
 
 
 def _entries(c: S1Config, rows, equity=250_000.0):
@@ -100,3 +102,47 @@ def test_the_stop_uses_the_vol_at_entry_it_is_given():
         T, sc, er, S1Book({0: Holding(0, 500, 100.0, 3, 0.03)}, 1e9), 250_000.0, PanelDay(T, D1, rows), cfg()
     )
     assert narrow.exits == {0: "stop"} and wide.exits == {}
+
+
+# ---- E3: Kelly sizing ---------------------------------------------------------------------------------
+
+
+def test_kelly_raw_weights_are_er_over_variance():
+    c = cfg(sizing="kelly", kelly_c=0.25)
+    a = _raw_weight(c, 0.4, 0.01, row(0.02), 1.0)
+    b = _raw_weight(c, 0.1, 0.02, row(0.02), 1.0)
+    assert b / a == pytest.approx(2.0)  # er 0.01 : 0.02 at equal vol -> weights 1 : 2 (score is ignored)
+    assert a == pytest.approx(0.25 * 0.01 / (0.02**2 * H))  # c * er / sigma_h^2, sigma_h^2 = vol^2 * h
+    assert _raw_weight(c, 0.4, -0.001, row(0.02), 1.0) == 0.0
+    assert _raw_weight(c, 0.4, 0.0, row(0.02), 1.0) == 0.0
+    # the meta multiplier still applies
+    assert _raw_weight(c, 0.4, 0.01, row(0.02), 0.5) == pytest.approx(0.5 * a)
+
+
+def test_kelly_uses_the_selected_vol_model():
+    c = cfg(sizing="kelly", kelly_c=0.5, vol_model="garch")
+    r = row(0.02, garch=0.04)
+    assert _raw_weight(c, 0.0, 0.01, r, 1.0) == pytest.approx(0.5 * 0.01 / (0.04**2 * H))
+
+
+def test_default_sizing_is_score_over_vol():
+    assert _raw_weight(cfg(), 0.3, 0.05, row(0.01), 2.0) == pytest.approx((0.5 + 0.3) / 0.01 * 2.0)
+
+
+def _kelly_plan(c: float):
+    rows = {0: row(0.08, ind="A"), 1: row(0.08, ind="B")}
+    er = {0: 0.006, 1: 0.006}
+    return plan_s1(
+        T, {0: 0.4, 1: 0.3}, er, S1Book({}, 1e9), 2_000_000.0, PanelDay(T, D1, rows),
+        cfg(k_max=2, sizing="kelly", kelly_c=c),
+    )  # fmt: skip
+
+
+def test_fractional_kelly_deploys_c_er_over_variance_not_the_whole_gross_target():
+    small = _kelly_plan(0.25)
+    each = 0.25 * 0.006 / (0.08**2 * H)  # 0.046875 per name, below the gross target (~0.12) and the cap
+    assert small.weights[0] == pytest.approx(each) and small.weights[1] == pytest.approx(each)
+    assert sum(small.weights.values()) < small.gross_target
+    big = _kelly_plan(0.5)  # twice the Kelly weight would exceed the room: capped at the gross target
+    assert sum(big.weights.values()) == pytest.approx(big.gross_target, rel=1e-6)
+    assert sum(big.weights.values()) > sum(small.weights.values())

@@ -695,6 +695,23 @@ def s1cost_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
     }
 
 
+S1COST_E_TARGETS = ("y_c2o_10",)
+
+
+def s1cost_e_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """G2-E grid: the C5 winner V8 and five single-change variants (name -> (policy options, G1Config
+    overrides)). E0 is V8 itself (same spec, so the same trial id as the C5 trial)."""
+    opts, over = s1cost_variants(h)["V8"]
+    return {
+        "E0": (opts, over),
+        "E1": ({**opts, "vol_model": "har"}, over),
+        "E2": ({**opts, "vol_model": "garch"}, over),
+        "E3": (opts, {**over, "er_map": "decile_js"}),
+        "E4": ({**opts, "sizing": "kelly", "kelly_c": 0.25}, over),
+        "E5": ({**opts, "sizing": "kelly", "kelly_c": 0.5}, over),
+    }
+
+
 def plan_s1cost(
     cfg: G1Config,
     s1_models: Mapping[str, Sequence[ModelTrial]],
@@ -703,6 +720,7 @@ def plan_s1cost(
     overlay: bool,
     auto_resume: int = 20,
     targets: Sequence[str] = S1COST_TARGETS,
+    variants: Callable[[int], dict[str, tuple[dict[str, Any], dict[str, Any]]]] | None = None,
 ) -> list[S1CostPlan]:
     """Card C5: 8 variants x targets on the fixed GBM scores (base: k_max/overlay of the best G1 S1 trial,
     auto-resume 20, hysteresis universe flag). A target without models contributes nothing."""
@@ -711,7 +729,7 @@ def plan_s1cost(
         models = s1_models.get(target, ())
         if not models:
             continue
-        for name, (opts, over) in s1cost_variants(horizon_of(target)).items():
+        for name, (opts, over) in (variants or s1cost_variants)(horizon_of(target)).items():
             vcfg = replace(
                 cfg, family_s1=FAMILY_S1COST, s1_auto_resume=auto_resume, universe_flag=True,
                 s1_policy=opts, **over,

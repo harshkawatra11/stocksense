@@ -299,6 +299,7 @@ def run_s1_cost(
     k_max: int | None = None,
     overlay: bool | None = None,
     runner: G1Runner | None = None,
+    variants: Callable[[int], dict[str, tuple[dict[str, Any], dict[str, Any]]]] | None = None,
 ) -> S1CostOutcome:
     """Register the 8 x len(targets) trials of family g2-s1cost (all before any runs), run each (finished
     trials are skipped), then store the best net Sharpe at the reference capital as a candidate. The fixed
@@ -311,7 +312,7 @@ def run_s1_cost(
     models = {t: g1.surviving_models(state, "s1", t) for t in targets}
     for t, ms in models.items():
         out.notes.append(f"{t}: models {[m.trial_id for m in ms]}" if ms else f"{t}: no surviving S1 model")
-    plans = g1.plan_s1cost(base.cfg, models, k_max=k_max, overlay=overlay, targets=targets)
+    plans = g1.plan_s1cost(base.cfg, models, k_max=k_max, overlay=overlay, targets=targets, variants=variants)
     ids = register_trial_ids(state, [p.plan for p in plans])
     out.plans = [replace(p, plan=p.plan.with_id(i)) for p, i in zip(plans, ids, strict=True)]
     runners: dict[str, G1Runner] = {}

@@ -35,6 +35,7 @@ S1_RANK_DECAY_MULT = 3
 S1_RANK_DECAY_MIN_HELD = 2
 DAYS_SINCE_RESULT_CAP = 90
 VOL_MODELS = ("vol21", "har", "garch")
+SIZINGS = ("score_over_vol", "kelly")
 OVERLAY_BREADTH = 0.30
 OVERLAY_FACTOR = 0.5
 CASH_HAIRCUT = 0.005  # expected sale proceeds are counted at 99.5% when sizing tomorrow's close buys
@@ -137,13 +138,19 @@ class S1Config:
     free_extension: bool = False  # extend on er > 0 and the non-cost filters only (nothing trades)
     rebuy_block: int = 0  # a sid sold within the last `rebuy_block` sessions is not bought again
     switch_hurdle: bool = False  # swap a weak holding for a better candidate when the gain beats the cost
-    # G2-E1 option; the default reproduces the pre-E behaviour exactly
-    vol_model: str = "vol21"  # volatility for raw weights and the stop: vol21 | har | garch
+    # G2-E1 / E3 options; the defaults reproduce the pre-E behaviour exactly
+    vol_model: str = (
+        "vol21"  # volatility used for raw weights, Kelly sizing and the stop: vol21 | har | garch
+    )
+    sizing: str = "score_over_vol"  # raw weight: (0.5 + score) / vol, or fractional Kelly c * er / sigma_h^2
+    kelly_c: float = 0.5  # the Kelly fraction (sizing == "kelly")
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
         if self.vol_model not in VOL_MODELS:
             raise ValueError(f"vol_model must be one of {VOL_MODELS}, got {self.vol_model!r}")
+        if self.sizing not in SIZINGS:
+            raise ValueError(f"sizing must be one of {SIZINGS}, got {self.sizing!r}")
         mp = max(
             self.risk.min_position_inr_floor,
             min_position_for_fixed_cost("delivery", self.costs, self.risk.max_fixed_cost_bps),
@@ -306,9 +313,14 @@ def _sel_vol(row: NameRow, cfg: S1Config) -> float:
 
 
 def _raw_weight(cfg: S1Config, score: float, er: float | None, row: NameRow, mult: float) -> float:
-    """A new entry's raw weight before caps and scaling: (0.5 + score) / vol, vol = the selected model's
-    daily volatility, times the meta multiplier."""
-    return (0.5 + score) / max(_sel_vol(row, cfg), 1e-4) * mult
+    """A new entry's raw weight before caps and scaling: (0.5 + score) / vol (default) or fractional Kelly
+    c * er / sigma_h^2 with sigma_h = vol * sqrt(h) (0 when er <= 0), times the meta multiplier."""
+    vol = max(_sel_vol(row, cfg), 1e-4)
+    if cfg.sizing == "kelly":
+        if er is None or not math.isfinite(er) or er <= 0:
+            return 0.0
+        return cfg.kelly_c * er / (vol * vol * cfg.h) * mult
+    return (0.5 + score) / vol * mult
 
 
 def _s1_entry_ok(
@@ -542,6 +554,8 @@ def plan_s1(
             entries.append({"sid": sid, "date": d1, **feat})
         raw = {s: _raw_weight(cfg, scores_t[s], er_t.get(s), rows[s], mult[s]) for s in chosen}
         room = max(gt - existing_value / equity_inr, 0.0)
+        if cfg.sizing == "kelly":
+            room = min(room, sum(raw.values()))  # fractional Kelly deploys c * er / sigma^2, not all the room
         alloc = allocate_weights(raw, room, cap)
         weights = {s: w for s, w in alloc.items() if w * equity_inr >= min_pos - 1e-6}
         entries = [e for e in entries if e["sid"] in weights]
