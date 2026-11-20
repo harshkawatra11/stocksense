@@ -6,6 +6,15 @@ targets = ["y_c2o_5", "y_c2o_10", "y_c2o_20"]
 universe = "u500"
 long_only = true
 k_max = 20
+score_ema = 5                # G2-C5 winner g2-s1cost-y_c2o_10-40f8615b42 (V8); not yet validated by the gate
+er_map = "decile"
+[s1.policy]                  # S1Policy(policy_opts=); max_fixed_cost_bps overrides risk.toml for S1 only
+exit_rank = 50
+min_hold = 5
+free_extension = true
+rebuy_block = 5
+switch_hurdle = true
+max_fixed_cost_bps = 10
 [s2]                         # same-day auction book
 product = "intraday"
 entry = "open"               # O(t+1), decided 09:07 from pre-open indicative prices

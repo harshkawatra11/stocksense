@@ -182,3 +182,93 @@ def expected_return_map(
         .select("date", "sid", "score", (pl.col("__b") * pl.col("score")).alias("exp_ret"))
         .sort("date", "sid")
     )
+
+
+# ---- G2-C2: score smoothing and the convex expected-return map ---------------------------------------
+
+EMA_RESTART_GAP = 5  # a sid missing for more than this many sessions restarts its EMA
+
+
+def _ema_scores(frame: pl.DataFrame, span: int) -> pl.DataFrame:
+    """date, sid, score with the score replaced by its per-sid EMA (adjust=False) over consecutive session
+    rows. A session is a distinct date of `frame`; a gap of more than EMA_RESTART_GAP sessions between two
+    rows of a sid restarts the average. The value at t uses only rows <= t."""
+    f = frame.select("date", "sid", "score").sort("date", "sid")
+    dates = f["date"].unique().sort()
+    idx = pl.DataFrame({"date": dates, "_i": np.arange(len(dates), dtype=np.int64)})
+    f = f.join(idx, on="date").sort("sid", "date")
+    seg = (pl.col("_i").diff().over("sid") > EMA_RESTART_GAP).fill_null(False).cum_sum().over("sid")
+    f = f.with_columns(seg.alias("_seg"))
+    ema = pl.col("score").ewm_mean(span=span, adjust=False).over(["sid", "_seg"])
+    return f.select("date", "sid", ema.alias("score")).sort("date", "sid")
+
+
+def smooth_scores(frame: pl.DataFrame, span: int) -> pl.DataFrame:
+    """Causal EMA of every sid's score (see `_ema_scores`), re-ranked per date to [-0.5, 0.5]."""
+    if span < 1:
+        raise ValueError("span must be >= 1")
+    return rank_scores(_ema_scores(frame, span)).sort("date", "sid")
+
+
+def expected_return_map_decile(
+    blend: pl.DataFrame,
+    label_frame: pl.DataFrame,
+    target: str,
+    window: int = 504,
+    n_bins: int = 10,
+    shrink_k: float = 200,
+) -> pl.DataFrame:
+    """date, sid, score, exp_ret from a monotone decile map instead of a straight line.
+
+    At date t the trailing `window` dates s with label end < t are used (same rule as
+    `expected_return_map`). Per date the names are cut into `n_bins` equal-count bins by score; the mean raw
+    label of each bin over the window is shrunk toward the all-bin mean with weight n_j / (n_j + shrink_k),
+    then made non-decreasing across bins by isotonic regression weighted by n_j. A name's `exp_ret` is its
+    bin's value (no floor: a poor bin can be negative). With no known label yet the map is 0."""
+    from sklearn.isotonic import IsotonicRegression
+
+    n = pl.len().over("date")
+    bin_ = (
+        ((pl.col("score").rank("average").over("date") - 1.0) / n * n_bins).floor().clip(0, n_bins - 1)
+    ).cast(pl.Int64)
+    j = blend.select("date", "sid", "score").with_columns(bin_.alias("_bin"))
+    j = j.join(label_frame.select("date", "sid", target), on=["date", "sid"], how="left")
+    dates = j["date"].unique().sort().to_numpy()
+    pos = {d: i for i, d in enumerate(dates.tolist())}
+    T = len(dates)
+    lab = j.filter(pl.col(target).is_not_null() & pl.col(target).is_finite())
+    g = lab.group_by("date", "_bin").agg(pl.col(target).sum().alias("s"), pl.len().alias("n"))
+    S, N = np.zeros((T, n_bins)), np.zeros((T, n_bins))
+    ti = np.array([pos[d] for d in g["date"].to_list()], dtype=np.int64)
+    bi = g["_bin"].to_numpy().astype(np.int64)
+    S[ti, bi] = g["s"].to_numpy()
+    N[ti, bi] = g["n"].to_numpy()
+    known_end, day = _label_info(label_frame, target, dates)
+    values = np.zeros((T, n_bins))
+    xs = np.arange(n_bins, dtype=float)
+    for t in range(T):
+        idx = np.flatnonzero(known_end[:t] < day[t])[-window:]
+        if len(idx) == 0:
+            continue
+        s, c = S[idx].sum(0), N[idx].sum(0)
+        tot = c.sum()
+        if tot <= 0:
+            continue
+        grand = s.sum() / tot
+        have = c > 0
+        m = np.where(have, s / np.where(have, c, 1.0), grand)
+        shrunk = c / (c + shrink_k) * m + (shrink_k / (c + shrink_k) * grand if shrink_k > 0 else 0.0)
+        if have.sum() < 2:
+            values[t] = grand
+            continue
+        iso = IsotonicRegression(increasing=True, out_of_bounds="clip")
+        iso.fit(xs[have], shrunk[have], sample_weight=c[have])
+        values[t] = iso.predict(xs)
+    vdf = pl.DataFrame({"date": dates, **{f"_v{b}": values[:, b] for b in range(n_bins)}})
+    out = j.join(vdf, on="date").select(
+        "date",
+        "sid",
+        "score",
+        pl.concat_list([f"_v{b}" for b in range(n_bins)]).list.get(pl.col("_bin")).alias("exp_ret"),
+    )
+    return out.sort("date", "sid")

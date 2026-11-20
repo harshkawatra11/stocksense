@@ -17,10 +17,10 @@ import json
 import math
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import polars as pl
@@ -41,7 +41,13 @@ from stocksense.features.build import load_features
 from stocksense.features.events import CA_STRUCTURAL, RESULT_RE
 from stocksense.labels.forward import load_labels
 from stocksense.models.base import ModelSpec
-from stocksense.models.ensemble import blend_online, expected_return_map, rank_scores
+from stocksense.models.ensemble import (
+    blend_online,
+    expected_return_map,
+    expected_return_map_decile,
+    rank_scores,
+    smooth_scores,
+)
 from stocksense.portfolio.construct import (
     DayScores,
     EnginePanelAccess,
@@ -49,6 +55,7 @@ from stocksense.portfolio.construct import (
     PanelDay,
     S1Policy,
     S2Policy,
+    horizon_of,
 )
 from stocksense.portfolio.meta import MetaModel, build_meta_samples, size_multiplier, veto
 from stocksense.validation.lockbox import research_end
@@ -93,6 +100,14 @@ class G1Config:
     s1_targets: tuple[str, ...] = S1_TARGETS
     # backtest-only S1 variant (DECISIONS 2026-11-19): re-enter N sessions after the book-drawdown stop fired
     s1_auto_resume: int | None = None
+    # G2-C2: causal EMA span applied to the blended score, and the shape of the expected-return map
+    score_ema: int | None = None
+    er_map: Literal["linear", "decile"] = "linear"
+    # G2-C3: S1 universe membership follows the u500 hysteresis flag of panel_universe, not rank <= 500
+    universe_flag: bool = False
+    # G2-C5: S1Policy(policy_opts=) for the g2-s1cost grid, and the trial family S1 plans register under
+    s1_policy: Mapping[str, Any] | None = None
+    family_s1: str = FAMILY_S1
 
     def resolved(self, settings: Settings) -> G1Config:
         caps = self.capitals if self.capitals is not None else tuple(settings.costs.grid.capital_inr)
@@ -248,15 +263,30 @@ def _disagreement(frames: Mapping[str, pl.DataFrame]) -> pl.DataFrame | None:
     return wide.select("date", "sid", pl.concat_list(list(frames)).list.std(ddof=1).alias("disagreement"))
 
 
-def _with_er(blend: pl.DataFrame, labels: pl.DataFrame, target: str) -> pl.DataFrame:
-    er = expected_return_map(blend, labels, target)
+def _with_er(blend: pl.DataFrame, labels: pl.DataFrame, target: str, er_map: str = "linear") -> pl.DataFrame:
+    if er_map == "decile":
+        er = expected_return_map_decile(blend, labels, target)
+    elif er_map == "linear":
+        er = expected_return_map(blend, labels, target)
+    else:
+        raise ValueError(f"unknown er_map {er_map!r}")
     return er.with_columns(pl.col("exp_ret").fill_nan(None))
 
 
-def blend_models(frames: Mapping[str, pl.DataFrame], labels: pl.DataFrame, target: str) -> Blended:
-    """The online blend (causal), the expected-return map and the models' disagreement for one target."""
+def blend_models(
+    frames: Mapping[str, pl.DataFrame],
+    labels: pl.DataFrame,
+    target: str,
+    *,
+    score_ema: int | None = None,
+    er_map: str = "linear",
+) -> Blended:
+    """The online blend (causal), the expected-return map and the models' disagreement for one target.
+    `score_ema` smooths the blended score (causal EMA, re-ranked) before the map; `er_map` picks the map."""
     blend, weights = blend_online(dict(frames), labels, target)
-    er = _with_er(blend, labels, target)
+    if score_ema is not None:
+        blend = smooth_scores(blend, score_ema)
+    er = _with_er(blend, labels, target, er_map)
     dis = _disagreement(frames)
     out = er if dis is None else er.join(dis, on=["date", "sid"], how="left")
     if "disagreement" not in out.columns:
@@ -356,11 +386,13 @@ class G1World:
     stale: set[tuple[date, int]]
     fno_by_date: dict[date, set[int]]
     benchmark: pl.DataFrame  # date, ew500_ret, nifty500_ret
+    u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
 
-    def s1_access(self) -> EnginePanelAccess:
+    def s1_access(self, universe_flag: bool = False) -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
             result_dates=self.result_dates, market=self.market, stale=self.stale,
+            u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -442,6 +474,10 @@ def build_world(
     }
     stale_rows = daily.filter(pl.col("flag_stale").fill_null(False)).select("date", "sid")
     stale = set(zip(stale_rows["date"].to_list(), stale_rows["sid"].to_list(), strict=True))
+    u500_by_date: dict[date, set[int]] = {}
+    u_rows = uni.filter(pl.col("u500").fill_null(False)).select("date", "sid")
+    for d, s in zip(u_rows["date"].to_list(), u_rows["sid"].to_list(), strict=True):
+        u500_by_date.setdefault(d, set()).add(int(s))
     fno: dict[date, set[int]] = {}
     f_rows = uni.filter(pl.col("in_fno").fill_null(False)).select("date", "sid")
     for d, s in zip(f_rows["date"].to_list(), f_rows["sid"].to_list(), strict=True):
@@ -462,6 +498,7 @@ def build_world(
     return G1World(
         settings, calendar, slippage or SlippageTable.load_latest(settings), panel, start, end, industry,
         splits, results, market, stale, fno, mk.select("date", "ew500_ret", "nifty500_ret"),
+        u500_by_date,
     )  # fmt: skip
 
 
@@ -569,6 +606,10 @@ def _spec_s1(
         "start": cfg.start, "end": cfg.end, "capitals": list(cfg.capitals or ()),
         "reference_capital": cfg.reference_capital, "stress": cfg.slippage_stress,
         **({"auto_resume_sessions": cfg.s1_auto_resume} if cfg.s1_auto_resume is not None else {}),
+        **({"score_ema": cfg.score_ema} if cfg.score_ema is not None else {}),
+        **({"er_map": cfg.er_map} if cfg.er_map != "linear" else {}),
+        **({"universe_flag": True} if cfg.universe_flag else {}),
+        **({"policy": dict(cfg.s1_policy)} if cfg.s1_policy else {}),
         **extra,
     }  # fmt: skip
 
@@ -597,7 +638,7 @@ def plan_grid(
                 plans.append(
                     TrialPlan(
                         "s1",
-                        FAMILY_S1,
+                        cfg.family_s1,
                         target,
                         _spec_s1(cfg, target, k, ov, models),
                         f"S1 {target} k={k} overlay={'on' if ov else 'off'}",
@@ -607,6 +648,65 @@ def plan_grid(
         for k in S2_K_MAX:
             plans.append(TrialPlan("s2", FAMILY_S2, S2_TARGET, _spec_s2(cfg, k, s2_models), f"S2 k={k}"))
     return plans
+
+
+@dataclass(frozen=True)
+class S1CostPlan:
+    """One trial of the g2-s1cost grid: the variant name, the G1Config that produced its spec and the plan."""
+
+    variant: str
+    cfg: G1Config
+    plan: TrialPlan
+
+
+FAMILY_S1COST = "g2-s1cost"
+S1COST_TARGETS = ("y_c2o_10", "y_c2o_20")
+
+
+def s1cost_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """The eight variants of card C5: name -> (policy options, G1Config overrides). h = target horizon."""
+    v1 = {"exit_rank": 50, "min_hold": h // 2}
+    v2 = {**v1, "free_extension": True, "rebuy_block": 5}
+    v5 = {**v2, "switch_hurdle": True}
+    return {
+        "V1": (v1, {}),
+        "V2": (v2, {}),
+        "V3": (v2, {"score_ema": 3}),
+        "V4": (v2, {"score_ema": 5}),
+        "V5": (v5, {"score_ema": 5}),
+        "V6": (v5, {"score_ema": 5, "er_map": "decile"}),
+        "V7": ({**v5, "exit_rank": 75}, {"score_ema": 5, "er_map": "decile"}),
+        "V8": ({**v5, "max_fixed_cost_bps": 10}, {"score_ema": 5, "er_map": "decile"}),
+    }
+
+
+def plan_s1cost(
+    cfg: G1Config,
+    s1_models: Mapping[str, Sequence[ModelTrial]],
+    *,
+    k_max: int,
+    overlay: bool,
+    auto_resume: int = 20,
+    targets: Sequence[str] = S1COST_TARGETS,
+) -> list[S1CostPlan]:
+    """Card C5: 8 variants x targets on the fixed GBM scores (base: k_max/overlay of the best G1 S1 trial,
+    auto-resume 20, hysteresis universe flag). A target without models contributes nothing."""
+    out: list[S1CostPlan] = []
+    for target in targets:
+        models = s1_models.get(target, ())
+        if not models:
+            continue
+        for name, (opts, over) in s1cost_variants(horizon_of(target)).items():
+            vcfg = replace(
+                cfg, family_s1=FAMILY_S1COST, s1_auto_resume=auto_resume, universe_flag=True,
+                s1_policy=opts, **over,
+            )  # fmt: skip
+            plan = TrialPlan(
+                "s1", FAMILY_S1COST, target, _spec_s1(vcfg, target, k_max, overlay, models),
+                f"S1 cost {name} {target} k={k_max}",
+            )  # fmt: skip
+            out.append(S1CostPlan(name, vcfg, plan))
+    return out
 
 
 def register_plans(state: State, plans: Sequence[TrialPlan]) -> list[TrialPlan]:
@@ -683,7 +783,7 @@ class G1Runner:
         self.clock = clock or SystemClock()
         self._world = world
         self._labels: dict[str, pl.DataFrame] = {}
-        self._blends: dict[tuple[str, tuple[str, ...]], Blended] = {}
+        self._blends: dict[tuple[Any, ...], Blended] = {}
         self.current_trial: str | None = None
 
     # -- shared inputs
@@ -700,11 +800,13 @@ class G1Runner:
         return self._labels[target]
 
     def blended(self, target: str, models: Sequence[str]) -> Blended:
-        key = (target, tuple(sorted(models)))
+        key = (target, tuple(sorted(models)), self.cfg.score_ema, self.cfg.er_map)
         if key not in self._blends:
             end = research_end(self.settings)
             frames = {m: load_oof(self.settings, m, end) for m in sorted(models)}
-            self._blends[key] = blend_models(frames, self.labels(target), target)
+            self._blends[key] = blend_models(
+                frames, self.labels(target), target, score_ema=self.cfg.score_ema, er_map=self.cfg.er_map
+            )
         return self._blends[key]
 
     # -- policy factories (a policy is stateful: one per run)
@@ -718,14 +820,16 @@ class G1Runner:
         meta: WalkForwardMeta | None = None,
         entry: str = "close",
         auto_resume: int | None = None,
+        policy_opts: Mapping[str, Any] | None = None,
     ) -> Callable[[SlippageTable], Any]:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(), settings.costs, slip,
+                spec, settings, source, world.s1_access(self.cfg.universe_flag), settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
+                policy_opts=policy_opts,
             )  # fmt: skip
             pol: Any = _MetaDated(base, meta) if meta is not None else _PolicyWrapper(base)
             return _OpenEntry(pol) if entry == "open" else pol
@@ -762,6 +866,7 @@ class G1Runner:
             meta=meta,
             entry=sp.get("entry", "close"),
             auto_resume=sp.get("auto_resume_sessions"),
+            policy_opts=sp.get("policy"),
         )
 
     def _meta_for(self, base_trial: str) -> WalkForwardMeta:
