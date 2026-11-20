@@ -102,7 +102,7 @@ class G1Config:
     s1_auto_resume: int | None = None
     # G2-C2: causal EMA span applied to the blended score, and the shape of the expected-return map
     score_ema: int | None = None
-    er_map: Literal["linear", "decile"] = "linear"
+    er_map: Literal["linear", "decile", "decile_js"] = "linear"
     # G2-C3: S1 universe membership follows the u500 hysteresis flag of panel_universe, not rank <= 500
     universe_flag: bool = False
     # G2-C5: S1Policy(policy_opts=) for the g2-s1cost grid, and the trial family S1 plans register under
@@ -266,6 +266,8 @@ def _disagreement(frames: Mapping[str, pl.DataFrame]) -> pl.DataFrame | None:
 def _with_er(blend: pl.DataFrame, labels: pl.DataFrame, target: str, er_map: str = "linear") -> pl.DataFrame:
     if er_map == "decile":
         er = expected_return_map_decile(blend, labels, target)
+    elif er_map == "decile_js":
+        er = expected_return_map_decile(blend, labels, target, shrink="james_stein")
     elif er_map == "linear":
         er = expected_return_map(blend, labels, target)
     else:
