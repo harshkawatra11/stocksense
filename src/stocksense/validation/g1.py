@@ -391,6 +391,27 @@ class G1World:
     u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
     _volfc: tuple[np.ndarray, np.ndarray] | None = None
     _p_bear: dict[date, float] | None = None
+    _es: np.ndarray | None = None
+
+    def es_array(self) -> np.ndarray:
+        """Per panel row GPD expected-shortfall multiplier (G2-E6): the monthly pooled-by-tercile table
+        built from rows before each month (causal), cached on disk; NaN where a name has none."""
+        if self._es is None:
+            from stocksense.core.paths import Paths
+            from stocksense.portfolio import evt
+
+            p = self.panel
+            path = evt.cache_path(Paths(self.settings).root, self.end, self.start, len(set(p.sid.tolist())))
+            if path.exists():
+                table = pl.read_parquet(path)
+            else:
+                table = evt.es_mult_table(
+                    p.date, p.sid, p.ret, p.vol_21, p.rank, from_date=self.start, to_date=self.end
+                )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                table.write_parquet(path)
+            self._es = evt.align_es_mult(table, p.sid, p.date)
+        return self._es
 
     def regime_p_bear(self) -> dict[date, float]:
         """date -> filtered HMM bear probability (G2-E4), computed on demand and causally (each year's
@@ -413,7 +434,11 @@ class G1World:
         return self._volfc
 
     def s1_access(
-        self, universe_flag: bool = False, vol_model: str = "vol21", regime: bool = False
+        self,
+        universe_flag: bool = False,
+        vol_model: str = "vol21",
+        regime: bool = False,
+        stop_model: str = "fixed",
     ) -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
@@ -421,6 +446,7 @@ class G1World:
             u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
             volfc=self.vol_arrays() if vol_model != "vol21" else None,
             regime=self.regime_p_bear() if regime else None,
+            es=self.es_array() if stop_model == "evt" else None,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -872,10 +898,12 @@ class G1Runner:
         spec = ModelSpec(family="s1-g1", target=target)
         vol_model = str((policy_opts or {}).get("vol_model", "vol21"))
         regime = bool((policy_opts or {}).get("regime_overlay", False))
+        stop_model = str((policy_opts or {}).get("stop_model", "fixed"))
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(self.cfg.universe_flag, vol_model, regime),
+                spec, settings, source,
+                world.s1_access(self.cfg.universe_flag, vol_model, regime, stop_model),
                 settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
                 policy_opts=policy_opts,
