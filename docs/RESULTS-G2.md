@@ -92,3 +92,17 @@ Gate v2 (informational, same command with `--gate-version 2`):
 The cost work did what it was meant to do: against `g1-s1-y_c2o_10-cce12fb757` net Sharpe rises from 1.17 to 1.69 and the 2x-slippage Sharpe from 0.22 to 1.29, with turnover down from 0.19 to 0.10 per day and holds more than twice as long. The candidate still FAILS the official research gate (v1) on three lines: excess t (-0.01: against the raw equal-weight benchmark the book has no excess return), DSR (0.00 with the all-trials Sharpe variance and N = 119) and PBO (0.52: with the 16 variants the in-sample winner is a coin flip out of sample). Under v2 (informational) it fails only the PBO line, the excess t (2.26) and DSR (1.00) lines pass. The PBO result means the choice among these 16 variants cannot be shown to carry over out of sample, so this candidate does not go to the lockbox. It is the best available S1 policy and is kept as the paper-trading policy, labelled unvalidated; the 60-session paper gate decides.
 
 `config/gate_v2.toml` `effective_from` needs no change. The official verdict for these trials is v1.
+
+## 2. Model families (cards D1-D11)
+
+Evaluation protocol of PLAN-G2 Part 4.2: test folds 2016-2025 (10 folds), base = `s1-gbm-y_c2o_10-e0f7276025` re-scored on the same window (mean IC 0.0747), S1 net Sharpe from the pre-C5 policy of D0.5 (k_max 10, no overlay, auto-resume 20, Rs 5 lakh).
+
+| family | trial | mean IC | t | corr with base | orth IC (t NW) | blend gain (t NW) | S1 net Sharpe | 2x slip | turnover/day | admission |
+|---|---|---|---|---|---|---|---|---|---|---|
+| dens (DoubleEnsemble, K=6, decay 0.9) | `g2-dens-y_c2o_10-553d191061` | 0.0752 | 25.91 | 0.88 | 0.0218 (5.17) | 0.0020 (1.89) | 0.85 | 0.05 | 0.144 | ADMITTED (orthogonal IC) |
+
+dens verdict:
+
+- Selection on the inner validation of fold 2016 (6 configs, mean IC 0.0981 to 0.1017) chose K=6, decay 0.9; differences among configs were within 0.004, so the choice is weak. Walk-forward IC 0.0752 (t 25.9, NW t 10.5) is about equal to the GBM (0.0747 on the same window); by year it ranges 0.105 (2016) to 0.021 (2025).
+- Its score is 0.88 correlated with the GBM and adds orthogonal IC 0.022 (t 5.2), so it passes the pre-registered admission rule on the orth line; the 50/50 blend gain is only +0.0020 (t 1.9), below the 0.003 line, so the benefit is small.
+- Alone in S1 it gives net Sharpe 0.85 and 2x-slip 0.05 (trial `g2-s1-y_c2o_10-736a9989de`), weaker than the GBM book under the same pre-C5 policy; turnover is low (0.144). The 2025 fold (IC 0.021) is its weak spot. It enters the D12 ensemble as the stronger-baseline member.

@@ -24,7 +24,7 @@ def test_unknown_key_is_keyerror():
 
 def test_listed_but_unwritten_module_is_keyerror():
     with pytest.raises(KeyError):
-        build_model(ModelSpec(family="g2-dens", target="y_c2o_10"))
+        build_model(ModelSpec(family="g2-factorvae", target="y_c2o_10"))
 
 
 def test_only_the_named_module_is_imported(monkeypatch):
