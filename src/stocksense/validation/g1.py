@@ -368,7 +368,7 @@ class _FnoAccess(EnginePanelAccess):
         rows: dict[int, NameRow] = {
             s: (replace(r, in_fno=True) if s in members else r) for s, r in pd_.rows.items()
         }
-        return PanelDay(pd_.date, pd_.next_date, rows, pd_.breadth_200, pd_.mkt_ret_21)
+        return PanelDay(pd_.date, pd_.next_date, rows, pd_.breadth_200, pd_.mkt_ret_21, pd_.p_bear)
 
 
 @dataclass
@@ -390,6 +390,37 @@ class G1World:
     benchmark: pl.DataFrame  # date, ew500_ret, nifty500_ret
     u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
     _volfc: tuple[np.ndarray, np.ndarray] | None = None
+    _p_bear: dict[date, float] | None = None
+    _es: np.ndarray | None = None
+
+    def es_array(self) -> np.ndarray:
+        """Per panel row GPD expected-shortfall multiplier (G2-E6): the monthly pooled-by-tercile table
+        built from rows before each month (causal), cached on disk; NaN where a name has none."""
+        if self._es is None:
+            from stocksense.core.paths import Paths
+            from stocksense.portfolio import evt
+
+            p = self.panel
+            path = evt.cache_path(Paths(self.settings).root, self.end, self.start, len(set(p.sid.tolist())))
+            if path.exists():
+                table = pl.read_parquet(path)
+            else:
+                table = evt.es_mult_table(
+                    p.date, p.sid, p.ret, p.vol_21, p.rank, from_date=self.start, to_date=self.end
+                )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                table.write_parquet(path)
+            self._es = evt.align_es_mult(table, p.sid, p.date)
+        return self._es
+
+    def regime_p_bear(self) -> dict[date, float]:
+        """date -> filtered HMM bear probability (G2-E4), computed on demand and causally (each year's
+        parameters come from data before that year; the filter uses data up to the day)."""
+        if self._p_bear is None:
+            from stocksense.features import regime
+
+            self._p_bear = regime.p_bear_by_date(self.settings, self.end)
+        return self._p_bear
 
     def vol_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """(HAR, GARCH) daily-vol forecasts aligned to the panel rows (G2-E1), computed on demand from the
@@ -402,12 +433,20 @@ class G1World:
             self._volfc = vf.align_daily_vol(self.panel.sid, self.panel.date, frame)
         return self._volfc
 
-    def s1_access(self, universe_flag: bool = False, vol_model: str = "vol21") -> EnginePanelAccess:
+    def s1_access(
+        self,
+        universe_flag: bool = False,
+        vol_model: str = "vol21",
+        regime: bool = False,
+        stop_model: str = "fixed",
+    ) -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
             result_dates=self.result_dates, market=self.market, stale=self.stale,
             u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
             volfc=self.vol_arrays() if vol_model != "vol21" else None,
+            regime=self.regime_p_bear() if regime else None,
+            es=self.es_array() if stop_model == "evt" else None,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -712,6 +751,20 @@ def s1cost_e_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]
     }
 
 
+def s1cost_e2_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """G2-E4/E6 portfolio-option grid on the E3 winner (V8 + er_map decile_js): R0 is that winner itself (same
+    spec, same trial id `g2-s1cost-y_c2o_10-39cae29708`), R1 adds the regime overlay (gross x 0.5 when the
+    filtered bear probability is above 0.6), R2 the extreme-value stop, R3 both."""
+    opts, over = s1cost_variants(h)["V8"]
+    over = {**over, "er_map": "decile_js"}
+    return {
+        "R0": (opts, over),
+        "R1": ({**opts, "regime_overlay": True}, over),
+        "R2": ({**opts, "stop_model": "evt"}, over),
+        "R3": ({**opts, "regime_overlay": True, "stop_model": "evt"}, over),
+    }
+
+
 def plan_s1cost(
     cfg: G1Config,
     s1_models: Mapping[str, Sequence[ModelTrial]],
@@ -858,10 +911,13 @@ class G1Runner:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
         vol_model = str((policy_opts or {}).get("vol_model", "vol21"))
+        regime = bool((policy_opts or {}).get("regime_overlay", False))
+        stop_model = str((policy_opts or {}).get("stop_model", "fixed"))
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(self.cfg.universe_flag, vol_model),
+                spec, settings, source,
+                world.s1_access(self.cfg.universe_flag, vol_model, regime, stop_model),
                 settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
                 policy_opts=policy_opts,

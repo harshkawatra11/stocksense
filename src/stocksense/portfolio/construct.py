@@ -36,8 +36,11 @@ S1_RANK_DECAY_MIN_HELD = 2
 DAYS_SINCE_RESULT_CAP = 90
 VOL_MODELS = ("vol21", "har", "garch")
 SIZINGS = ("score_over_vol", "kelly")
+STOP_MODELS = ("fixed", "evt")
 OVERLAY_BREADTH = 0.30
 OVERLAY_FACTOR = 0.5
+REGIME_BEAR_P = 0.6  # G2-E4: the regime overlay applies above this filtered bear probability
+REGIME_FACTOR = 0.5
 CASH_HAIRCUT = 0.005  # expected sale proceeds are counted at 99.5% when sizing tomorrow's close buys
 BUY_CUSHION_INR = 30.0  # the engine leaves about Rs 29.5 of cash per buy for the exit fees
 S2_STOP_FRAC = 0.03
@@ -87,6 +90,7 @@ class NameRow:
     upper_circuit: float | None = None  # live S2: the quote's upper circuit price
     vol_har: float | None = None  # G2-E1: HAR-RV daily-vol forecast (daily units, like vol_21)
     vol_garch: float | None = None  # G2-E1: GARCH(1,1) daily-vol forecast (10-day vol / sqrt(10))
+    es_mult: float | None = None  # G2-E6: pooled GPD 99% expected shortfall of the vol-scaled loss
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,7 @@ class PanelDay:
     rows: Mapping[int, NameRow]
     breadth_200: float | None = None
     mkt_ret_21: float | None = None
+    p_bear: float | None = None  # G2-E4: filtered HMM bear probability of the date (research worlds only)
 
 
 class PanelAccess(Protocol):
@@ -144,6 +149,10 @@ class S1Config:
     )
     sizing: str = "score_over_vol"  # raw weight: (0.5 + score) / vol, or fractional Kelly c * er / sigma_h^2
     kelly_c: float = 0.5  # the Kelly fraction (sizing == "kelly")
+    # G2-E4: gross x 0.5 when the filtered bear probability is above 0.6 (default off)
+    regime_overlay: bool = False
+    # G2-E6: "fixed" = stop_vol_mult * vol * sqrt(h); "evt" = es_mult * vol * sqrt(h) (research worlds only)
+    stop_model: str = "fixed"
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -151,6 +160,8 @@ class S1Config:
             raise ValueError(f"vol_model must be one of {VOL_MODELS}, got {self.vol_model!r}")
         if self.sizing not in SIZINGS:
             raise ValueError(f"sizing must be one of {SIZINGS}, got {self.sizing!r}")
+        if self.stop_model not in STOP_MODELS:
+            raise ValueError(f"stop_model must be one of {STOP_MODELS}, got {self.stop_model!r}")
         mp = max(
             self.risk.min_position_inr_floor,
             min_position_for_fixed_cost("delivery", self.costs, self.risk.max_fixed_cost_bps),
@@ -215,6 +226,7 @@ class Holding:
     entry_price: float
     held: int
     vol_at_entry: float
+    es_mult: float | None = None  # G2-E6: the ES multiplier at entry (stop_model == "evt")
 
 
 @dataclass(frozen=True)
@@ -310,6 +322,15 @@ def _sel_vol(row: NameRow, cfg: S1Config) -> float:
     if v is None or not math.isfinite(v) or v <= 0:
         return row.vol_21
     return float(v)
+
+
+def _stop_distance(hd: Holding, cfg: S1Config, sqrt_h: float) -> float:
+    """The stop as a fraction below the entry price: `max(stop_min, stop_vol_mult * vol * sqrt h)`, or
+    with stop_model "evt" and a known ES multiplier `max(stop_min, es_mult * vol * sqrt h)`."""
+    k = cfg.risk.stop_vol_mult
+    if cfg.stop_model == "evt" and hd.es_mult is not None and math.isfinite(hd.es_mult) and hd.es_mult > 0:
+        k = hd.es_mult
+    return max(cfg.risk.stop_min, k * hd.vol_at_entry * sqrt_h)
 
 
 def _raw_weight(cfg: S1Config, score: float, er: float | None, row: NameRow, mult: float) -> float:
@@ -437,6 +458,8 @@ def plan_s1(
         and panel_t.breadth_200 < OVERLAY_BREADTH and panel_t.mkt_ret_21 < 0
     ):  # fmt: skip
         gt *= OVERLAY_FACTOR
+    if cfg.regime_overlay and panel_t.p_bear is not None and panel_t.p_bear > REGIME_BEAR_P:
+        gt *= REGIME_FACTOR
     gt *= gross_scale  # live decay scale (G2-G4); 1.0 in every backtest
     if book.stopped or book.dd >= risk.book_dd_stop:
         gt = 0.0
@@ -462,9 +485,7 @@ def plan_s1(
         reason: str | None = None
         if row is None or not row.in_universe or row.stale:
             reason = "universe_exit"
-        elif row.close <= hd.entry_price * (
-            1.0 - max(risk.stop_min, risk.stop_vol_mult * hd.vol_at_entry * sqrt_h)
-        ):
+        elif row.close <= hd.entry_price * (1.0 - _stop_distance(hd, cfg, sqrt_h)):
             reason = "stop"
         elif scores_known:
             r = rank.get(sid, math.inf)
@@ -542,6 +563,8 @@ def plan_s1(
             }  # fmt: skip
             if cfg.vol_model != "vol21":
                 feat["vol_sel"] = float(_sel_vol(row, cfg))  # the stop's vol_at_entry follows the model
+            if cfg.stop_model == "evt":
+                feat["es_mult"] = float("nan") if row.es_mult is None else float(row.es_mult)
             m = 1.0
             if meta is not None:
                 p = float(meta.predict_rows([feat])[0])
@@ -652,6 +675,8 @@ class S1Policy:
         self._anchor: dict[int, date] = {}
         self._vol_at_entry: dict[int, float] = {}
         self._pending_vol: dict[int, float] = {}
+        self._es_at_entry: dict[int, float | None] = {}
+        self._pending_es: dict[int, float | None] = {}
         self._sold_idx: dict[int, int] = {}  # sid -> session index at which its disappearance was seen
         self.entry_log: list[dict[str, Any]] = []
         self.plans: dict[date, S1Plan] = {}
@@ -694,12 +719,16 @@ class S1Policy:
             if sid not in self._anchor:
                 self._anchor[sid] = pos.entry_date
                 self._vol_at_entry[sid] = self._pending_vol.pop(sid, 0.02)
+                self._es_at_entry[sid] = self._pending_es.pop(sid, None)
             held = cal.session_index(t) - cal.session_index(self._anchor[sid])
-            holdings[sid] = Holding(sid, pos.qty, pos.entry_price, held, self._vol_at_entry[sid])
+            holdings[sid] = Holding(
+                sid, pos.qty, pos.entry_price, held, self._vol_at_entry[sid], self._es_at_entry.get(sid)
+            )
         t_idx = cal.session_index(t)
         for sid in [s for s in self._anchor if s not in holdings]:
             self._anchor.pop(sid, None)
             self._vol_at_entry.pop(sid, None)
+            self._es_at_entry.pop(sid, None)
             self._sold_idx[sid] = t_idx  # the sell filled at today's open: 0 sessions ago
         keep = self.cfg.rebuy_block
         self._sold_idx = {s: i for s, i in self._sold_idx.items() if t_idx - i <= keep}
@@ -718,6 +747,8 @@ class S1Policy:
             self._anchor[sid] = d1
         for e in plan.entries:
             self._pending_vol[e["sid"]] = e.get("vol_sel", e["vol_21"])
+            if "es_mult" in e:
+                self._pending_es[e["sid"]] = e["es_mult"]
         self.entry_log.extend(plan.entries)
         self.plans[t] = plan
         return plan.orders
@@ -911,12 +942,18 @@ class EnginePanelAccess:
         u500: Mapping[date, set[int]] | None = None,
         universe_flag: bool = False,
         volfc: tuple[np.ndarray, np.ndarray] | None = None,
+        regime: Mapping[date, float] | None = None,
+        es: np.ndarray | None = None,
     ) -> None:
         if universe_flag and u500 is None:
             raise ValueError("universe_flag=True needs the u500 map (date -> set of sids)")
         self.u500, self.universe_flag = u500 or {}, universe_flag
         if volfc is not None and (len(volfc[0]) != len(panel.sid) or len(volfc[1]) != len(panel.sid)):
             raise ValueError("volfc arrays must be aligned with the panel rows")
+        if es is not None and len(es) != len(panel.sid):
+            raise ValueError("es array must be aligned with the panel rows")
+        self.es = es  # per panel row ES multiplier (G2-E6); None = fixed stops only
+        self.regime = regime or {}  # date -> filtered bear probability (G2-E4); empty = no overlay data
         self.volfc = volfc  # (har, garch) daily-vol forecasts per panel row (G2-E1); None = vol_21 only
         self.p, self.cal = panel, calendar
         self.industry = industry or {}
@@ -961,6 +998,12 @@ class EnginePanelAccess:
         v = float(self.volfc[which][j])
         return v if math.isfinite(v) else None
 
+    def _es(self, j: int) -> float | None:
+        if self.es is None:
+            return None
+        v = float(self.es[j])
+        return v if math.isfinite(v) else None
+
     def day(self, t: date, next_date: date) -> PanelDay:
         p = self.p
         sl = p.day(t)
@@ -979,7 +1022,7 @@ class EnginePanelAccess:
                     (t, sid) in self.stale, bool(p.locked_up[j]), sid in self.fno,
                     self._days_to(t, self.split_dates.get(sid)), self._days_to(t, self.result_dates.get(sid)),
                     self._days_since(t, self.result_dates.get(sid)), r,
-                    vol_har=self._fc(0, j), vol_garch=self._fc(1, j),
+                    vol_har=self._fc(0, j), vol_garch=self._fc(1, j), es_mult=self._es(j),
                 )  # fmt: skip
         b, m = self.market.get(t, (None, None))
-        return PanelDay(t, next_date, rows, b, m)
+        return PanelDay(t, next_date, rows, b, m, self.regime.get(t))

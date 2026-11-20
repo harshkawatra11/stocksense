@@ -438,18 +438,20 @@ def g1_run_command(
 def s1_cost(
     ctx: typer.Context,
     targets: Annotated[str | None, typer.Option(help="Comma-separated S1 targets.")] = None,
-    grid: Annotated[str, typer.Option(help="c = the C5 grid (8 variants), e = the G2-E grid (6).")] = "c",
+    grid: Annotated[
+        str, typer.Option(help="c = the C5 grid (8 variants), e = G2-E1..E3 (6), e2 = G2-E4/E6 options (4).")
+    ] = "c",
 ) -> None:
     """G2-C5 / G2-E: the g2-s1cost grids (policy variants x targets); stores the best as a candidate."""
     from stocksense.validation import g1
     from stocksense.validation.g1_run import run_s1_cost
 
-    if grid not in ("c", "e"):
-        typer.echo("--grid must be c or e", err=True)
+    if grid not in ("c", "e", "e2"):
+        typer.echo("--grid must be c, e or e2", err=True)
         raise typer.Exit(2)
-    variants = g1.s1cost_e_variants if grid == "e" else None
+    variants = {"e": g1.s1cost_e_variants, "e2": g1.s1cost_e2_variants}.get(grid)
     if targets is None:
-        targets = ",".join(g1.S1COST_E_TARGETS if grid == "e" else g1.S1COST_TARGETS)
+        targets = ",".join(g1.S1COST_TARGETS if grid == "c" else g1.S1COST_E_TARGETS)
 
     settings = _settings(ctx)
     state = State(settings)
@@ -462,7 +464,7 @@ def s1_cost(
         typer.echo(f"note: {n}")
     for p in out.plans:
         r = out.results[str(p.plan.trial_id)]
-        typer.echo(f"{p.variant:<3} {p.plan.target:<9} {p.plan.trial_id}  net {r.ref_sharpe:+.3f}")
+        typer.echo(f"{p.variant:<4} {p.plan.target:<9} {p.plan.trial_id}  net {r.ref_sharpe:+.3f}")
     typer.echo(f"candidate: {out.candidate}")
 
 
