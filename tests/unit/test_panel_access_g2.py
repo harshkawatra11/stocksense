@@ -119,3 +119,23 @@ def test_vol_forecasts_reach_the_name_rows_and_default_to_none():
     assert plain[1].vol_har is None and plain[1].vol_garch is None
     with pytest.raises(ValueError):
         EnginePanelAccess(p, CAL, volfc=(har[:-1], garch))
+
+
+# ---- G2-E4 / E6: the regime probability and the ES multiplier --------------------------------------------
+
+
+def test_regime_and_es_multiplier_reach_the_day_and_default_to_none():
+    import numpy as np
+
+    p = panel({1: 10, 2: 20})
+    es = np.full(len(p.sid), np.nan)
+    es[p.find(T, 1)] = 3.4  # sid 1 has a multiplier on T; sid 2 has none
+    acc = EnginePanelAccess(p, CAL, regime={T: 0.72}, es=es)
+    day = acc.day(T, D1)
+    assert day.p_bear == pytest.approx(0.72)
+    assert day.rows[1].es_mult == pytest.approx(3.4) and day.rows[2].es_mult is None
+    assert acc.day(DS[22], DS[23]).p_bear is None  # a date without an estimate
+    plain = EnginePanelAccess(p, CAL).day(T, D1)
+    assert plain.p_bear is None and plain.rows[1].es_mult is None
+    with pytest.raises(ValueError):
+        EnginePanelAccess(p, CAL, es=es[:-1])
