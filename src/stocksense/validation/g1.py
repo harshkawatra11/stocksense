@@ -387,12 +387,25 @@ class G1World:
     fno_by_date: dict[date, set[int]]
     benchmark: pl.DataFrame  # date, ew500_ret, nifty500_ret
     u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
+    _volfc: tuple[np.ndarray, np.ndarray] | None = None
 
-    def s1_access(self, universe_flag: bool = False) -> EnginePanelAccess:
+    def vol_arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        """(HAR, GARCH) daily-vol forecasts aligned to the panel rows (G2-E1), computed on demand from the
+        causal vol_panel of the world's names (cached on disk); NaN where a name has no forecast."""
+        if self._volfc is None:
+            from stocksense.features import volforecast as vf
+
+            sids = sorted({int(s) for s in self.panel.sid})
+            frame = vf.vol_panel(self.settings, self.end, sids, fit_from=self.start - timedelta(days=40))
+            self._volfc = vf.align_daily_vol(self.panel.sid, self.panel.date, frame)
+        return self._volfc
+
+    def s1_access(self, universe_flag: bool = False, vol_model: str = "vol21") -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
             result_dates=self.result_dates, market=self.market, stale=self.stale,
             u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
+            volfc=self.vol_arrays() if vol_model != "vol21" else None,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -824,10 +837,12 @@ class G1Runner:
     ) -> Callable[[SlippageTable], Any]:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
+        vol_model = str((policy_opts or {}).get("vol_model", "vol21"))
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(self.cfg.universe_flag), settings.costs, slip,
+                spec, settings, source, world.s1_access(self.cfg.universe_flag, vol_model),
+                settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
                 policy_opts=policy_opts,
             )  # fmt: skip

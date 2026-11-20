@@ -34,6 +34,7 @@ MIN_COV_ROWS = 60
 S1_RANK_DECAY_MULT = 3
 S1_RANK_DECAY_MIN_HELD = 2
 DAYS_SINCE_RESULT_CAP = 90
+VOL_MODELS = ("vol21", "har", "garch")
 OVERLAY_BREADTH = 0.30
 OVERLAY_FACTOR = 0.5
 CASH_HAIRCUT = 0.005  # expected sale proceeds are counted at 99.5% when sizing tomorrow's close buys
@@ -83,6 +84,8 @@ class NameRow:
     days_since_result: int = 90
     rets: np.ndarray | None = None  # the last <= 126 daily returns (S1 covariance)
     upper_circuit: float | None = None  # live S2: the quote's upper circuit price
+    vol_har: float | None = None  # G2-E1: HAR-RV daily-vol forecast (daily units, like vol_21)
+    vol_garch: float | None = None  # G2-E1: GARCH(1,1) daily-vol forecast (10-day vol / sqrt(10))
 
 
 @dataclass(frozen=True)
@@ -134,9 +137,13 @@ class S1Config:
     free_extension: bool = False  # extend on er > 0 and the non-cost filters only (nothing trades)
     rebuy_block: int = 0  # a sid sold within the last `rebuy_block` sessions is not bought again
     switch_hurdle: bool = False  # swap a weak holding for a better candidate when the gain beats the cost
+    # G2-E1 option; the default reproduces the pre-E behaviour exactly
+    vol_model: str = "vol21"  # volatility for raw weights and the stop: vol21 | har | garch
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.vol_model not in VOL_MODELS:
+            raise ValueError(f"vol_model must be one of {VOL_MODELS}, got {self.vol_model!r}")
         mp = max(
             self.risk.min_position_inr_floor,
             min_position_for_fixed_cost("delivery", self.costs, self.risk.max_fixed_cost_bps),
@@ -287,6 +294,21 @@ def allocate_weights(raw: Mapping[int, float], room: float, cap: float) -> dict[
 
 def _slip(row: NameRow, value: float, when: str, table: SlippageTable) -> float:
     return slip_frac(row.turnover_rank, max(row.vol_21, 1e-6), value, max(row.med_turn_20, 1.0), when, table)  # type: ignore[arg-type]
+
+
+def _sel_vol(row: NameRow, cfg: S1Config) -> float:
+    """The daily volatility the S1 config selects for a name (`vol_21`, or the HAR / GARCH forecast; a
+    missing or non-positive forecast falls back to `vol_21`)."""
+    v = row.vol_har if cfg.vol_model == "har" else row.vol_garch if cfg.vol_model == "garch" else None
+    if v is None or not math.isfinite(v) or v <= 0:
+        return row.vol_21
+    return float(v)
+
+
+def _raw_weight(cfg: S1Config, score: float, er: float | None, row: NameRow, mult: float) -> float:
+    """A new entry's raw weight before caps and scaling: (0.5 + score) / vol, vol = the selected model's
+    daily volatility, times the meta multiplier."""
+    return (0.5 + score) / max(_sel_vol(row, cfg), 1e-4) * mult
 
 
 def _s1_entry_ok(
@@ -506,6 +528,8 @@ def plan_s1(
                 "breadth_200": float("nan") if panel_t.breadth_200 is None else float(panel_t.breadth_200),
                 "days_since_result": float(row.days_since_result), "gross_target": float(gt),
             }  # fmt: skip
+            if cfg.vol_model != "vol21":
+                feat["vol_sel"] = float(_sel_vol(row, cfg))  # the stop's vol_at_entry follows the model
             m = 1.0
             if meta is not None:
                 p = float(meta.predict_rows([feat])[0])
@@ -516,7 +540,7 @@ def plan_s1(
             chosen.append(sid)
             mult[sid] = m
             entries.append({"sid": sid, "date": d1, **feat})
-        raw = {s: (0.5 + scores_t[s]) / max(rows[s].vol_21, 1e-4) * mult[s] for s in chosen}
+        raw = {s: _raw_weight(cfg, scores_t[s], er_t.get(s), rows[s], mult[s]) for s in chosen}
         room = max(gt - existing_value / equity_inr, 0.0)
         alloc = allocate_weights(raw, room, cap)
         weights = {s: w for s, w in alloc.items() if w * equity_inr >= min_pos - 1e-6}
@@ -679,7 +703,7 @@ class S1Policy:
         for sid in plan.extended:
             self._anchor[sid] = d1
         for e in plan.entries:
-            self._pending_vol[e["sid"]] = e["vol_21"]
+            self._pending_vol[e["sid"]] = e.get("vol_sel", e["vol_21"])
         self.entry_log.extend(plan.entries)
         self.plans[t] = plan
         return plan.orders
@@ -872,10 +896,14 @@ class EnginePanelAccess:
         universe_rank: int = 500,
         u500: Mapping[date, set[int]] | None = None,
         universe_flag: bool = False,
+        volfc: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> None:
         if universe_flag and u500 is None:
             raise ValueError("universe_flag=True needs the u500 map (date -> set of sids)")
         self.u500, self.universe_flag = u500 or {}, universe_flag
+        if volfc is not None and (len(volfc[0]) != len(panel.sid) or len(volfc[1]) != len(panel.sid)):
+            raise ValueError("volfc arrays must be aligned with the panel rows")
+        self.volfc = volfc  # (har, garch) daily-vol forecasts per panel row (G2-E1); None = vol_21 only
         self.p, self.cal = panel, calendar
         self.industry = industry or {}
         self.split_dates, self.result_dates = split_dates or {}, result_dates or {}
@@ -913,6 +941,12 @@ class EnginePanelAccess:
             return DAYS_SINCE_RESULT_CAP
         return min(DAYS_SINCE_RESULT_CAP, len(self.cal.sessions(ev + timedelta(days=1), t)))
 
+    def _fc(self, which: int, j: int) -> float | None:
+        if self.volfc is None:
+            return None
+        v = float(self.volfc[which][j])
+        return v if math.isfinite(v) else None
+
     def day(self, t: date, next_date: date) -> PanelDay:
         p = self.p
         sl = p.day(t)
@@ -931,6 +965,7 @@ class EnginePanelAccess:
                     (t, sid) in self.stale, bool(p.locked_up[j]), sid in self.fno,
                     self._days_to(t, self.split_dates.get(sid)), self._days_to(t, self.result_dates.get(sid)),
                     self._days_since(t, self.result_dates.get(sid)), r,
+                    vol_har=self._fc(0, j), vol_garch=self._fc(1, j),
                 )  # fmt: skip
         b, m = self.market.get(t, (None, None))
         return PanelDay(t, next_date, rows, b, m)

@@ -98,3 +98,24 @@ def test_universe_flag_is_a_spec_key_only_when_true():
     cfg = G1Config(capitals=(5e5,), reference_capital=5e5)
     assert "universe_flag" not in _spec_s1(cfg, "y_c2o_10", 10, False, [])
     assert _spec_s1(replace(cfg, universe_flag=True), "y_c2o_10", 10, False, [])["universe_flag"] is True
+
+
+# ---- G2-E1: HAR / GARCH forecasts on the rows ---------------------------------------------------------
+
+
+def test_vol_forecasts_reach_the_name_rows_and_default_to_none():
+    import numpy as np
+
+    p = panel({1: 10, 2: 20})
+    n = len(p.sid)
+    har = np.full(n, np.nan)
+    garch = np.full(n, np.nan)
+    j = p.find(T, 1)
+    har[j], garch[j] = 0.021, 0.034  # sid 1 has both on T; sid 2 has none
+    rows = EnginePanelAccess(p, CAL, volfc=(har, garch)).day(T, D1).rows
+    assert rows[1].vol_har == pytest.approx(0.021) and rows[1].vol_garch == pytest.approx(0.034)
+    assert rows[2].vol_har is None and rows[2].vol_garch is None
+    plain = EnginePanelAccess(p, CAL).day(T, D1).rows
+    assert plain[1].vol_har is None and plain[1].vol_garch is None
+    with pytest.raises(ValueError):
+        EnginePanelAccess(p, CAL, volfc=(har[:-1], garch))
