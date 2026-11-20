@@ -210,6 +210,27 @@ def smooth_scores(frame: pl.DataFrame, span: int) -> pl.DataFrame:
     return rank_scores(_ema_scores(frame, span)).sort("date", "sid")
 
 
+def james_stein_shrink(m: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Empirical-Bayes (James-Stein style) shrinkage of bin means `m` with sampling variances `v`.
+
+    mu = mean(m); tau2 = max(0, var(m, ddof=1) - mean(v)); m*_j = mu + (1 - v_j / (v_j + tau2)) (m_j - mu).
+    tau2 = 0 gives mu for every bin; v -> 0 gives m. Bins with a non-finite mean or variance stay NaN and
+    take no part in mu or tau2 (fewer than two usable bins: returned unchanged)."""
+    m = np.asarray(m, dtype=float)
+    v = np.asarray(v, dtype=float)
+    ok = np.isfinite(m) & np.isfinite(v)
+    out = np.full(m.shape, np.nan)
+    if ok.sum() < 2:
+        out[ok] = m[ok]
+        return out
+    mu = float(m[ok].mean())
+    tau2 = max(0.0, float(np.var(m[ok], ddof=1)) - float(v[ok].mean()))
+    denom = v[ok] + tau2
+    b = np.where(denom > 0, v[ok] / np.where(denom > 0, denom, 1.0), 0.0)
+    out[ok] = mu + (1.0 - b) * (m[ok] - mu)
+    return out
+
+
 def expected_return_map_decile(
     blend: pl.DataFrame,
     label_frame: pl.DataFrame,
@@ -217,6 +238,7 @@ def expected_return_map_decile(
     window: int = 504,
     n_bins: int = 10,
     shrink_k: float = 200,
+    shrink: str = "k",
 ) -> pl.DataFrame:
     """date, sid, score, exp_ret from a monotone decile map instead of a straight line.
 
@@ -224,8 +246,15 @@ def expected_return_map_decile(
     `expected_return_map`). Per date the names are cut into `n_bins` equal-count bins by score; the mean raw
     label of each bin over the window is shrunk toward the all-bin mean with weight n_j / (n_j + shrink_k),
     then made non-decreasing across bins by isotonic regression weighted by n_j. A name's `exp_ret` is its
-    bin's value (no floor: a poor bin can be negative). With no known label yet the map is 0."""
+    bin's value (no floor: a poor bin can be negative). With no known label yet the map is 0.
+
+    `shrink="james_stein"` (G2-E2) replaces the fixed-k shrinkage by `james_stein_shrink` of the window's bin
+    means with sampling variance s_j^2 / n_j (s_j^2 the within-bin label variance over the window), then the
+    same isotonic step."""
     from sklearn.isotonic import IsotonicRegression
+
+    if shrink not in ("k", "james_stein"):
+        raise ValueError(f"unknown shrink {shrink!r}")
 
     n = pl.len().over("date")
     bin_ = (
@@ -237,12 +266,15 @@ def expected_return_map_decile(
     pos = {d: i for i, d in enumerate(dates.tolist())}
     T = len(dates)
     lab = j.filter(pl.col(target).is_not_null() & pl.col(target).is_finite())
-    g = lab.group_by("date", "_bin").agg(pl.col(target).sum().alias("s"), pl.len().alias("n"))
-    S, N = np.zeros((T, n_bins)), np.zeros((T, n_bins))
+    g = lab.group_by("date", "_bin").agg(
+        pl.col(target).sum().alias("s"), (pl.col(target) ** 2).sum().alias("ss"), pl.len().alias("n")
+    )
+    S, N, SS = np.zeros((T, n_bins)), np.zeros((T, n_bins)), np.zeros((T, n_bins))
     ti = np.array([pos[d] for d in g["date"].to_list()], dtype=np.int64)
     bi = g["_bin"].to_numpy().astype(np.int64)
     S[ti, bi] = g["s"].to_numpy()
     N[ti, bi] = g["n"].to_numpy()
+    SS[ti, bi] = g["ss"].to_numpy()
     known_end, day = _label_info(label_frame, target, dates)
     values = np.zeros((T, n_bins))
     xs = np.arange(n_bins, dtype=float)
@@ -257,7 +289,15 @@ def expected_return_map_decile(
         grand = s.sum() / tot
         have = c > 0
         m = np.where(have, s / np.where(have, c, 1.0), grand)
-        shrunk = c / (c + shrink_k) * m + (shrink_k / (c + shrink_k) * grand if shrink_k > 0 else 0.0)
+        if shrink == "james_stein":
+            ss = SS[idx].sum(0)
+            var = np.where(c > 1, np.maximum(ss - c * m * m, 0.0) / np.where(c > 1, c - 1.0, 1.0), 0.0)
+            js = james_stein_shrink(
+                np.where(have, m, np.nan), np.where(have, var / np.where(have, c, 1.0), np.nan)
+            )
+            shrunk = np.where(have, js, grand)
+        else:
+            shrunk = c / (c + shrink_k) * m + (shrink_k / (c + shrink_k) * grand if shrink_k > 0 else 0.0)
         if have.sum() < 2:
             values[t] = grand
             continue

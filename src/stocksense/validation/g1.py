@@ -102,7 +102,7 @@ class G1Config:
     s1_auto_resume: int | None = None
     # G2-C2: causal EMA span applied to the blended score, and the shape of the expected-return map
     score_ema: int | None = None
-    er_map: Literal["linear", "decile"] = "linear"
+    er_map: Literal["linear", "decile", "decile_js"] = "linear"
     # G2-C3: S1 universe membership follows the u500 hysteresis flag of panel_universe, not rank <= 500
     universe_flag: bool = False
     # G2-C5: S1Policy(policy_opts=) for the g2-s1cost grid, and the trial family S1 plans register under
@@ -266,6 +266,8 @@ def _disagreement(frames: Mapping[str, pl.DataFrame]) -> pl.DataFrame | None:
 def _with_er(blend: pl.DataFrame, labels: pl.DataFrame, target: str, er_map: str = "linear") -> pl.DataFrame:
     if er_map == "decile":
         er = expected_return_map_decile(blend, labels, target)
+    elif er_map == "decile_js":
+        er = expected_return_map_decile(blend, labels, target, shrink="james_stein")
     elif er_map == "linear":
         er = expected_return_map(blend, labels, target)
     else:
@@ -387,12 +389,25 @@ class G1World:
     fno_by_date: dict[date, set[int]]
     benchmark: pl.DataFrame  # date, ew500_ret, nifty500_ret
     u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
+    _volfc: tuple[np.ndarray, np.ndarray] | None = None
 
-    def s1_access(self, universe_flag: bool = False) -> EnginePanelAccess:
+    def vol_arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        """(HAR, GARCH) daily-vol forecasts aligned to the panel rows (G2-E1), computed on demand from the
+        causal vol_panel of the world's names (cached on disk); NaN where a name has no forecast."""
+        if self._volfc is None:
+            from stocksense.features import volforecast as vf
+
+            sids = sorted({int(s) for s in self.panel.sid})
+            frame = vf.vol_panel(self.settings, self.end, sids, fit_from=self.start - timedelta(days=40))
+            self._volfc = vf.align_daily_vol(self.panel.sid, self.panel.date, frame)
+        return self._volfc
+
+    def s1_access(self, universe_flag: bool = False, vol_model: str = "vol21") -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
             result_dates=self.result_dates, market=self.market, stale=self.stale,
             u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
+            volfc=self.vol_arrays() if vol_model != "vol21" else None,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -680,6 +695,23 @@ def s1cost_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
     }
 
 
+S1COST_E_TARGETS = ("y_c2o_10",)
+
+
+def s1cost_e_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """G2-E grid: the C5 winner V8 and five single-change variants (name -> (policy options, G1Config
+    overrides)). E0 is V8 itself (same spec, so the same trial id as the C5 trial)."""
+    opts, over = s1cost_variants(h)["V8"]
+    return {
+        "E0": (opts, over),
+        "E1": ({**opts, "vol_model": "har"}, over),
+        "E2": ({**opts, "vol_model": "garch"}, over),
+        "E3": (opts, {**over, "er_map": "decile_js"}),
+        "E4": ({**opts, "sizing": "kelly", "kelly_c": 0.25}, over),
+        "E5": ({**opts, "sizing": "kelly", "kelly_c": 0.5}, over),
+    }
+
+
 def plan_s1cost(
     cfg: G1Config,
     s1_models: Mapping[str, Sequence[ModelTrial]],
@@ -688,6 +720,7 @@ def plan_s1cost(
     overlay: bool,
     auto_resume: int = 20,
     targets: Sequence[str] = S1COST_TARGETS,
+    variants: Callable[[int], dict[str, tuple[dict[str, Any], dict[str, Any]]]] | None = None,
 ) -> list[S1CostPlan]:
     """Card C5: 8 variants x targets on the fixed GBM scores (base: k_max/overlay of the best G1 S1 trial,
     auto-resume 20, hysteresis universe flag). A target without models contributes nothing."""
@@ -696,7 +729,7 @@ def plan_s1cost(
         models = s1_models.get(target, ())
         if not models:
             continue
-        for name, (opts, over) in s1cost_variants(horizon_of(target)).items():
+        for name, (opts, over) in (variants or s1cost_variants)(horizon_of(target)).items():
             vcfg = replace(
                 cfg, family_s1=FAMILY_S1COST, s1_auto_resume=auto_resume, universe_flag=True,
                 s1_policy=opts, **over,
@@ -824,10 +857,12 @@ class G1Runner:
     ) -> Callable[[SlippageTable], Any]:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
+        vol_model = str((policy_opts or {}).get("vol_model", "vol21"))
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(self.cfg.universe_flag), settings.costs, slip,
+                spec, settings, source, world.s1_access(self.cfg.universe_flag, vol_model),
+                settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
                 policy_opts=policy_opts,
             )  # fmt: skip

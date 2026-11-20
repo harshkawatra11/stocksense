@@ -437,16 +437,27 @@ def g1_run_command(
 @research_app.command("s1-cost")
 def s1_cost(
     ctx: typer.Context,
-    targets: Annotated[str, typer.Option(help="Comma-separated S1 targets.")] = "y_c2o_10,y_c2o_20",
+    targets: Annotated[str | None, typer.Option(help="Comma-separated S1 targets.")] = None,
+    grid: Annotated[str, typer.Option(help="c = the C5 grid (8 variants), e = the G2-E grid (6).")] = "c",
 ) -> None:
-    """G2-C5: the g2-s1cost grid (8 policy variants x targets); stores the best as a candidate."""
+    """G2-C5 / G2-E: the g2-s1cost grids (policy variants x targets); stores the best as a candidate."""
+    from stocksense.validation import g1
     from stocksense.validation.g1_run import run_s1_cost
+
+    if grid not in ("c", "e"):
+        typer.echo("--grid must be c or e", err=True)
+        raise typer.Exit(2)
+    variants = g1.s1cost_e_variants if grid == "e" else None
+    if targets is None:
+        targets = ",".join(g1.S1COST_E_TARGETS if grid == "e" else g1.S1COST_TARGETS)
 
     settings = _settings(ctx)
     state = State(settings)
     state.migrate()
     cal = TradingCalendar.from_store(settings, SystemClock())
-    out = run_s1_cost(settings, state, cal, targets=[t.strip() for t in targets.split(",") if t.strip()])
+    out = run_s1_cost(
+        settings, state, cal, targets=[t.strip() for t in targets.split(",") if t.strip()], variants=variants
+    )
     for n in out.notes:
         typer.echo(f"note: {n}")
     for p in out.plans:

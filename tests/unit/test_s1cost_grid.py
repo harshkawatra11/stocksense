@@ -101,3 +101,26 @@ def test_strategies_toml_carries_the_s1_policy_table_that_s1config_accepts(tmp_p
     cfg = S1Config.from_settings(s, 10, zero_slippage(), **pol)  # the live wiring passes it this way
     assert cfg.exit_rank == pol["exit_rank"]
     assert cfg.risk.max_fixed_cost_bps == pol["max_fixed_cost_bps"] != s.risk.max_fixed_cost_bps
+
+
+def test_the_e_grid_is_the_winner_plus_five_single_changes():
+    from stocksense.validation.g1 import plan_s1cost, s1cost_e_variants
+
+    models = {"y_c2o_10": [ModelTrial("s1-gbm-y_c2o_10-x", "s1-gbm", "y_c2o_10", {}, 0.07, 20.0)]}
+    c = {p.variant: p for p in plan_s1cost(CFG, models, k_max=10, overlay=False)}
+    e = {
+        p.variant: p
+        for p in plan_s1cost(
+            CFG, models, k_max=10, overlay=False, targets=("y_c2o_10",), variants=s1cost_e_variants
+        )
+    }
+    assert list(e) == ["E0", "E1", "E2", "E3", "E4", "E5"]
+    assert {p.plan.family for p in e.values()} == {"g2-s1cost"}
+    assert e["E0"].plan.spec == c["V8"].plan.spec  # same spec -> the C5 winner's trial id (idempotent)
+    base = e["E0"].plan.spec
+    assert e["E1"].plan.spec["policy"] == {**base["policy"], "vol_model": "har"}
+    assert e["E2"].plan.spec["policy"] == {**base["policy"], "vol_model": "garch"}
+    assert e["E3"].plan.spec["er_map"] == "decile_js" and e["E3"].plan.spec["policy"] == base["policy"]
+    assert e["E4"].plan.spec["policy"] == {**base["policy"], "sizing": "kelly", "kelly_c": 0.25}
+    assert e["E5"].plan.spec["policy"]["kelly_c"] == 0.5 and e["E5"].plan.spec["er_map"] == "decile"
+    assert len({repr(p.plan.spec) for p in e.values()}) == 6

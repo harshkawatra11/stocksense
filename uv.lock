@@ -39,6 +39,27 @@ wheels = [
 ]
 
 [[package]]
+name = "arch"
+version = "9.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pandas" },
+    { name = "scipy" },
+    { name = "statsmodels" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5d/65/29fff60ed29516a550091d9a419f219ea924fe926a5d68cd3b686d1f4bdd/arch-9.0.0.tar.gz", hash = "sha256:83a02c8dfbe94e3fe56aaff225c6e2d35b738e589009202c576ff173fb1e3d21", size = 1306637, upload-time = "2026-11-11T23:10:59.516Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6e/db/8549b044a9de886defa93332e8382eb43ea3af1da8e8d97c56f21ab23360/arch-9.0.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:ce3c7a63d9061e1d15de482614d67c70edb2a29c8510519594a4b10f63e255ac", size = 1407050, upload-time = "2026-11-11T22:25:44.307Z" },
+    { url = "https://files.pythonhosted.org/packages/de/ec/d5ae15147b7c9fde20f5b4e0ff0b6e1ff03f3d99a0c51092354b50e571dc/arch-9.0.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d0052c98abac8bd074dfae329709ac78b87f2929ba28e15fec29e2584fcf699e", size = 1397946, upload-time = "2026-11-11T22:28:03.915Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/4c/01a7e1a1bc8eb85da0f114b4044455f42c70add17e582bf91c0136a42972/arch-9.0.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:69a928bed116f84ff3e7d3d93d6ac39ab6c2dbb81dee8ae861e6b393b85c9755", size = 1426989, upload-time = "2026-11-11T22:23:48.348Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/49/3488f18e9e8e63e556d5d38fd0ef5c83261b5e0196a75fe30b3e875222f9/arch-9.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:67dd3d8b8942a3016912f7ee21674fd87e1a4530c225e07c2105853856a7b22a", size = 1446498, upload-time = "2026-11-11T22:30:25.639Z" },
+    { url = "https://files.pythonhosted.org/packages/27/8a/8add57a9290ca64a1b3ec091d33793aec38f347ca18848ba737b2d2fdd36/arch-9.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:9d12f1e6fe260d8a00387887cce5808dd1a867824bd2be0baa44f074693f51f4", size = 1449493, upload-time = "2026-11-11T22:26:17.791Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/26/097b3e80f146c25a9dd19bde33a31cabe50ebcfd60d62f7ce6289d8ab7e6/arch-9.0.0-cp312-cp312-win_amd64.whl", hash = "sha256:06b422e551140db059d94a87aff48a62d4cb6a96f32a1616ef8b68c7bec13774", size = 1398263, upload-time = "2026-11-11T22:28:47.54Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1495,6 +1516,7 @@ name = "stocksense"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "arch" },
     { name = "duckdb" },
     { name = "einops" },
     { name = "fastapi" },
@@ -1538,6 +1560,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arch", specifier = ">=7.0" },
     { name = "duckdb", specifier = ">=1.3" },
     { name = "einops", specifier = ">=0.8" },
     { name = "fastapi", specifier = ">=0.115" },
