@@ -457,6 +457,49 @@ def spread_capture(ctx: JobContext, d: date) -> str:
     return f"symbols={len(syms)} rows={n}"
 
 
+def _cm_call(ctx: JobContext) -> Any:
+    """The cm-market tool caller: the `cm_market_call` hook (tests) or a real MCP session."""
+    from stocksense.brokers.nse_mcp import CM_URL, make_call
+
+    return ctx.hook("cm_market_call") or make_call(CM_URL)
+
+
+def _mcp_job(ctx: JobContext, what: str, fn: Callable[[Any], str]) -> str:
+    """Run an optional cm-market job: any MCP failure is a recorded skip, never an error (G2-H4)."""
+    try:
+        return fn(_cm_call(ctx))
+    except DataNotAvailable as e:
+        return f"skipped: stale ({ctx.scrub(str(e))[:80]})"
+    except Exception as e:  # noqa: BLE001 - the optional MCP data must never fail a job or block trading
+        log.warning("mcp_job_skipped", job=what, error=type(e).__name__)
+        return f"skipped: unreachable ({type(e).__name__})"
+
+
+def index_capture(ctx: JobContext, d: date) -> str:
+    """Live NIFTY 50 and INDIA VIX -> kv `live_index:{d}:{hhmm}` (09:07 and 15:05; read by the report)."""
+    from stocksense.brokers.nse_mcp import fetch_live_index
+
+    def run(call: Any) -> str:
+        now = ctx.clock.now()
+        snap = fetch_live_index(call, now)
+        ctx.state.kv_set(f"live_index:{d.isoformat()}:{now:%H%M}", json.dumps(snap))
+        return f"indices={len(snap)}"
+
+    return _mcp_job(ctx, "index_capture", run)
+
+
+def call_auction_capture(ctx: JobContext, d: date) -> str:
+    """The call-auction symbol list -> kv `call_auction:{d}` (08:50; an optional exclusion set for S1/S2)."""
+    from stocksense.brokers.nse_mcp import fetch_call_auction
+
+    def run(call: Any) -> str:
+        syms = fetch_call_auction(call)
+        ctx.state.kv_set(f"call_auction:{d.isoformat()}", json.dumps(syms))
+        return f"symbols={len(syms)}"
+
+    return _mcp_job(ctx, "call_auction_capture", run)
+
+
 def _last_prices(ctx: JobContext, d: date) -> dict[str, float]:
     q = io.read(ctx.settings, "quotes_1m", start=d, end=d, columns=["symbol", "ts", "ltp"]).collect()
     if q.is_empty():
@@ -705,6 +748,8 @@ JOBS: dict[str, Callable[[JobContext, date], str]] = {
     "open_fills": open_fills,
     "market_loop": market_loop,
     "spread_capture": spread_capture,
+    "index_capture": index_capture,
+    "call_auction_capture": call_auction_capture,
     "capital_pm": capital_pm,
     "s1_entries": s1_entries,
     "s2_squareoff": s2_squareoff,

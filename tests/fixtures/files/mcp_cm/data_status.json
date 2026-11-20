@@ -1,0 +1,14 @@
+{
+ "indices": {
+  "gainers": {
+   "available": true,
+   "lastCrawled": "2026-11-20T09:36:01.130054082Z"
+  },
+  "loosers": {
+   "available": true,
+   "lastCrawled": "2026-11-20T09:36:01.698657892Z"
+  }
+ },
+ "crawlIntervalMinutes": 5,
+ "redisTtlMinutes": 15
+}

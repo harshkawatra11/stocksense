@@ -152,6 +152,7 @@ class Env:
         self.stage_log: list[tuple[str, date]] = []
         self.hooks = {
             "capture_preopen": lambda ctx: 3,
+            "cm_market_call": self._cm_market,
             "stage:build_features": self._stage("build_features"),
             "stage:build_labels": self._stage("build_labels"),
         }
@@ -172,6 +173,19 @@ class Env:
         if n:
             self.published.append(upto)
         return [IngestResult("bhavcopy_eq", upto, n, "ok")]
+
+    def _cm_market(self, tool, args):
+        """A cm-market MCP stand-in (G2-H4): index quotes stamped now, a two-name call-auction list."""
+        now = self.clock.now()
+        if tool == "cm_get_index_quote":
+            return {
+                "nseTimestamp": now.strftime("%d-%b-%Y %H:%M:%S"),
+                "index": {"indexName": args["indexName"], "last": 100.0, "previousClose": 99.0,
+                          "percChange": 1.0},
+            }  # fmt: skip
+        if tool == "cm_get_call_auction_stocks":
+            return {"stocks": [{"symbol": "ZZZONE"}, {"symbol": "ZZZTWO"}]}
+        raise AssertionError(f"unexpected cm-market tool {tool}")
 
     def new_ctx(self) -> JobContext:
         cal = TradingCalendar.from_store(self.settings, self.clock)
@@ -264,9 +278,10 @@ def test_full_session_runs_every_job_in_order_and_ends_with_report_marks_and_rec
             seen.append(job)
     expected = [
         "preflight_start", "preflight", "broker_login", "overnight_data", "capital_am", "plan_open",
-        "preopen_capture", "s2_decide", "open_fills", "market_loop", "spread_capture@09:20",
-        "spread_capture@11:00", "spread_capture@13:00", "spread_capture@15:00", "capital_pm",
-        "s1_entries", "s2_squareoff", "close_fills", "eod_mark", "eod_ingest", "eod_pipeline",
+        "call_auction_capture", "preopen_capture", "index_capture@09:07", "s2_decide", "open_fills",
+        "market_loop", "spread_capture@09:20",
+        "spread_capture@11:00", "spread_capture@13:00", "spread_capture@15:00", "index_capture@15:05",
+        "capital_pm", "s1_entries", "s2_squareoff", "close_fills", "eod_mark", "eod_ingest", "eod_pipeline",
         "eod_pipeline.build_panel", "eod_pipeline.reconcile", "eod_pipeline.marks",
         "eod_pipeline.build_features", "eod_pipeline.build_labels",
         "eod_pipeline.kronos_features", "eod_pipeline.nightly_learn", "eod_pipeline.predict",

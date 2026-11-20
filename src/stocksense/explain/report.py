@@ -74,6 +74,24 @@ def _held_days(ctx: Any, book: str, d: date) -> dict[int, int]:
     return out
 
 
+def _live_index(ctx: Any, d: date) -> dict[str, Any]:
+    """{hhmm: {index name: values}} of the live index captures of day d (G2-H4); empty when none."""
+    con = ctx.state.connect()
+    try:
+        rows = con.execute(
+            "SELECT key, value FROM kv WHERE key LIKE ? ORDER BY key", (f"live_index:{d.isoformat()}:%",)
+        ).fetchall()
+    finally:
+        con.close()
+    out: dict[str, Any] = {}
+    for k, v in rows:
+        try:
+            out[k.rsplit(":", 1)[-1]] = json.loads(v)
+        except ValueError:
+            continue
+    return out
+
+
 def _live_ic(ctx: Any) -> dict[str, Any]:
     mid = ctx.state.kv_get("live_model:s1")
     con = ctx.state.connect()
@@ -153,6 +171,7 @@ def build_report(ctx: Any, d: date, catchup: bool = False) -> tuple[dict[str, An
         "capital": {"inr": cap, "stale": ctx.state.kv_get("capital_stale") == "1"},
         "trades": _fills(ctx, d), "positions": positions, "live_ic": ic,
         "decay_scale": float(ctx.state.kv_get("decay_scale:main") or 1.0),
+        "live_index": _live_index(ctx, d),
         "plan": None if plan is None else {
             "exits": plan.get("sells", []), "entries": plan.get("entries", []), "note": plan.get("note", ""),
             "allow_entries": plan.get("allow_entries"),
@@ -211,4 +230,11 @@ def render_markdown(b: dict[str, Any]) -> str:
         L += [
             f"- entry {x['symbol']} weight {x['weight'] * 100:.1f}% (rank {x['rank']})" for x in p["entries"]
         ]
+    if b.get("live_index"):
+        L += ["", "## Live indices"]
+        for hhmm, snap in b["live_index"].items():
+            parts = [
+                f"{n} {v['last']:.2f} ({_pct((v.get('change_pct') or 0) / 100)})" for n, v in snap.items()
+            ]
+            L.append(f"- {hhmm[:2]}:{hhmm[2:]} " + ", ".join(parts))
     return "\n".join(L) + "\n"

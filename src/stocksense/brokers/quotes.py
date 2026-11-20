@@ -86,8 +86,10 @@ def parse_nse_mcp_quote(payload: dict[str, Any] | str, fallback_ts: datetime | N
     )
 
 
-async def _mcp_quotes(url: str, symbols: list[str]) -> list[str]:
-    """Raw answers of the stock-quote tool, one call per symbol (argument name read from list_tools)."""
+async def _mcp_quotes(url: str, symbols: list[str]) -> tuple[str | None, list[str]]:
+    """(crawl status, raw answers) of the stock-quote tool, one call per symbol.
+
+    The status is the `cm_get_allstocks_status` text for the staleness gate (None if the tool is missing)."""
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
@@ -98,6 +100,10 @@ async def _mcp_quotes(url: str, symbols: list[str]) -> list[str]:
     ):
         await session.initialize()
         tools = {t.name: t for t in (await session.list_tools()).tools}
+        status: str | None = None
+        if "cm_get_allstocks_status" in tools:
+            res0 = await session.call_tool("cm_get_allstocks_status", {})
+            status = "".join(getattr(c, "text", "") for c in res0.content)
         tool = tools.get(NSE_MCP_TOOL)
         if tool is None:
             raise RuntimeError(f"{NSE_MCP_TOOL} not offered; tools: {sorted(tools)}")
@@ -109,25 +115,45 @@ async def _mcp_quotes(url: str, symbols: list[str]) -> list[str]:
         for sym in symbols:
             res = await session.call_tool(tool.name, {arg: sym})
             out.append("".join(getattr(c, "text", "") for c in res.content))
-    return out
+    return status, out
 
 
 class NseMcpQuotes:
-    """Delayed LTP from the official NSE MCP server; one symbol per call, so held names only."""
+    """Delayed LTP from the official NSE MCP server; one symbol per call, so held names only.
+
+    G2-H4 staleness gate: a crawl status older than 15 minutes inside market hours raises DataNotAvailable
+    (the hub then skips this source); an unreadable status does not block."""
 
     name = NSE_MCP_SOURCE
     held_only = True
 
     def __init__(
-        self, clock: Clock, url: str = NSE_MCP_URL, call: Callable[[str], str | dict[str, Any]] | None = None
+        self,
+        clock: Clock,
+        url: str = NSE_MCP_URL,
+        call: Callable[[str], str | dict[str, Any]] | None = None,
+        status_call: Callable[[], str | dict[str, Any]] | None = None,
     ) -> None:
-        self._clock, self._url, self._call = clock, url, call
+        self._clock, self._url, self._call, self._status_call = clock, url, call, status_call
+
+    def _gate(self, status: str | dict[str, Any]) -> None:
+        """G2-H4: a crawl older than 15 minutes in market hours raises DataNotAvailable; junk never blocks."""
+        from stocksense.brokers.nse_mcp import McpError, assert_fresh
+
+        try:
+            assert_fresh(status, self._clock.now())
+        except McpError:
+            log.warning("nse_mcp_status_unreadable")
 
     def quotes(self, symbols: list[str]) -> list[Quote]:
         if self._call is not None:
+            if self._status_call is not None:
+                self._gate(self._status_call())
             raws = [self._call(s) for s in symbols]
         else:
-            raws = asyncio.run(_mcp_quotes(self._url, symbols))
+            status, raws = asyncio.run(_mcp_quotes(self._url, symbols))
+            if status is not None:
+                self._gate(status)
         out = []
         for sym, raw in zip(symbols, raws, strict=False):
             qt = parse_nse_mcp_quote(raw, self._clock.now())
