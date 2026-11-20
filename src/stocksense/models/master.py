@@ -10,6 +10,7 @@ query is the last step, and a linear score. One batch is one date. Loss MSE on t
 
 from __future__ import annotations
 
+import gc
 import math
 from pathlib import Path
 from typing import Any
@@ -157,8 +158,20 @@ class MasterModel(TorchCSModel):
             if key not in _CUBES:
                 _CUBES.clear()  # one cube at a time (about 0.5 GB)
                 _CUBES[key] = FeatureCube(settings, int(v), cols, self.purpose)  # type: ignore[arg-type]
+                gc.collect()
             self.cube = _CUBES[key]
         return self.cube
+
+    def _bind(self, X: np.ndarray) -> None:
+        super()._bind(X)
+        self.n_feat = len(self.kinds)  # X may hold only the 'mkt' columns (light X) plus the two keys
+
+    def _mkt_columns(self) -> list[int]:
+        """Columns of X holding the 'mkt' features: all columns in kind order, or the first n_mkt ones when
+        the runner passed a light X (needs_cube: 'mkt' columns and keys only)."""
+        if self._X.shape[1] - 2 == len(self.kinds):
+            return [i for i, k in enumerate(self.kinds) if k == "mkt"]
+        return list(range(self.n_mkt))
 
     # ---- TorchCSModel hooks --------------------------------------------------------------------
     def build_net(self, n_feat: int, n_mkt: int) -> nn.Module:
@@ -170,9 +183,8 @@ class MasterModel(TorchCSModel):
         cube = self._need_cube()
         sid, days = self.key_columns(idx)
         x, _ = cube.window(cube.day_idx(days), sid, self.T)
-        x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-        mk = [i for i, k in enumerate(self.kinds) if k == "mkt"]
-        m = np.nan_to_num(self._X[idx][:, mk], nan=0.0, posinf=0.0, neginf=0.0)
+        np.nan_to_num(x, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        m = np.nan_to_num(self._X[idx][:, self._mkt_columns()], nan=0.0, posinf=0.0, neginf=0.0)
         return {
             "x": torch.as_tensor(x, dtype=torch.float32, device=self.device),
             "m": torch.as_tensor(m, dtype=torch.float32, device=self.device),

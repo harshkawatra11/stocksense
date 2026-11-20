@@ -35,7 +35,7 @@ from stocksense.validation.splits import (
     train_mask,
     walk_forward_folds,
 )
-from stocksense.validation.walkforward import END_COLUMN, _manifest
+from stocksense.validation.walkforward import END_COLUMN, _manifest, _release_memory
 
 MAX_CONFIGS = 6
 SELECT_FOLD = "2016"
@@ -96,12 +96,15 @@ def select_nn(
     man = _manifest(settings)
     names = [f["name"] for f in man["features"]]
     kinds = [f["kind"] for f in man["features"]]
-    feats = load_features(settings, purpose, columns=names).collect()
+    light = bool(getattr(factory(spec0), "needs_cube", False))  # cube models: X holds 'mkt' columns only
+    x_names = [n for n, k in zip(names, kinds, strict=True) if k == "mkt"] if light else names
+    feats = load_features(settings, purpose, columns=x_names).collect()
     df = lab.join(feats, on=["date", "sid"], how="inner").sort("date", "sid")
     dates, end = df["date"], df[end_col]
     dn = dates.to_numpy()
     y = df[label_col].to_numpy().astype(np.float64)
-    X = df.select([pl.col(n).cast(pl.Float32) for n in names]).to_numpy().astype(np.float32)
+    X = df.select([pl.col(n).cast(pl.Float32) for n in x_names]).to_numpy().astype(np.float32)
+    del feats
     if factory(spec0).needs_keys:
         from stocksense.models.seqnet import add_keys
 
@@ -135,6 +138,8 @@ def select_nn(
         if info.params.get("stopped"):
             row["stopped"] = info.params["stopped"]
         table.append(row)
+        del model
+        _release_memory()
     scored = [r for r in table if r.get("val_ic") is not None]
     best = max(scored, key=lambda r: r["val_ic"]) if scored else None
     out: dict[str, Any] = {

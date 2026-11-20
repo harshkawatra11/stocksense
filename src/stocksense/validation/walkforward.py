@@ -90,6 +90,17 @@ def _manifest(settings: Settings) -> dict[str, Any]:
     return json.loads((Paths(settings).features / f"v{v}" / "manifest.json").read_text(encoding="utf-8"))
 
 
+def _release_memory() -> None:
+    """End of a fold group: collect garbage and free the CUDA cache (torch only if loaded)."""
+    import gc
+    import sys
+
+    gc.collect()
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def _rank_average(scores: dict[str, np.ndarray], dates: pl.Series, sids: pl.Series) -> pl.DataFrame:
     """Per-seed per-date rank in [-0.5, 0.5] (non-finite scores count as the median), then their mean."""
     df = pl.DataFrame({"date": dates, "sid": sids, **{k: v.astype(np.float64) for k, v in scores.items()}})
@@ -179,18 +190,23 @@ def run_walk_forward(
         kind_of = {f["name"]: f["kind"] for f in man["features"]}
         names = [f["name"] for f in man["features"]] if spec.features == "all" else list(spec.features)
         kinds = [kind_of[n] for n in names]
-        feats = load_features(settings, purpose, columns=names).collect()
+        light = bool(getattr(factory(spec), "needs_cube", False))
+        # a cube model reads its 'xs' windows from the FeatureCube: only the 'mkt' columns go into X
+        x_names = [n for n, k in zip(names, kinds, strict=True) if k == "mkt"] if light else names
+        feats = load_features(settings, purpose, columns=x_names).collect()
         if spec.params.get("auction"):  # T7.2 y_oc trial: the T4.4 auction features, keyed by decision date
             from stocksense.features.auction_matrix import auction_columns
 
             alf, anames, akinds = auction_columns(settings, purpose)
             feats = feats.join(alf.collect(), on=["date", "sid"], how="inner")
             names, kinds = names + anames, kinds + akinds
+            x_names = x_names + anames
         df = lab.join(feats, on=["date", "sid"], how="inner").sort("date", "sid")
         dates, end, sid_all = df["date"], df[end_col], df["sid"]
         dates_np = dates.to_numpy()
         y_all = df[label_col].to_numpy().astype(np.float64)
-        X_all = df.select([pl.col(n).cast(pl.Float32) for n in names]).to_numpy().astype(np.float32)
+        X_all = df.select([pl.col(n).cast(pl.Float32) for n in x_names]).to_numpy().astype(np.float32)
+        del feats
         if factory(spec).needs_keys:  # sequence / cube models look rows up by (sid, day)
             from stocksense.models.seqnet import add_keys
 
@@ -259,6 +275,8 @@ def run_walk_forward(
                     "fit_params": fit_params,
                 }
                 log.info("walkforward_fold_done", fold=f.name, trial=trial_id)
+            del models
+            _release_memory()
 
     for fold in fold_list:
         if fold.name in parts or fold.name not in done:
