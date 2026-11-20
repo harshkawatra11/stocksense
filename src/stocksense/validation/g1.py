@@ -751,6 +751,20 @@ def s1cost_e_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]
     }
 
 
+def s1cost_e2_variants(h: int) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    """G2-E4/E6 portfolio-option grid on the E3 winner (V8 + er_map decile_js): R0 is that winner itself (same
+    spec, same trial id `g2-s1cost-y_c2o_10-39cae29708`), R1 adds the regime overlay (gross x 0.5 when the
+    filtered bear probability is above 0.6), R2 the extreme-value stop, R3 both."""
+    opts, over = s1cost_variants(h)["V8"]
+    over = {**over, "er_map": "decile_js"}
+    return {
+        "R0": (opts, over),
+        "R1": ({**opts, "regime_overlay": True}, over),
+        "R2": ({**opts, "stop_model": "evt"}, over),
+        "R3": ({**opts, "regime_overlay": True, "stop_model": "evt"}, over),
+    }
+
+
 def plan_s1cost(
     cfg: G1Config,
     s1_models: Mapping[str, Sequence[ModelTrial]],

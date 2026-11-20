@@ -124,3 +124,26 @@ def test_the_e_grid_is_the_winner_plus_five_single_changes():
     assert e["E4"].plan.spec["policy"] == {**base["policy"], "sizing": "kelly", "kelly_c": 0.25}
     assert e["E5"].plan.spec["policy"]["kelly_c"] == 0.5 and e["E5"].plan.spec["er_map"] == "decile"
     assert len({repr(p.plan.spec) for p in e.values()}) == 6
+
+
+def test_the_e2_grid_is_the_e3_winner_plus_the_portfolio_options():
+    from stocksense.validation.g1 import plan_s1cost, s1cost_e2_variants, s1cost_e_variants
+
+    models = {"y_c2o_10": [ModelTrial("s1-gbm-y_c2o_10-x", "s1-gbm", "y_c2o_10", {}, 0.07, 20.0)]}
+
+    def grid(v):
+        return {
+            p.variant: p
+            for p in plan_s1cost(CFG, models, k_max=10, overlay=False, targets=("y_c2o_10",), variants=v)
+        }
+
+    e, r = grid(s1cost_e_variants), grid(s1cost_e2_variants)
+    assert list(r) == ["R0", "R1", "R2", "R3"]
+    assert r["R0"].plan.spec == e["E3"].plan.spec  # the E3 winner: same spec, same trial id (idempotent)
+    base = r["R0"].plan.spec
+    assert base["er_map"] == "decile_js"
+    assert "regime_overlay" not in base["policy"] and "stop_model" not in base["policy"]
+    assert r["R1"].plan.spec["policy"] == {**base["policy"], "regime_overlay": True}
+    assert r["R2"].plan.spec["policy"] == {**base["policy"], "stop_model": "evt"}
+    assert r["R3"].plan.spec["policy"] == {**base["policy"], "regime_overlay": True, "stop_model": "evt"}
+    assert len({repr(p.plan.spec) for p in r.values()}) == 4
