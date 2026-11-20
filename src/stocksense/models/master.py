@@ -153,7 +153,7 @@ class MasterModel(TorchCSModel):
             settings = load_settings()
             v = self.feature_version or current_version(settings)
             cols = self._xs_names()
-            key = (str(settings.paths.data_store), v, tuple(cols), self.purpose)
+            key = (str(settings.paths.data_root), v, tuple(cols), self.purpose)
             if key not in _CUBES:
                 _CUBES.clear()  # one cube at a time (about 0.5 GB)
                 _CUBES[key] = FeatureCube(settings, int(v), cols, self.purpose)  # type: ignore[arg-type]
