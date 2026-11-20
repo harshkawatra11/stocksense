@@ -368,7 +368,7 @@ class _FnoAccess(EnginePanelAccess):
         rows: dict[int, NameRow] = {
             s: (replace(r, in_fno=True) if s in members else r) for s, r in pd_.rows.items()
         }
-        return PanelDay(pd_.date, pd_.next_date, rows, pd_.breadth_200, pd_.mkt_ret_21)
+        return PanelDay(pd_.date, pd_.next_date, rows, pd_.breadth_200, pd_.mkt_ret_21, pd_.p_bear)
 
 
 @dataclass
@@ -390,6 +390,16 @@ class G1World:
     benchmark: pl.DataFrame  # date, ew500_ret, nifty500_ret
     u500_by_date: dict[date, set[int]] = field(default_factory=dict)  # panel_universe.u500 members
     _volfc: tuple[np.ndarray, np.ndarray] | None = None
+    _p_bear: dict[date, float] | None = None
+
+    def regime_p_bear(self) -> dict[date, float]:
+        """date -> filtered HMM bear probability (G2-E4), computed on demand and causally (each year's
+        parameters come from data before that year; the filter uses data up to the day)."""
+        if self._p_bear is None:
+            from stocksense.features import regime
+
+            self._p_bear = regime.p_bear_by_date(self.settings, self.end)
+        return self._p_bear
 
     def vol_arrays(self) -> tuple[np.ndarray, np.ndarray]:
         """(HAR, GARCH) daily-vol forecasts aligned to the panel rows (G2-E1), computed on demand from the
@@ -402,12 +412,15 @@ class G1World:
             self._volfc = vf.align_daily_vol(self.panel.sid, self.panel.date, frame)
         return self._volfc
 
-    def s1_access(self, universe_flag: bool = False, vol_model: str = "vol21") -> EnginePanelAccess:
+    def s1_access(
+        self, universe_flag: bool = False, vol_model: str = "vol21", regime: bool = False
+    ) -> EnginePanelAccess:
         return EnginePanelAccess(
             self.panel, self.calendar, industry=self.industry, split_dates=self.split_dates,
             result_dates=self.result_dates, market=self.market, stale=self.stale,
             u500=self.u500_by_date if universe_flag else None, universe_flag=universe_flag,
             volfc=self.vol_arrays() if vol_model != "vol21" else None,
+            regime=self.regime_p_bear() if regime else None,
         )  # fmt: skip
 
     def s2_access(self) -> EnginePanelAccess:
@@ -858,10 +871,11 @@ class G1Runner:
         world, settings = self.world, self.settings
         spec = ModelSpec(family="s1-g1", target=target)
         vol_model = str((policy_opts or {}).get("vol_model", "vol21"))
+        regime = bool((policy_opts or {}).get("regime_overlay", False))
 
         def make(slip: SlippageTable) -> Any:
             base = S1Policy(
-                spec, settings, source, world.s1_access(self.cfg.universe_flag, vol_model),
+                spec, settings, source, world.s1_access(self.cfg.universe_flag, vol_model, regime),
                 settings.costs, slip,
                 k_max=k_max, overlay=overlay, meta=meta, state=None, auto_resume_sessions=auto_resume,
                 policy_opts=policy_opts,

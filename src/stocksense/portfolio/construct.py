@@ -38,6 +38,8 @@ VOL_MODELS = ("vol21", "har", "garch")
 SIZINGS = ("score_over_vol", "kelly")
 OVERLAY_BREADTH = 0.30
 OVERLAY_FACTOR = 0.5
+REGIME_BEAR_P = 0.6  # G2-E4: the regime overlay applies above this filtered bear probability
+REGIME_FACTOR = 0.5
 CASH_HAIRCUT = 0.005  # expected sale proceeds are counted at 99.5% when sizing tomorrow's close buys
 BUY_CUSHION_INR = 30.0  # the engine leaves about Rs 29.5 of cash per buy for the exit fees
 S2_STOP_FRAC = 0.03
@@ -98,6 +100,7 @@ class PanelDay:
     rows: Mapping[int, NameRow]
     breadth_200: float | None = None
     mkt_ret_21: float | None = None
+    p_bear: float | None = None  # G2-E4: filtered HMM bear probability of the date (research worlds only)
 
 
 class PanelAccess(Protocol):
@@ -144,6 +147,8 @@ class S1Config:
     )
     sizing: str = "score_over_vol"  # raw weight: (0.5 + score) / vol, or fractional Kelly c * er / sigma_h^2
     kelly_c: float = 0.5  # the Kelly fraction (sizing == "kelly")
+    # G2-E4: gross x 0.5 when the filtered bear probability is above 0.6 (default off)
+    regime_overlay: bool = False
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -437,6 +442,8 @@ def plan_s1(
         and panel_t.breadth_200 < OVERLAY_BREADTH and panel_t.mkt_ret_21 < 0
     ):  # fmt: skip
         gt *= OVERLAY_FACTOR
+    if cfg.regime_overlay and panel_t.p_bear is not None and panel_t.p_bear > REGIME_BEAR_P:
+        gt *= REGIME_FACTOR
     gt *= gross_scale  # live decay scale (G2-G4); 1.0 in every backtest
     if book.stopped or book.dd >= risk.book_dd_stop:
         gt = 0.0
@@ -911,12 +918,14 @@ class EnginePanelAccess:
         u500: Mapping[date, set[int]] | None = None,
         universe_flag: bool = False,
         volfc: tuple[np.ndarray, np.ndarray] | None = None,
+        regime: Mapping[date, float] | None = None,
     ) -> None:
         if universe_flag and u500 is None:
             raise ValueError("universe_flag=True needs the u500 map (date -> set of sids)")
         self.u500, self.universe_flag = u500 or {}, universe_flag
         if volfc is not None and (len(volfc[0]) != len(panel.sid) or len(volfc[1]) != len(panel.sid)):
             raise ValueError("volfc arrays must be aligned with the panel rows")
+        self.regime = regime or {}  # date -> filtered bear probability (G2-E4); empty = no overlay data
         self.volfc = volfc  # (har, garch) daily-vol forecasts per panel row (G2-E1); None = vol_21 only
         self.p, self.cal = panel, calendar
         self.industry = industry or {}
@@ -982,4 +991,4 @@ class EnginePanelAccess:
                     vol_har=self._fc(0, j), vol_garch=self._fc(1, j),
                 )  # fmt: skip
         b, m = self.market.get(t, (None, None))
-        return PanelDay(t, next_date, rows, b, m)
+        return PanelDay(t, next_date, rows, b, m, self.regime.get(t))
