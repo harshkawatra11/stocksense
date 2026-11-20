@@ -379,6 +379,10 @@ _RAW_NEW = [
             "bid_qty": _F,
             "ask_qty": _F,
             "source": _S,
+            "depth_imbalance_5": _F,
+            "total_buy_qty": _F,
+            "total_sell_qty": _F,
+            "oi": _F,
         },
     ),
     _spec(

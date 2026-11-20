@@ -49,6 +49,18 @@ def _feed_ts(v: object, fallback: datetime) -> datetime:
         return fallback
 
 
+def _levels(rows: object) -> tuple[tuple[float, float], ...]:
+    """(price, quantity) of up to five depth levels; levels without both numbers are dropped."""
+    out: list[tuple[float, float]] = []
+    for r in (rows if isinstance(rows, list) else [])[:5]:
+        if not isinstance(r, dict):
+            continue
+        p, n = to_float(r.get("price")), to_float(r.get("quantity"))
+        if p is not None and n is not None:
+            out.append((p, n))
+    return tuple(out)
+
+
 def parse_quote(q: dict[str, Any], now: datetime) -> Quote:
     """Quote from one `data.fetched[]` entry of a FULL market quote (prices in rupees)."""
     depth = q.get("depth") or {}
@@ -71,6 +83,14 @@ def parse_quote(q: dict[str, Any], now: datetime) -> Quote:
         upper_circuit=to_float(q.get("upperCircuit")),
         lower_circuit=to_float(q.get("lowerCircuit")),
         source="angel",
+        oi=to_float(q.get("opnInterest")),
+        total_buy_qty=to_float(q.get("totBuyQuan")),
+        total_sell_qty=to_float(q.get("totSellQuan")),
+        avg_price=to_float(q.get("avgPrice")),
+        depth_bid=_levels(depth.get("buy")),
+        depth_ask=_levels(depth.get("sell")),
+        week52_high=to_float(q.get("52WeekHigh")),
+        week52_low=to_float(q.get("52WeekLow")),
     )
 
 
@@ -95,6 +115,7 @@ class AngelClient:
         self._clock = clock
         self._http = httpx.Client(timeout=httpx.Timeout(30, connect=15), transport=transport)
         self._jwt: str | None = None
+        self._feed_token: str | None = None  # memory only, never logged (for the H3 stream)
         self._last: datetime | None = None
 
     # ---- plumbing ------------------------------------------------------------------------------
@@ -172,6 +193,7 @@ class AngelClient:
             _, j = self._send("POST", _LOGIN, body, CALL_SPACING_S)
             if j and j.get("status") and isinstance(j.get("data"), dict) and j["data"].get("jwtToken"):
                 self._jwt = j["data"]["jwtToken"]
+                self._feed_token = j["data"].get("feedToken") or None
                 return
             msg = str((j or {}).get("message") or "")
             if attempt == 1 and "totp" in msg.lower():
@@ -179,6 +201,11 @@ class AngelClient:
                 self._clock.sleep(30 - (t % 30) + 1)
                 continue
             raise BrokerError(f"angel login failed: {(j or {}).get('errorcode')} {msg}")
+
+    @property
+    def feed_token(self) -> str | None:
+        """The feed token of the current login (None before login); held in memory only."""
+        return self._feed_token
 
     def _ensure(self) -> None:
         if self._jwt is None:
