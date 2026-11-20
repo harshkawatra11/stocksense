@@ -106,3 +106,45 @@ dens verdict:
 - Selection on the inner validation of fold 2016 (6 configs, mean IC 0.0981 to 0.1017) chose K=6, decay 0.9; differences among configs were within 0.004, so the choice is weak. Walk-forward IC 0.0752 (t 25.9, NW t 10.5) is about equal to the GBM (0.0747 on the same window); by year it ranges 0.105 (2016) to 0.021 (2025).
 - Its score is 0.88 correlated with the GBM and adds orthogonal IC 0.022 (t 5.2), so it passes the pre-registered admission rule on the orth line; the 50/50 blend gain is only +0.0020 (t 1.9), below the 0.003 line, so the benefit is small.
 - Alone in S1 it gives net Sharpe 0.85 and 2x-slip 0.05 (trial `g2-s1-y_c2o_10-736a9989de`), weaker than the GBM book under the same pre-C5 policy; turnover is low (0.144). The 2025 fold (IC 0.021) is its weak spot. It enters the D12 ensemble as the stronger-baseline member.
+
+## 3. Probability and stochastic-process options on the C5 winner (cards E1-E3, family `g2-s1cost`)
+
+Run 2026-11-20 with `stocksense research s1-cost --grid e` (log `data_store/logs/g2_E_grid.log`). Same fixed scores, window, k_max 10, no overlay, auto-resume 20, u500 hysteresis flag and Rs 5 lakh reference as section 1. Base E0 is the C5 winner V8 (the identical spec, so the same trial `g2-s1cost-y_c2o_10-40f8615b42` was loaded, not re-run); each other variant changes exactly one thing in V8. HAR/GARCH forecasts are causal (HAR refit each January on data to the previous 31 December, GARCH refit at each month end on the last 1,000 returns, 1,352 names, cached in `data_store/cache/volforecast/`). Feature version 2 has NOT been built (card E9 does that once); nothing here touches `config/strategies.toml` or live code.
+
+| variant | trial | net Sharpe | 2x-slip Sharpe | excess t (v1, raw) | excess t (v2, exposure-matched) | positive years | max DD | mean turnover/day | avg hold (sessions) | cost drag (annual, of capital) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| E0 = V8 (base) | `g2-s1cost-y_c2o_10-40f8615b42` | 1.687 | 1.292 | -0.01 | +2.26 | 0.83 | 0.199 | 0.104 | 11.6 | 0.293 |
+| E1 V8 + `vol_model=har` | `g2-s1cost-y_c2o_10-ae4b593140` | 1.497 | 1.400 | -0.53 | +1.32 | 0.67 | 0.187 | 0.100 | 11.7 | 0.230 |
+| E2 V8 + `vol_model=garch` | `g2-s1cost-y_c2o_10-3ecc1c301e` | 1.813 | 1.331 | +0.36 | +3.21 | 0.83 | 0.196 | 0.106 | 11.7 | 0.357 |
+| E3 V8 + `er_map=decile_js` | `g2-s1cost-y_c2o_10-39cae29708` | 1.877 | 1.326 | +0.47 | +3.22 | 0.83 | 0.174 | 0.107 | 11.8 | 0.383 |
+| E4 V8 + Kelly c = 0.25 | `g2-s1cost-y_c2o_10-0190db08db` | 1.641 | 1.246 | -0.11 | +1.95 | 0.92 | 0.192 | 0.108 | 11.6 | 0.294 |
+| E5 V8 + Kelly c = 0.5 | `g2-s1cost-y_c2o_10-505b5a494f` | 1.753 | 1.161 | +0.26 | +2.18 | 0.83 | 0.195 | 0.110 | 11.7 | 0.347 |
+
+Paired daily net-return difference against E0 (Newey-West t, lags 5): E1 -2.7% a year (t -1.54), E2 +1.8% (t +0.91), E3 +2.4% (t +1.18), E4 -0.5% (t -0.28), E5 +1.3% (t +0.71). Daily-return correlation with E0 is 0.83 to 0.86 for all five.
+
+### Best variant and gate
+
+Best by the card's rule (net Sharpe at Rs 5 lakh): E3 `g2-s1cost-y_c2o_10-39cae29708` (the same policy options as V8, expected-return map `decile_js`). `stocksense validate g2-s1cost-y_c2o_10-39cae29708 --gate-version 1` and `--gate-version 2` (the family now has 21 finished trials and the registry N = 127):
+
+| # | line | value | threshold | v1 (official: its GBM trial predates `effective_from`) | v2 (informational) |
+|---|---|---|---|---|---|
+| 1 | mean_rank_ic | 0.0768 | >= 0.02 | PASS | PASS |
+| 2 | ic_tstat | 26.5029 | >= 3 | PASS | PASS |
+| 3 | net_sharpe | 1.8773 | >= 1 | PASS | PASS |
+| 4 | net_sharpe_2x_slip | 1.3258 | >= 0.5 | PASS | PASS |
+| 5 | excess_tstat | v1 0.4711, v2 3.2209 | >= 2 | FAIL | PASS |
+| 6 | frac_positive_years | 0.8333 | >= 0.7 | PASS | PASS |
+| 7 | dsr | 0.0000 (v1), 1.0000 (v2), N = 127 | >= 0.95 | FAIL | PASS |
+| 8 | pbo | 0.2891 (21 trials, 2908 days) | <= 0.3 | PASS | PASS |
+| 9 | max_drawdown | 0.1743 | <= 0.25 | PASS | PASS |
+
+Gate v1: FAIL on lines 5 and 7 (the two lines B1 found mis-specified). Gate v2 (informational): PASS on all nine lines; the C5 winner V8 failed v2 line 8 (PBO 0.52 over 16 trials) and now passes it (0.289 over 21 trials, margin 0.011 from the 0.30 limit).
+
+### Verdict
+
+- E3 (James-Stein decile map) and E2 (GARCH vol) each beat the V8 base on BOTH net Sharpe and 2x-slip Sharpe (E3 1.877 / 1.326, E2 1.813 / 1.331, base 1.687 / 1.292). By the pre-written rule E3, the best on net, is recorded as a **candidate for the live policy only**; `config/strategies.toml` is unchanged (it still reads `er_map = "decile"` with V8's policy options) and no live code reads the new options.
+- The evidence is weak. The gains over the base are 0.19 (E3) and 0.13 (E2) Sharpe, +2.4% and +1.8% a year, with paired NW t of 1.18 and 0.91: not distinguishable from zero. Five variants were compared against one base on the same window, so the best of them is an upward-biased pick. The PBO of 0.289 improved only because the five new trials are highly correlated with the existing family (daily-return correlation 0.83 to 0.86); it should not be read as stronger out-of-sample evidence. Treat E3 as "no harm, possibly a small gain", not as a validated improvement.
+- E3 raises cost drag (0.383 a year against 0.293) and gross exposure (0.629 against 0.610) while lowering max drawdown (0.174 against 0.199); James-Stein shrinkage is mild here (about 25,000 rows per decile make the sampling variance small, and overlapping labels make it optimistic), so `decile_js` is close to `decile` and the difference is mostly in how the isotonic map is shaped.
+- E1 (HAR vol) is the one variant that lowers net Sharpe (1.497) but has the highest 2x-slip Sharpe (1.400) and the lowest cost drag (0.230); its positive-years share fell to 0.67. E2 (GARCH) raises net Sharpe but not the 2x line by more than 0.04. HAR and GARCH are on a different scale than `vol_21` (calibrated by a close-to-close ratio for HAR; GARCH uses close-to-close returns directly) and the 10-day GARCH forecast is held for a month, so the stop and weights are sized somewhat differently from the base; no attempt was made to tune this.
+- Kelly sizing (E4, E5) did not help: c = 0.25 is slightly worse than the base on both lines, c = 0.5 is better on net (1.753) but worst on 2x slip (1.161). The two c values do give different books (the Kelly weights c * er / sigma^2 are below the volatility-targeted room for some names), but there is no consistent gain over the score-over-vol sizing.
+- Nothing here was chosen by looking at the lockbox; the lockbox stays closed.
