@@ -148,3 +148,41 @@ Gate v1: FAIL on lines 5 and 7 (the two lines B1 found mis-specified). Gate v2 (
 - E1 (HAR vol) is the one variant that lowers net Sharpe (1.497) but has the highest 2x-slip Sharpe (1.400) and the lowest cost drag (0.230); its positive-years share fell to 0.67. E2 (GARCH) raises net Sharpe but not the 2x line by more than 0.04. HAR and GARCH are on a different scale than `vol_21` (calibrated by a close-to-close ratio for HAR; GARCH uses close-to-close returns directly) and the 10-day GARCH forecast is held for a month, so the stop and weights are sized somewhat differently from the base; no attempt was made to tune this.
 - Kelly sizing (E4, E5) did not help: c = 0.25 is slightly worse than the base on both lines, c = 0.5 is better on net (1.753) but worst on 2x slip (1.161). The two c values do give different books (Kelly weights below the volatility-targeted room are the likely reason; not investigated), but there is no consistent gain over the score-over-vol sizing.
 - Nothing here was chosen by looking at the lockbox; the lockbox stays closed.
+
+### 3.2 Portfolio options of cards E4 and E6 on the E3 winner (family `g2-s1cost`)
+
+Run 2026-11-20 with `stocksense research s1-cost --grid e2` (log `data_store/logs/g2_E2_grid.log`). Same fixed scores, window, k_max 10, no breadth overlay, auto-resume 20, u500 hysteresis flag and Rs 5 lakh reference as sections 1 and 3. The base R0 is the E3 winner (V8 options with `er_map=decile_js`; identical spec, so the same trial `g2-s1cost-y_c2o_10-39cae29708` was loaded, not re-run). Each other variant changes only the portfolio option named: R1 `regime_overlay` (gross x 0.5 when the filtered 3-state HMM bear probability is above 0.6; the probability is 0.6 or more on about 19% of the sessions of 2015-2025, parameters refit each January on data to the previous 31 December), R2 `stop_model=evt` (stop at `max(8%, ES99 x vol x sqrt(h))` instead of `max(8%, 3.0 x vol x sqrt(h))`; the pooled-by-tercile GPD ES99 multiplier averages 3.83 vol units, range 2.99 to 4.58, so the extreme-value stop is 0.0 to 50% wider than the fixed one), R3 both. All three new trials were registered before any was run. Nothing here touches `config/strategies.toml` or live code.
+
+| variant | trial | net Sharpe | 2x-slip Sharpe | excess t (v1, raw) | excess t (v2, exposure-matched) | positive years | max DD | mean turnover/day | avg hold (sessions) | cost drag (annual, of capital) | mean gross | paired net difference vs R0 (NW t, lags 5) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| R0 = E3 winner (base) | `g2-s1cost-y_c2o_10-39cae29708` | 1.877 | 1.326 | +0.47 | +3.22 | 0.83 | 0.174 | 0.107 | 11.8 | 0.383 | 0.629 | - |
+| R1 R0 + regime overlay | `g2-s1cost-y_c2o_10-ea16321659` | 1.673 | 1.287 | -0.27 | +1.76 | 0.83 | 0.190 | 0.103 | 11.7 | 0.272 | 0.605 | -3.7% a year (t -1.94) |
+| R2 R0 + EVT stop | `g2-s1cost-y_c2o_10-cd28c9d82b` | 1.927 | 1.263 | +0.62 | +3.20 | 0.83 | 0.174 | 0.108 | 11.8 | 0.421 | 0.640 | +0.7% a year (t +0.48) |
+| R3 R0 + both | `g2-s1cost-y_c2o_10-52def95f1a` | 1.611 | 1.191 | -0.52 | +1.94 | 0.75 | 0.170 | 0.097 | 11.6 | 0.238 | 0.565 | -5.1% a year (t -2.66) |
+
+Daily-return correlation with R0: R1 0.85, R2 0.91, R3 0.85. Exits by reason (all folds, trades): stop 32 (R0), 30 (R1), 16 (R2), 13 (R3); rank_decay 1,118 / 982 / 1,163 / 921; horizon 841 / 805 / 867 / 830.
+
+### Best variant and gate (3.2)
+
+Best by the card's rule (net Sharpe at Rs 5 lakh): R2 `g2-s1cost-y_c2o_10-cd28c9d82b` (stored as the run's candidate). `stocksense validate g2-s1cost-y_c2o_10-cd28c9d82b --gate-version 1` and `--gate-version 2` (registry N = 130, family has 24 finished trials):
+
+| # | line | value | threshold | v1 (official: its GBM trial predates `effective_from`) | v2 (informational) |
+|---|---|---|---|---|---|
+| 1 | mean_rank_ic | 0.0768 | >= 0.02 | PASS | PASS |
+| 2 | ic_tstat | 26.5029 | >= 3 | PASS | PASS |
+| 3 | net_sharpe | 1.9266 | >= 1 | PASS | PASS |
+| 4 | net_sharpe_2x_slip | 1.2634 | >= 0.5 | PASS | PASS |
+| 5 | excess_tstat | v1 0.6153, v2 3.2026 | >= 2 | FAIL | PASS |
+| 6 | frac_positive_years | 0.8333 | >= 0.7 | PASS | PASS |
+| 7 | dsr | 0.0000 (v1), 1.0000 (v2), N = 130 | >= 0.95 | FAIL | PASS |
+| 8 | pbo | 0.2162 (24 trials, 2908 days) | <= 0.3 | PASS | PASS |
+| 9 | max_drawdown | 0.1741 | <= 0.25 | PASS | PASS |
+
+Gate v1: FAIL on lines 5 and 7 (the two lines B1 found mis-specified), as for every earlier variant; gate v2 (informational): PASS on all nine lines.
+
+### Verdict (3.2)
+
+- **E4 regime overlay: no. ** Halving gross when the filtered bear probability exceeds 0.6 lowers net Sharpe from 1.877 to 1.673 and the 2x-slip Sharpe from 1.326 to 1.287, raises max drawdown (0.190 against 0.174) and costs 3.7% a year (paired t -1.94, the only paired difference near significance in this grid); its v2 excess t falls to 1.76, below the gate's 2. Combined with the EVT stop (R3) it is the worst variant (net 1.611, paired t -2.66, positive years 0.75). The overlay is not adopted; the S1 breadth overlay and this one both reduce exposure in weak markets and both cost return on this window, which is consistent with the book's own volatility targeting already shrinking gross when risk rises.
+- **E6 EVT stop: no clear effect. ** The extreme-value stop is wider than the fixed one (ES99 multiplier 3.0 to 4.6 against the fixed 3.0), so stops fire half as often (16 against 32 across 2,120 trades). Net Sharpe rises by 0.05 (1.927 against 1.877; +0.7% a year, paired t +0.48), the 2x-slip Sharpe falls by 0.06 (1.263 against 1.326), cost drag rises (0.421 against 0.383) and max drawdown is the same (0.174). That is not distinguishable from zero. By the pre-written rule R2 is recorded as a candidate for the live policy only; `config/strategies.toml` is unchanged and no live code reads `stop_model` or `regime_overlay`. Three variants were compared against one base on the same window, so the best-of pick is upward biased.
+- The feature-based items are NOT evaluated here: the E4 regime and change-point features (`regime_p_bear`, `regime_p_bull`, `cp_prob`, `run_length_mean`), the E5 OU and pair features (`ou_sscore`, `ou_halflife`, `resid_rev_5`, `pair_z`), the E7 event features (`ann_intensity_2/10`, eight category counts, `result_drift_proxy`) and E1's HAR/GARCH features need the single feature-version-2 build and a `g2-feat` GBM trial, which is card E9. Their modules (`features/regime.py`, `features/ou.py`, `features/events_v2.py`) are not in `FEATURE_MODULES` yet; their unit and truncation tests pass.
+- Nothing here was chosen by looking at the lockbox; the lockbox stays closed.
