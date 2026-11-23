@@ -545,6 +545,30 @@ def official_rows(ctx: JobContext, d: date) -> pl.DataFrame:
     return io.read(ctx.settings, "panel_daily", start=d, end=d).collect()
 
 
+def _stage_mcp_verify(ctx: JobContext, d: date) -> str:
+    """Compare today's raw data with the official NSE bhavcopy MCP (G2-H5). Never blocks: mismatches are
+    `done` with `mismatch=n` (report section + alert); an unreachable server is `skipped`."""
+    from stocksense.brokers.nse_mcp import BHAVCOPY_URL, call_many
+    from stocksense.data.mcp_verify import verify
+
+    batch = ctx.hook("bhavcopy_batch") or (lambda calls: call_many(BHAVCOPY_URL, calls))
+    try:
+        res = verify(ctx.settings, d, batch)
+    except Exception as e:  # noqa: BLE001 - verification must never stop the evening pipeline
+        log.warning("mcp_verify_failed", error=type(e).__name__)
+        return f"skipped: unreachable ({type(e).__name__})"
+    if res.status == "unreachable":
+        return "skipped: unreachable"
+    ctx.state.kv_set(f"mcp_verify:{d.isoformat()}", json.dumps(res.as_dict()))
+    if res.mismatch:
+        head = "; ".join(res.lines[:3])
+        ctx.notifier.send(f"data check {d}: mismatch={res.mismatch}: {head}")
+    return (
+        f"mismatch={res.mismatch} closes={res.closes_checked} actions={res.actions_checked} "
+        f"index={res.index_checked}"
+    )
+
+
 def _stage_reconcile(ctx: JobContext, d: date) -> str:
     if not ctx.ledger.fills_for_date(d, reconciled=False):
         return "nothing to reconcile"
@@ -635,6 +659,7 @@ def _stub(reason: str = NOT_IMPLEMENTED) -> Callable[[JobContext, date], str]:
 #: evening stages in order: (name, implementation). Stubs record `skipped: not implemented`.
 STAGES: list[tuple[str, Callable[[JobContext, date], str]]] = [
     ("build_panel", _stage_build_panel),
+    ("mcp_verify", _stage_mcp_verify),
     ("reconcile", _stage_reconcile),
     ("marks", _stage_marks),
     ("build_features", _stage_build_features),

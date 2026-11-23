@@ -70,6 +70,41 @@ def make_call(url: str, attempts: int = 2) -> McpCall:
     return call
 
 
+async def _batch_async(url: str, calls: list[tuple[str, dict[str, Any]]]) -> list[str | None]:
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    out: list[str | None] = []
+    async with (
+        streamable_http_client(url) as streams,
+        ClientSession(streams[0], streams[1]) as session,
+    ):
+        await session.initialize()
+        for tool, args in calls:
+            try:
+                res = await session.call_tool(tool, args)
+            except Exception:  # noqa: BLE001 - one failed call is one missing answer
+                out.append(None)
+                continue
+            bad = getattr(res, "is_error", False) or getattr(res, "isError", False)
+            out.append(None if bad else _text(res))
+    return out
+
+
+def call_many(url: str, calls: list[tuple[str, dict[str, Any]]], attempts: int = 2) -> list[str | None]:
+    """Answers of several tool calls in ONE session (None for a call that failed); McpError if the
+    session cannot be opened after `attempts` tries."""
+    last: BaseException | None = None
+    for _ in range(attempts):
+        try:
+            return asyncio.run(_batch_async(url, calls))
+        except BaseException as e:  # noqa: BLE001 - includes anyio ExceptionGroups from the transport
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            last = e
+    raise McpError(f"session failed: {type(last).__name__}") from last
+
+
 def as_json(raw: str | dict[str, Any] | list[Any]) -> Any:
     """Decode a tool answer; an `{"error": ...}` payload or non-JSON text raises McpError."""
     if isinstance(raw, str):

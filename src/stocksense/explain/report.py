@@ -92,6 +92,15 @@ def _live_index(ctx: Any, d: date) -> dict[str, Any]:
     return out
 
 
+def _data_checks(ctx: Any, d: date) -> dict[str, Any] | None:
+    """The nightly MCP verification result of day d (G2-H5), or None when the stage did not store one."""
+    raw = ctx.state.kv_get(f"mcp_verify:{d.isoformat()}")
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
+
+
 def _live_ic(ctx: Any) -> dict[str, Any]:
     mid = ctx.state.kv_get("live_model:s1")
     con = ctx.state.connect()
@@ -172,6 +181,7 @@ def build_report(ctx: Any, d: date, catchup: bool = False) -> tuple[dict[str, An
         "trades": _fills(ctx, d), "positions": positions, "live_ic": ic,
         "decay_scale": float(ctx.state.kv_get("decay_scale:main") or 1.0),
         "live_index": _live_index(ctx, d),
+        "data_checks": _data_checks(ctx, d),
         "plan": None if plan is None else {
             "exits": plan.get("sells", []), "entries": plan.get("entries", []), "note": plan.get("note", ""),
             "allow_entries": plan.get("allow_entries"),
@@ -237,4 +247,9 @@ def render_markdown(b: dict[str, Any]) -> str:
                 f"{n} {v['last']:.2f} ({_pct((v.get('change_pct') or 0) / 100)})" for n, v in snap.items()
             ]
             L.append(f"- {hhmm[:2]}:{hhmm[2:]} " + ", ".join(parts))
+    dc = b.get("data_checks")
+    if dc:
+        L += ["", "## Data checks"]
+        L.append(f"- NSE MCP verification: {dc.get('status')} (mismatch={dc.get('mismatch', 0)})")
+        L += [f"- {line}" for line in dc.get("lines", [])]
     return "\n".join(L) + "\n"

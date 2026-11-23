@@ -153,6 +153,7 @@ class Env:
         self.hooks = {
             "capture_preopen": lambda ctx: 3,
             "cm_market_call": self._cm_market,
+            "bhavcopy_batch": lambda calls: [None] * len(calls),  # nse-bhavcopy MCP "unreachable" in tests
             "stage:build_features": self._stage("build_features"),
             "stage:build_labels": self._stage("build_labels"),
         }
@@ -282,7 +283,7 @@ def test_full_session_runs_every_job_in_order_and_ends_with_report_marks_and_rec
         "market_loop", "spread_capture@09:20",
         "spread_capture@11:00", "spread_capture@13:00", "spread_capture@15:00", "index_capture@15:05",
         "capital_pm", "s1_entries", "s2_squareoff", "close_fills", "eod_mark", "eod_ingest", "eod_pipeline",
-        "eod_pipeline.build_panel", "eod_pipeline.reconcile", "eod_pipeline.marks",
+        "eod_pipeline.build_panel", "eod_pipeline.mcp_verify", "eod_pipeline.reconcile", "eod_pipeline.marks",
         "eod_pipeline.build_features", "eod_pipeline.build_labels",
         "eod_pipeline.kronos_features", "eod_pipeline.nightly_learn", "eod_pipeline.predict",
         "eod_pipeline.s1_plan", "eod_pipeline.drift",
