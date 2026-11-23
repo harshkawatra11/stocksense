@@ -613,7 +613,7 @@ Run one `build_features` (v2 = v1 − nothing + E1/E4/E5/E7 features), `build_la
 - [ ] B1 gate v2
 - [ ] C1 policy options · [ ] C2 smoothing + decile ER · [ ] C3 universe flag + days since result · [ ] C4 cost verification · [ ] C5 cost grid verdict
 - [ ] G1 predict · [ ] G2 S1 hooks · [ ] G3 S2 books · [ ] G4 live IC/refit/report · [ ] G5 live; five sessions: ____ ____ ____ ____ ____
-- [ ] H1 Angel depth/OI · [ ] H2 Upstox · [ ] H3 Angel stream (optional) · [ ] H4 cm-market · [ ] H5 nse-bhavcopy verify
+- [x] H1 Angel depth/OI · [ ] H2 Upstox · [ ] H3 Angel stream (optional) · [x] H4 cm-market · [x] H5 nse-bhavcopy verify
 - [ ] D0 infra · [ ] D1 master · [ ] D2 hist · [ ] D3 gats · [ ] D4 tra · [ ] D5 dadapt · [ ] D6 tabm · [ ] D7 ipca/cae · [ ] D8 factorvae · [ ] D9 ltr · [ ] D10 kronos-ft · [ ] D11 dens · [ ] D12 ensemble + verdict
 - [ ] E1 vol forecasts · [ ] E2 JS shrinkage · [ ] E3 Kelly · [ ] E4 regimes · [ ] E5 OU · [ ] E6 EVT · [ ] E7 events · [ ] E8 micro capture · [ ] E9 feature v2 eval
 - [ ] F1 strict S2
