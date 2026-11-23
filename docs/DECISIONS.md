@@ -321,3 +321,8 @@ Each entry: date, task id, what was observed or decided, and why. Newest at the 
 - **Market Lab defects not ported:** forward-looking 35% split filter; per-strategy exit chosen on the full sample including OOS; survivorship (today's NIFTY 500 for the past); sizing at the open from that day's close NAV; signals on unfinished daily bars; rewritable paper journal; fixed cost with brokerage zero; chart warm-up 220 vs research 260; dead "rt" Angel listener.
 - **151 paper:** read in full from the user's local copy (SSRN 3247865, 361 pages) by the orchestrator; 174 strategy sections plus 2 Appendix A strategies, each mapped in M5.4 and `docs/learn/15-151-strategies-map.md`.
 - **Operational:** M0.1 done (G2 H1/H4/H5 merged to main and pushed 2026-11-23). M0.2 (IPCA) is waiting: free RAM was 4.2 GB against the 6 GB the run needs (three earlier memory crashes), so it was not started.
+
+### M1.1 (2026-11-23)
+- 19 notes in `docs/learn/` (18 plus README); every note has the eight required sections; the 151 map has one row per section id pinned in `tests/unit/k151_sections.py` (176).
+- Pre-open timing is unverified: NSE's own pages could not be fetched (timeout). Secondary sources say the pre-open phases changed on 2026-09-07; note 13 and card M3.5 say to observe the times live instead of hard-coding them.
+- SEBI block-deal minimum size and price band changed in 2025 and sources disagree (25 crore and 3% in recent reports); note 04 tells the reader to check the exchange's current FAQ.
