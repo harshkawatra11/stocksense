@@ -378,6 +378,13 @@ def seed_preopen_from_snapshots(ctx: IngestContext) -> int:
     return total
 
 
+def depth_imbalance(bids: Sequence[tuple[float, float]], asks: Sequence[tuple[float, float]]) -> float | None:
+    """(sum bid qty - sum ask qty) / (sum bid qty + sum ask qty) over up to five levels; None if empty."""
+    b = sum(n for _, n in bids[:5])
+    a = sum(n for _, n in asks[:5])
+    return (b - a) / (b + a) if b + a > 0 else None
+
+
 def capture_spreads(
     ctx: IngestContext, symbols: Sequence[str], quotes_source: Callable[[Sequence[str]], list]
 ) -> int:
@@ -392,6 +399,10 @@ def capture_spreads(
             "bid_qty": q.bid_qty,
             "ask_qty": q.ask_qty,
             "source": q.source,
+            "depth_imbalance_5": depth_imbalance(q.depth_bid, q.depth_ask),
+            "total_buy_qty": q.total_buy_qty,
+            "total_sell_qty": q.total_sell_qty,
+            "oi": q.oi,
         }
         for q in quotes_source(list(symbols))
         if q.bid and q.ask and q.bid > 0 and q.ask > 0
@@ -407,6 +418,10 @@ def capture_spreads(
         "bid_qty": pl.Float64,
         "ask_qty": pl.Float64,
         "source": pl.Utf8,
+        "depth_imbalance_5": pl.Float64,
+        "total_buy_qty": pl.Float64,
+        "total_sell_qty": pl.Float64,
+        "oi": pl.Float64,
     }
     upsert(ctx.settings, "spreads", pl.DataFrame(rows, schema=schema), clock=ctx.clock)
     return len(rows)

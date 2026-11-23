@@ -1,0 +1,35 @@
+{
+ "nseTimestamp": "20-Nov-2026 15:05:34",
+ "updatedAt": "2026-11-20T09:36:21.164767552Z",
+ "group": "derivatives",
+ "index": {
+  "indexName": "NIFTY 50",
+  "last": 25800.45,
+  "previousClose": 25514.3,
+  "change": 286.15,
+  "percChange": 1.12,
+  "open": 25368.0,
+  "high": 25800.55,
+  "low": 25345.2,
+  "yearHigh": 26373.2,
+  "yearLow": 22179.9,
+  "timeVal": "20-Nov-2026 15:05",
+  "comparisons": {
+   "oneWeekAgo": {
+    "baseDate": "13-Nov-2026",
+    "baseValue": 25144.3,
+    "changePct": 2.61
+   },
+   "oneMonthAgo": {
+    "baseDate": "19-Oct-2026",
+    "baseValue": 22888.95,
+    "changePct": 12.72
+   },
+   "oneYearAgo": {
+    "baseDate": "19-Nov-2025",
+    "baseValue": 26052.65,
+    "changePct": -0.97
+   }
+  }
+ }
+}

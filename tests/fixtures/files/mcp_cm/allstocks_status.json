@@ -1,0 +1,12 @@
+{
+ "available": true,
+ "lastCrawled": "2026-11-20T09:36:11.619682323Z",
+ "crawlIntervalMinutes": 1,
+ "segmentCounts": {
+  "EQUITY": 3146,
+  "SME": 573,
+  "CALL_AUCTION": 749,
+  "BONDS": 3382,
+  "TOTAL": 7101
+ }
+}

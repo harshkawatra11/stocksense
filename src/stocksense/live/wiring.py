@@ -369,6 +369,19 @@ def _symbols(settings: Settings, d: date) -> dict[int, str]:
     return dict(zip(rows["sid"].to_list(), rows["symbol"].to_list(), strict=True))
 
 
+def excluded_sids(ctx, d: date, sym) -> frozenset[int]:  # type: ignore[no-untyped-def]
+    """Sids of the call-auction names stored for day d (kv `call_auction:{d}`, G2-H4); empty when none.
+
+    `sym` is a sid -> symbol dict or a callable returning one (read only when there is a list)."""
+    from stocksense.brokers.nse_mcp import call_auction_symbols
+
+    names = call_auction_symbols(ctx.state, d)
+    if not names:
+        return frozenset()
+    mapping = sym() if callable(sym) else sym
+    return frozenset(sid for sid, s in mapping.items() if s in names)
+
+
 def risk_context(ctx, d: date) -> RiskContext:  # type: ignore[no-untyped-def]
     """The inputs of the eight pre-trade checks as the evening of d sees them (see DECISIONS, G2-G2)."""
     s, cal, now = ctx.settings, ctx.calendar, ctx.clock.now()
@@ -427,9 +440,13 @@ def compute_plan(ctx, d: date, cap: float, *, allow_entries: bool | None = None)
         ctx.state.kv_set(f"book_stop:{BOOK}", "1")
         book = S1Book(book.holdings, book.cash, book.dd, True, book.recent_sells)
     ok = entries_allowed(checks) if allow_entries is None else allow_entries
+    opts = dict(pol.get("policy") or {})
+    excl = excluded_sids(ctx, d, lambda: _symbols(ctx.settings, d))
+    if excl:  # G2-H4: an optional exclusion set; with none the config is exactly as before
+        opts["excluded_sids"] = excl
     cfg = S1Config.from_settings(
         ctx.settings, 10, SlippageTable.load_latest(ctx.settings), k_max=int(pol["k_max"]),
-        overlay=bool(pol["overlay"]), **dict(pol.get("policy") or {}),
+        overlay=bool(pol["overlay"]), **opts,
     )  # fmt: skip
     panel_t = access.day(d, d1)
     scale = float(ctx.state.kv_get(f"decay_scale:{BOOK}") or 1.0)
@@ -622,7 +639,9 @@ def hook_s2_orders(ctx, d: date, cap: float):  # type: ignore[no-untyped-def]
         )
     free = ctx.state.kv_get("free_cash_frac:auction")
     free_cash = cap * (float(free) if free is not None else ctx.ledger.cash_frac("auction"))
-    cfg = S2Config.from_settings(s, SlippageTable.load_latest(s))
+    cfg = S2Config.from_settings(
+        s, SlippageTable.load_latest(s), excluded_sids=excluded_sids(ctx, d, sym)
+    )  # G2-H4: call-auction names (empty set = no effect)
     plan = plan_s2(d, sc.score, sc.er, auction, free_cash, cap, cfg)
     orders = [
         NewOrder(

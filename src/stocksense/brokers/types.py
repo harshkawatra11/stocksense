@@ -49,6 +49,15 @@ class Quote:
     upper_circuit: float | None
     lower_circuit: float | None
     source: str
+    # FULL-quote extras (Angel); all optional so every other source and old call sites are unchanged
+    oi: float | None = None
+    total_buy_qty: float | None = None
+    total_sell_qty: float | None = None
+    avg_price: float | None = None
+    depth_bid: tuple[tuple[float, float], ...] = ()
+    depth_ask: tuple[tuple[float, float], ...] = ()
+    week52_high: float | None = None
+    week52_low: float | None = None
 
 
 def to_float(v: object) -> float | None:

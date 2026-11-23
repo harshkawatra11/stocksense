@@ -153,6 +153,8 @@ class S1Config:
     regime_overlay: bool = False
     # G2-E6: "fixed" = stop_vol_mult * vol * sqrt(h); "evt" = es_mult * vol * sqrt(h) (research worlds only)
     stop_model: str = "fixed"
+    # G2-H4: live-only exclusion set (call-auction names); empty = no effect
+    excluded_sids: frozenset[int] = frozenset()
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -197,6 +199,7 @@ class S2Config:
     slippage: SlippageTable
     shorts_require_fno: bool = True
     universe_rank: int = S2_UNIVERSE_RANK
+    excluded_sids: frozenset[int] = frozenset()  # G2-H4: live-only exclusion (call-auction names)
     min_pos: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -205,12 +208,17 @@ class S2Config:
 
     @classmethod
     def from_settings(
-        cls, settings: Settings, slippage: SlippageTable, *, k_max: int | None = None
+        cls,
+        settings: Settings,
+        slippage: SlippageTable,
+        *,
+        k_max: int | None = None,
+        excluded_sids: frozenset[int] = frozenset(),
     ) -> S2Config:
         s2 = settings.strategies.s2
         return cls(
             k_max if k_max is not None else s2.k_max, settings.risk, settings.costs, slippage,
-            s2.shorts_require_fno,
+            s2.shorts_require_fno, excluded_sids=excluded_sids,
         )  # fmt: skip
 
 
@@ -351,6 +359,8 @@ def _s1_entry_ok(
     `cost_hurdle=False` (free extension) keeps every filter except the round-trip cost test and asks only
     er > 0."""
     if not row.in_universe or row.stale or row.locked_up or er is None or not math.isfinite(er):
+        return False
+    if sid in cfg.excluded_sids:
         return False
     if row.close <= 0:
         return False
@@ -830,6 +840,8 @@ def plan_s2(
     shorts: list[tuple[float, int]] = []
     for sid, a in auction.items():
         if a.turnover_rank > cfg.universe_rank or sid not in scores_d or a.open <= 0:
+            continue
+        if sid in cfg.excluded_sids:
             continue
         er = er_d.get(sid)
         if er is None or not math.isfinite(er):

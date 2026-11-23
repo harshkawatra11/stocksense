@@ -61,6 +61,18 @@ max_retries = 2
 retry_backoff_s = 60
 
 [[job]]
+name = "call_auction_capture"
+at = "08:50"
+days = "session"
+max_retries = 0
+
+[[job]]
+name = "index_capture"
+at = ["09:07", "15:05"]
+days = "session"
+max_retries = 0
+
+[[job]]
 name = "preopen_capture"
 at = "09:00"
 until = "09:08"
