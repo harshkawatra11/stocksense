@@ -1,0 +1,117 @@
+{
+ "meta": {
+  "currency": "INR",
+  "symbol": "RELIANCE.NS",
+  "exchangeName": "NSI",
+  "fullExchangeName": "NSE",
+  "instrumentType": "EQUITY",
+  "firstTradeDate": 820467900,
+  "regularMarketTime": 1795427974,
+  "hasPrePostMarketData": false,
+  "gmtoffset": 19800,
+  "timezone": "IST",
+  "exchangeTimezoneName": "Asia/Kolkata",
+  "regularMarketPrice": 1351.0,
+  "regularMarketChangePercent": -1.924,
+  "fulldayPrice": 1351.0,
+  "fulldayChange": -26.5,
+  "fulldayChangePercent": -1.924,
+  "fiftyTwoWeekHigh": 1611.8,
+  "fiftyTwoWeekLow": 1152.2,
+  "regularMarketDayHigh": 1390.0,
+  "regularMarketDayLow": 1346.9,
+  "regularMarketVolume": 15388955,
+  "longName": "Reliance Industries Limited",
+  "shortName": "RELIANCE INDUSTRIES LTD",
+  "chartPreviousClose": 1190.0,
+  "priceHint": 2,
+  "currentTradingPeriod": {
+   "pre": {
+    "timezone": "IST",
+    "end": 1795405500,
+    "start": 1795405500,
+    "gmtoffset": 19800
+   },
+   "regular": {
+    "timezone": "IST",
+    "end": 1795428000,
+    "start": 1795405500,
+    "gmtoffset": 19800
+   },
+   "post": {
+    "timezone": "IST",
+    "end": 1795428000,
+    "start": 1795428000,
+    "gmtoffset": 19800
+   }
+  },
+  "dataGranularity": "1d",
+  "range": "1mo",
+  "validRanges": [
+   "1d",
+   "5d",
+   "1mo",
+   "3mo",
+   "6mo"
+  ]
+ },
+ "timestamp": [
+  1792727100,
+  1792986300,
+  1793072700,
+  1793159100,
+  1793245500
+ ],
+ "indicators": {
+  "quote": [
+   {
+    "open": [
+     1184.0,
+     1186.0999755859375,
+     1195.0,
+     1194.5,
+     1159.0
+    ],
+    "high": [
+     1201.9000244140625,
+     1204.5,
+     1202.5999755859375,
+     1204.300048828125,
+     1182.0999755859375
+    ],
+    "volume": [
+     14905641,
+     7490515,
+     13067787,
+     21866598,
+     20939623
+    ],
+    "low": [
+     1163.0999755859375,
+     1174.5,
+     1184.0,
+     1156.4000244140625,
+     1155.5999755859375
+    ],
+    "close": [
+     1190.0,
+     1201.800048828125,
+     1196.199951171875,
+     1158.0,
+     1167.4000244140625
+    ]
+   }
+  ],
+  "adjclose": [
+   {
+    "adjclose": [
+     1190.0,
+     1201.800048828125,
+     1196.199951171875,
+     1158.0,
+     1167.4000244140625
+    ]
+   }
+  ]
+ }
+}

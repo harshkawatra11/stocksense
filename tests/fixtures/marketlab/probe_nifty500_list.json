@@ -1,0 +1,22 @@
+{
+ "360ONE": {
+  "name": "360 ONE WAM Ltd.",
+  "industry": "Financial Services"
+ },
+ "ABB": {
+  "name": "ABB India Ltd.",
+  "industry": "Capital Goods"
+ },
+ "ACC": {
+  "name": "ACC Ltd.",
+  "industry": "Construction Materials"
+ },
+ "ACMESOLAR": {
+  "name": "ACME Solar Holdings Ltd.",
+  "industry": "Power"
+ },
+ "AIAENG": {
+  "name": "AIA Engineering Ltd.",
+  "industry": "Capital Goods"
+ }
+}

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+
+from stocksense.core.clock import Clock
 
 
 @dataclass
@@ -66,3 +69,23 @@ class LabStore:
             }
             return {"ready": bool(self.tape), "feeds": feeds, "catchup": catchup}
 
+
+class TTLCache:
+    """Thread-safe get-or-compute cache with per-key expiry (replaces market-lab app.py `cached`)."""
+
+    def __init__(self, clock: Clock) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._items: dict[Any, tuple[float, Any]] = {}
+
+    def get(self, key: Any, ttl_s: float, fn: Callable[[], Any]) -> Any:
+        """Cached value for `key` if younger than `ttl_s` seconds, else compute it with `fn()` and keep it."""
+        now = self._clock.now().timestamp()
+        with self._lock:
+            hit = self._items.get(key)
+            if hit is not None and now - hit[0] < ttl_s:
+                return hit[1]
+        value = fn()
+        with self._lock:
+            self._items[key] = (now, value)
+        return value

@@ -1,0 +1,67 @@
+[
+ {
+  "symbol": "APLAPOLLO",
+  "latestOI": 140830,
+  "prevOI": 72083,
+  "changeInOI": 68747,
+  "avgInOI": 95.37,
+  "volume": 401145,
+  "futValue": 487213.55025,
+  "optValue": 215164678165,
+  "total": 533912.5919,
+  "premValue": 46699.04165,
+  "underlyingValue": 1670
+ },
+ {
+  "symbol": "FINNIFTY",
+  "latestOI": 44438,
+  "prevOI": 35743,
+  "changeInOI": 8695,
+  "avgInOI": 24.33,
+  "volume": 1146223,
+  "futValue": 13480.2048,
+  "optValue": 1958592564751,
+  "total": 50329.39231,
+  "premValue": 36849.18751,
+  "underlyingValue": 28153
+ },
+ {
+  "symbol": "NIFTYNXT50",
+  "latestOI": 1110,
+  "prevOI": 896,
+  "changeInOI": 214,
+  "avgInOI": 23.88,
+  "volume": 2107,
+  "futValue": 20945.06857,
+  "optValue": 1752623795,
+  "total": 20968.23153,
+  "premValue": 23.16295,
+  "underlyingValue": 72245
+ },
+ {
+  "symbol": "TATASTEEL",
+  "latestOI": 243751,
+  "prevOI": 199654,
+  "changeInOI": 44097,
+  "avgInOI": 22.09,
+  "volume": 402840,
+  "futValue": 398443.78805,
+  "optValue": 151668319852,
+  "total": 433244.11157,
+  "premValue": 34800.32352,
+  "underlyingValue": 163
+ },
+ {
+  "symbol": "BANKNIFTY",
+  "latestOI": 2548170,
+  "prevOI": 2143655,
+  "changeInOI": 404515,
+  "avgInOI": 18.87,
+  "volume": 76000757,
+  "futValue": 1609605.23689,
+  "optValue": 144621765526741,
+  "total": 4194355.69431,
+  "premValue": 2584750.45741,
+  "underlyingValue": 62585
+ }
+]

@@ -56,6 +56,11 @@ class Paths:
         return self.root / "logs"
 
     @property
+    def lab(self) -> Path:
+        """Dashboard working files (classification, day snapshots, scans, research notes)."""
+        return self.root / "lab"
+
+    @property
     def sqlite(self) -> Path:
         return self.state / "stocksense.sqlite"
 
