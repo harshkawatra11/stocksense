@@ -826,3 +826,4 @@ def doctor(ctx: typer.Context) -> None:
 
 
 __import__("stocksense.cli_research").cli_research.register(app)  # research cmds
+__import__("stocksense.cli_lab").cli_lab.register(app)  # dashboard server

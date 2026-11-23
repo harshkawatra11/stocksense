@@ -26,6 +26,19 @@ def test_no_order_placement_code_in_src():
     assert not bad, "order placement is out of scope (paper only):\n" + "\n".join(bad)
 
 
+def test_no_order_strings_in_web():
+    web = Path(__file__).resolve().parents[2] / "web" / "src"
+    if not web.exists():
+        return  # the web app is created in card M6.0
+    bad = [
+        f"{p}:{i}"
+        for p in web.rglob("*.ts*")
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if PATTERN.search(line)
+    ]
+    assert not bad, bad
+
+
 def test_checker_flags_order_calls(tmp_path):
     f = tmp_path / "x.py"
     f.write_text("api.placeOrder(x)\nurl = '/order/Place'\nok = 1\n", encoding="utf-8")
