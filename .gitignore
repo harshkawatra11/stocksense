@@ -18,3 +18,9 @@ logs/
 Thumbs.db
 .DS_Store
 .claude/
+
+web/node_modules/
+web/.next/
+web/out/
+web/content/learn/
+web/next-env.d.ts

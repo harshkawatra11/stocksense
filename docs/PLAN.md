@@ -72,6 +72,10 @@ Every new session read the old branches, the old plan, the old instruction files
 | **stooq.com** | optional | Daily macro series (USDINR, Brent, S&P 500, Nasdaq, US 10Y, DXY, gold) for market-state features. | Anything required: failure is a warning. |
 | **RSS news feeds** | Phase 8 | Headlines for the event/news sleeve (no LLM in the decision path). | Trading directly. |
 | **Hugging Face** (`NeoQuasar/Kronos-*`) | used for research | Kronos model weights (see below). | n/a |
+| **NSE website live JSON** (`www.nseindia.com/api`: `allIndices`, `NextApi/apiClient/marketWatchApi?functionName=getIndicesData` for the F&O list, NIFTY 500 and sector indices, `GetQuoteApi?functionName=getSymbolData` for classification and delivery, integrated filing, results comparison, option chain, OI spurts, pre-open) | Program M | The live dashboard (`stocksense serve`), fetched through `NseClient` with cookie warm-up. | Research history, features, labels and gated backtests. |
+| **Yahoo Finance** (`query1/query2.finance.yahoo.com`, spark and chart) | Program M | The dashboard's live 1-minute tape and intraday chart candles (as Market Lab does), and the macro readings in the research note (`BZ=F`, `USDINR=X`, `HG=F`, `^GSPC`). | Research, features, labels or gated backtests. |
+| **Google News RSS** (`news.google.com/rss/search`) | Program M | Dashboard headlines and chart pins. | Trading decisions. |
+| **Wikipedia REST** (`en.wikipedia.org`) | Program M | The company summary in the research note. | Anything else. |
 
 **Kronos (decision 2026-11-19).** Zero-shot Kronos was tested on 242 dates and did **not** add information to the project's own models (`docs/RESULTS-G1.md` section 4). It is not in the production feature set. The vendored code (`third_party/kronos`) stays only for the two open tests: fine-tuning on NSE data (T7.5e) and 5-minute bars (T13.3). Neither is on the critical path.
 
