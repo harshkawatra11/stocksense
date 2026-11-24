@@ -34,6 +34,7 @@ CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
 NIFTY500_CSV = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 THROTTLE_S = 120.0
 _UA = "Mozilla/5.0"
+_NAME_NOISE = {"limited", "india", "industries", "company", "corporation", "ltd"}
 _WIKI_UA = "StockSense-local-dashboard/0.1 (personal research tool; low volume)"
 
 
@@ -211,6 +212,7 @@ class Sources:
             timeout=httpx.Timeout(20, connect=10), follow_redirects=True, headers={"User-Agent": _UA}
         )
         self.calls: dict[str, int] = {}
+        self.wiki: Any = None  # a wikipediaapi.Wikipedia, or a fake in tests
 
     def _count(self, source: str) -> None:
         self.calls[source] = self.calls.get(source, 0) + 1
@@ -372,47 +374,34 @@ class Sources:
             raise SourceError("google", "bad RSS") from e
 
     def wiki_summary(self, name: str) -> dict[str, Any] | None:
-        """Two or three sentences about a company from Wikipedia, or None when no page matches its name."""
+        """Two or three sentences about a company from Wikipedia, or None when no page matches its name.
+
+        Uses the Wikipedia-API library with an honest generic client name (no contact details sent). Titles
+        are tried in order; a page is accepted only if its first paragraph mentions a word of the name.
+        """
         if not name:
             return None
         self._count("wikipedia")
         short = re.sub(r"\b(limited|ltd\.?)$", "", name.strip(), flags=re.IGNORECASE).strip()
-        hdr = {"User-Agent": _WIKI_UA}
-        r = self.http.get(
-            "https://en.wikipedia.org/w/api.php",
-            headers=hdr,
-            params={
-                "action": "query",
-                "list": "search",
-                "format": "json",
-                "srlimit": "3",
-                "srsearch": f"{short} company India",
-            },
-        )
-        if r.status_code != 200:
-            return None
-        words = [w for w in re.findall(r"[a-z]+", short.lower()) if len(w) > 2][:3]
-        for hit in r.json().get("query", {}).get("search", []):
-            title = hit["title"]
-            if not any(w in title.lower() for w in words):
+        words = [w for w in re.findall(r"[a-z]+", short.lower()) if len(w) > 2 and w not in _NAME_NOISE][:3]
+        wiki = self._wiki_client()
+        for title in (short, f"{short} (company)", f"{short} Limited"):
+            page = wiki.page(title)
+            if not page.exists():
                 continue
-            p = self.http.get(
-                "https://en.wikipedia.org/api/rest_v1/page/summary/"
-                + urllib.parse.quote(title.replace(" ", "_")),
-                headers=hdr,
-            )
-            if p.status_code != 200:
+            ext = page.summary or ""
+            if not ext or not any(w in ext.lower() for w in words):
                 continue
-            j = p.json()
-            ext = j.get("extract") or ""
-            if ext:
-                sent = re.split(r"(?<=[.!?])\s+", ext)
-                return {
-                    "text": " ".join(sent[:3]),
-                    "url": (j.get("content_urls") or {}).get("desktop", {}).get("page"),
-                    "title": title,
-                }
+            sent = re.split(r"(?<=[.!?])\s+", ext)
+            return {"text": " ".join(sent[:3]), "url": page.fullurl, "title": page.title}
         return None
+
+    def _wiki_client(self) -> Any:
+        if self.wiki is None:
+            import wikipediaapi
+
+            self.wiki = wikipediaapi.Wikipedia(user_agent=_WIKI_UA, language="en")
+        return self.wiki
 
 
 def dumps_probe(obj: Any, rows: int = 5) -> str:

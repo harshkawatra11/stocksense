@@ -181,6 +181,35 @@ def test_option_chain_uses_contract_info_then_v3():
     assert seen[2][1]["type"] == "Equity" and seen[2][1]["expiry"] == "29-Dec-2026"
 
 
-def test_wiki_returns_none_when_blocked():
-    src, _ = make(lambda r: httpx.Response(403))
-    assert src.wiki_summary("Reliance Industries Limited") is None
+class FakePage:
+    def __init__(self, title, summary):
+        self.title, self.summary, self.fullurl = title, summary, f"https://en.wikipedia.org/wiki/{title}"
+
+    def exists(self):
+        return bool(self.summary)
+
+
+class FakeWiki:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def page(self, title):
+        return self.pages.get(title) or FakePage(title, "")
+
+
+def test_wiki_summary_takes_first_three_sentences_of_a_matching_page():
+    src, _ = make(lambda r: httpx.Response(404))
+    text = "Foo Industries is a firm. It makes things. It is in India. It is old."
+    src.wiki = FakeWiki({"Foo Industries": FakePage("Foo Industries", text)})
+    r = src.wiki_summary("Foo Industries Limited")
+    assert (
+        r["text"] == "Foo Industries is a firm. It makes things. It is in India."
+        and r["title"] == "Foo Industries"
+    )
+
+
+def test_wiki_rejects_a_page_that_does_not_mention_the_company():
+    src, _ = make(lambda r: httpx.Response(404))
+    src.wiki = FakeWiki({"Zeta Corp": FakePage("Zeta Corp", "A town in France with a river.")})
+    assert src.wiki_summary("Zeta Corp Limited") is None
+    assert src.wiki_summary("") is None
