@@ -1,0 +1,28 @@
+# Futures and options charges for the m-opt library (PLAN-M M5.4c). Rates are fractions of traded value
+# (options: of the premium; exercised legs: of the intrinsic value). config/costs.toml is not touched.
+# Source: https://zerodha.com/charges (F&O section) read 2026-11-24, which restates the NSE/SEBI/Union
+# Budget 2026 schedule in force from 2026-04-01. NSE's own pages could not be fetched (timeout).
+# STT was lower before 2026-04-01 (options 0.1%, futures 0.02%); the backtest uses the current schedule
+# for the whole sample, which is conservative.
+verified_on = "2026-11-24"
+[options]
+stt_sell_premium = 0.0015
+stt_exercise = 0.0015
+exchange = 0.0003553
+sebi = 0.000001
+stamp_buy = 0.00003
+gst = 0.18
+brokerage_flat_inr = 20.0
+[futures]
+stt_sell = 0.0005
+exchange = 0.0000183
+sebi = 0.000001
+stamp_buy = 0.00002
+gst = 0.18
+brokerage_rate = 0.0003
+brokerage_cap_inr = 20.0
+# Contract lot sizes (units of the index); NIFTY 65 matches the stored OI unit, BANKNIFTY 30 is the NSE
+# revision of Dec 2025 as recalled and NOT verified from an official page.
+[lots]
+NIFTY = 65
+BANKNIFTY = 30
