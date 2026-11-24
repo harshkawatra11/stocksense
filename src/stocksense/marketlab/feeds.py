@@ -60,3 +60,18 @@ class FeedManager:
         for t in self.threads:
             if t.is_alive():
                 t.join(timeout=5.0)
+
+
+def build_tape(settings: Settings, clock: Clock, store: LabStore):  # noqa: ANN201 (lazy import)
+    """Real TapeEngine from stored data and live sources, or None (logged) when the calendar data is missing."""
+    from stocksense.core.calendar import TradingCalendar
+    from stocksense.core.errors import DataNotAvailable
+    from stocksense.marketlab.sources import Sources
+    from stocksense.marketlab.tape import TapeEngine
+
+    try:
+        cal = TradingCalendar.from_store(settings, clock)
+    except DataNotAvailable:
+        log.warning("tape_disabled_no_calendar")
+        return None
+    return TapeEngine(settings, clock, cal, Sources(settings, clock, store), store)

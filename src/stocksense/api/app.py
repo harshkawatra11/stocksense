@@ -10,13 +10,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from stocksense import __version__
-from stocksense.api import routes_status
+from stocksense.api import routes_sm, routes_status
 from stocksense.api.readonly import ReadOnlyMiddleware
 from stocksense.api.static import mount_web
 from stocksense.core.clock import Clock, SystemClock
 from stocksense.core.config import Settings
-from stocksense.marketlab.feeds import FeedManager
+from stocksense.marketlab.feeds import FeedManager, build_tape
 from stocksense.marketlab.store import LabStore
+from stocksense.marketlab.tape import TapeEngine
 
 WEB_OUT = Path(__file__).resolve().parents[3] / "web" / "out"
 
@@ -28,6 +29,7 @@ def create_app(
     clock: Clock | None = None,
     store: LabStore | None = None,
     web_out: Path = WEB_OUT,
+    tape: TapeEngine | None = None,
 ) -> FastAPI:
     """FastAPI app: GET-only JSON under /api, /health, and the static dashboard at /."""
     clock = clock or SystemClock()
@@ -37,6 +39,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         mgr = FeedManager(settings, clock, store)
         if start_feeds:
+            if app.state.tape is None:
+                app.state.tape = build_tape(settings, clock, store)
+            if app.state.tape is not None:
+                mgr.add("tape", app.state.tape.step, 4.0)
             mgr.start()
         app.state.feeds = mgr
         yield
@@ -45,6 +51,7 @@ def create_app(
     app = FastAPI(title="StockSense", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings, app.state.clock, app.state.store = settings, clock, store
     app.state.catchup_enabled = True
+    app.state.tape = tape
     app.add_middleware(ReadOnlyMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -53,6 +60,7 @@ def create_app(
         allow_headers=["*"],
     )
     app.include_router(routes_status.router)
+    app.include_router(routes_sm.router)
     # later cards add their own include_router line here, before the static mount
     mount_web(app, web_out)
     return app

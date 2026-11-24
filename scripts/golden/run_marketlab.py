@@ -47,6 +47,31 @@ def clean(x):
     return x
 
 
+def tape_snapshot(clone: Path, fx: Path, daily_frame: pd.DataFrame) -> dict:
+    """Market Lab's feed.cycle and snapshot on a recorded moment (network and clock stubbed)."""
+    import types
+
+    from sm import feed
+
+    inp = json.loads((fx / "inputs_tape.json").read_text(encoding="utf-8"))
+    feed.STATE["meta"] = inp["meta"]
+    feed.STATE["daily"] = inp["daily"]
+    feed.STATE["industry"] = inp["industry"]
+    feed.STATE["daily_idx"] = {k: daily_frame for k in feed.INDICES}
+    for sym, g in inp["spark"].items():
+        closes = pd.Series(g["close"], index=pd.to_datetime(g["ts"], unit="s", utc=True))
+        feed.GOT[sym] = {"closes": closes, "ltp": g["ltp"], "prev": g["prev"], "time": g["time"]}
+    feed.fetch = lambda ysyms: None  # prices are already in GOT
+    feed.M.minute_now = lambda: inp["now_minute"]
+    feed.M.market_status = lambda t=None: "open"
+    feed.next_expiry = lambda key: None
+    feed.time = types.SimpleNamespace(time=lambda: inp["now_epoch"], sleep=lambda s: None)
+    feed.cycle(True, True)
+    snap = feed.snapshot(True)
+    snap.pop("time")
+    return snap
+
+
 def main(clone: Path, fx: Path) -> None:
     sys.path.insert(0, str(clone))
     from sm import smc, structure  # noqa: PLC0415 (Market Lab's own modules)
@@ -78,6 +103,7 @@ def main(clone: Path, fx: Path) -> None:
             "df_ema200_last": float(a["df"]["ema200"].iloc[-1]),
         }
     out["session_levels_15m"] = structure.session_levels(m15)
+    out["tape_snapshot"] = tape_snapshot(clone, fx, s1)
     for name, val in out.items():
         (fx / f"golden_{name}.json").write_text(json.dumps(clean(val)), encoding="utf-8")
         print(name, "None" if val is None else "ok")

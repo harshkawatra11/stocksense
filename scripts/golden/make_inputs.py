@@ -86,6 +86,98 @@ def daily_from(b: dict[str, list[float]]) -> dict[str, list[float]]:
     return out
 
 
+TAPE_STOCKS = [
+    ("RELIANCE", "Oil Gas & Consumable Fuels"),
+    ("ONGC", "Oil Gas & Consumable Fuels"),
+    ("TCS", "Information Technology"),
+    ("INFY", "Information Technology"),
+    ("HDFCBANK", "Financial Services"),
+    ("ICICIBANK", "Financial Services"),
+    ("BAJFINANCE", "Financial Services"),
+    ("SBIN", "Financial Services"),
+    ("SUNPHARMA", "Healthcare"),
+    ("APOLLOHOSP", "Healthcare"),
+    ("TATASTEEL", "Metals & Mining"),
+    ("MARUTI", "Automobile and Auto Components"),
+    ("NOOPEN", "Realty"),
+    ("NOPREV", "Realty"),
+    ("NODLY", "Power"),
+]
+TAPE_DATE = date(2026, 11, 12)
+TAPE_NOW_MINUTE = 120  # 11:15 IST
+
+
+def make_tape(out_dir: Path) -> None:
+    """One synthetic live moment: F&O meta, daily levels, industries and 1-minute closes of 18 symbols."""
+    rng = np.random.default_rng(21)
+    n = TAPE_NOW_MINUTE + 1
+    ts = [epoch(TAPE_DATE, OPEN_MIN + k) for k in range(n)]
+    meta, daily, industry, spark = {}, {}, {}, {}
+    for sym, ind in TAPE_STOCKS:
+        base = float(rng.uniform(100, 3000))
+        drift = float(rng.normal(0, 0.0004))
+        closes = base * np.exp(np.cumsum(rng.normal(drift, 0.0007, n)))
+        prev = base * float(np.exp(rng.normal(0, 0.01)))
+        opn = float(closes[0] * (1 + rng.normal(0, 0.002)))
+        industry[sym] = ind
+        meta[sym] = {
+            "name": sym.title(),
+            "open": round(opn, 2),
+            "high": round(float(closes.max()) * 1.002, 2),
+            "low": round(float(closes.min()) * 0.998, 2),
+            "prev": round(prev, 2),
+            "ltp": round(float(closes[-1]), 2),
+            "value_cr": round(float(rng.uniform(5, 900)), 1),
+            "ffmc": round(float(rng.uniform(1e9, 1e12)), 0),
+        }
+        if sym != "NODLY":
+            hi = prev * 1.02
+            daily[sym] = {
+                "pdh": round(hi, 2),
+                "pdl": round(prev * 0.985, 2),
+                "pdc": round(prev, 2),
+                "range": round(float(rng.uniform(1.2, 3.0)), 3),
+            }
+        if sym == "NOOPEN":
+            meta[sym]["open"] = None
+        if sym == "NOPREV":
+            meta[sym]["prev"] = None
+        spark[sym + ".NS"] = {
+            "ts": ts,
+            "close": [round(float(c), 2) for c in closes],
+            "ltp": round(float(closes[-1]), 2),
+            "prev": None if sym == "NOPREV" else round(prev, 2),
+            "time": ts[-1],
+        }
+    for y, base in {
+        "NIFTY": ("^NSEI", 24500.0),
+        "BANKNIFTY": ("^NSEBANK", 52000.0),
+        "SENSEX": ("^BSESN", 80000.0),
+    }.values():
+        closes = base * np.exp(np.cumsum(rng.normal(0.00002, 0.0004, n)))
+        spark[y] = {
+            "ts": ts,
+            "close": [round(float(c), 2) for c in closes],
+            "ltp": round(float(closes[-1]), 2),
+            "prev": round(base, 2),
+            "time": ts[-1] - 1,
+        }
+    (out_dir / "inputs_tape.json").write_text(
+        json.dumps(
+            {
+                "now_epoch": ts[-1] + 30,
+                "now_minute": TAPE_NOW_MINUTE,
+                "meta": meta,
+                "daily": daily,
+                "industry": industry,
+                "spark": spark,
+            }
+        ),
+        encoding="utf-8",
+    )
+    print("inputs_tape", len(spark))
+
+
 def main(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     s5 = sessions(date(2025, 1, 1), 40)
@@ -104,6 +196,7 @@ def main(out_dir: Path) -> None:
     for name, b in files.items():
         (out_dir / f"{name}.json").write_text(json.dumps(b), encoding="utf-8")
         print(name, len(b["ts"]))
+    make_tape(out_dir)
 
 
 if __name__ == "__main__":
