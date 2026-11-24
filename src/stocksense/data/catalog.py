@@ -622,7 +622,38 @@ _DERIVED = [
     ),
 ]
 
-CATALOG: dict[str, DatasetSpec] = {s.name: s for s in (*_RAW_ADOPTED, *_RAW_NEW, *_DERIVED)}
+# Program M3 money-flow datasets (flow/): every EOD job upserts on (date, key), so reruns are idempotent.
+_FLOW = [
+    _spec(
+        "flow_delivery_daily",
+        "derived",
+        "date, sid",
+        "date",
+        "year",
+        {"date": _D, "sid": _I32, "deliv_pct": _F, "deliv_z20": _F, "deliv_value_cr": _F, "deliv_spike": _B},
+        path="flow/delivery_daily",
+    ),
+    _spec(
+        "flow_deals_daily",
+        "derived",
+        "date, symbol",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "symbol": _S,
+            "buy_value_cr": _F,
+            "sell_value_cr": _F,
+            "net_value_cr": _F,
+            "n_deals": _I64,
+            "top_client": _S,
+            "flagged": _B,
+        },
+        path="flow/deals_daily",
+    ),
+]
+
+CATALOG: dict[str, DatasetSpec] = {s.name: s for s in (*_RAW_ADOPTED, *_RAW_NEW, *_DERIVED, *_FLOW)}
 
 
 def get_spec(dataset: str) -> DatasetSpec:
