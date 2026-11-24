@@ -256,6 +256,47 @@ def features_goldens(clone: Path, fx: Path) -> dict:
     return out
 
 
+def sig_rows(fn, f) -> dict:
+    """Indices where a strategy fires and its stop there (NaN as None)."""
+    sig, stop = fn(f)
+    sig = np.asarray(sig, bool)
+    idx = np.flatnonzero(sig)
+    st = np.asarray(stop, float)[idx]
+    return {"idx": [int(i) for i in idx], "stop": [None if not np.isfinite(x) else float(x) for x in st]}
+
+
+def signals_goldens(clone: Path, fx: Path) -> dict:
+    """Market Lab's 23 swing and 39 intraday strategy functions on the synthetic features."""
+    from lab import features as F
+    from lab import strategies as T
+    from lab import swing as S
+
+    def ist(df):
+        df = df.copy()
+        df.index = df.index.tz_convert("Asia/Kolkata")
+        return df
+
+    d1, nf = ist(frame(fx / "inputs_1d_stock.json")), ist(frame(fx / "inputs_1d_nifty.json"))
+    nc = nf["close"]
+    nifty = pd.DataFrame(
+        {"c": nc.values, "sma200": nc.rolling(200).mean().values, "roc63": nc.pct_change(63).values * 100},
+        index=[x.date() for x in nf.index],
+    )
+    f1 = S.features(d1, nifty)
+    out = {"swing": {name: sig_rows(fn, f1) for name, (fn, _kind) in S.STRATS.items()}}
+    out["swing_kinds"] = {name: kind for name, (_fn, kind) in S.STRATS.items()}
+    s5, ix5 = ist(frame(fx / "inputs_5m_stock.json")), ist(frame(fx / "inputs_5m_index.json"))
+    dctx = ist(frame(fx / "inputs_1d_ctx.json"))
+    ixf = F.build(ix5, None, 5, None, 1)
+    ixm = F.build(F.mirror(ix5), None, 5, None, -1)
+    ctx, ctxm = F.index_context(ixf), F.index_context(ixm)
+    f5 = F.build(s5, dctx, 5, ctx, 1)
+    fm = F.build(F.mirror(s5), F.mirror(dctx), 5, ctxm, -1)
+    out["intra"] = {name: sig_rows(fn, f5) for name, fn in T.STRATEGIES.items()}
+    out["intra_mirror"] = {name: sig_rows(fn, fm) for name, fn in T.STRATEGIES.items()}
+    return out
+
+
 def main(clone: Path, fx: Path) -> None:
     sys.path.insert(0, str(clone))
     from sm import smc, structure  # noqa: PLC0415 (Market Lab's own modules)
@@ -291,6 +332,7 @@ def main(clone: Path, fx: Path) -> None:
     out["sector"] = sector_goldens(clone, fx)
     out["research"] = research_goldens(clone, fx)
     out["features"] = features_goldens(clone, fx)
+    out["signals"] = signals_goldens(clone, fx)
     for name, val in out.items():
         (fx / f"golden_{name}.json").write_text(json.dumps(clean(val)), encoding="utf-8")
         print(name, "None" if val is None else "ok")

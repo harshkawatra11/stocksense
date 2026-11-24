@@ -2929,7 +2929,7 @@ Every number must be traceable to `reports/m/strategies/*/eval.json` and the reg
 - [x] M2.0 API skeleton · [x] M2.1 sources/clock/store/npx · [x] M2.2 structure/smc golden · [x] M2.3 tape (suite green) · [x] M2.4 sectors · [x] M2.5 research note · [ ] M2.6 lab endpoints · [ ] M2.7 one-command start · [ ] M2.8 parity script · [ ] M2.9 resources
 - [ ] M3.1 OI + NFO · [ ] M3.2 delivery/deals · [ ] M3.3 participants · [ ] M3.4 options/GEX · [ ] M3.5 pre-open · [ ] M3.6 sector flow · [ ] M3.7 composite + endpoints
 - [ ] M4.1 vwap · [ ] M4.2 profile/TPO · [ ] M4.3 delta/CVD · [ ] M4.4 footprint · [ ] M4.5 big trades/absorption · [ ] M4.6 heatmap · [ ] M4.7 timescales · [ ] M4.8 endpoints
-- [ ] M5.0 pre-registration · [x] M5.1 indicators/exits/base · [ ] M5.2 Market Lab strategies · [ ] M5.3 tiers · [ ] M5.4 151 · [ ] M5.5 flow strategies · [ ] M5.6 explore/scan/profile · [ ] M5.7 gated runner · [ ] M5.8 journal · [ ] M5.9 daily picks
+- [ ] M5.0 pre-registration · [x] M5.1 indicators/exits/base · [x] M5.2 Market Lab strategies · [ ] M5.3 tiers · [ ] M5.4 151 · [ ] M5.5 flow strategies · [ ] M5.6 explore/scan/profile · [ ] M5.7 gated runner · [ ] M5.8 journal · [ ] M5.9 daily picks
 - [ ] M6.0 scaffold · [ ] M6.1 shell · [ ] M6.2 Smart Money · [ ] M6.3 Sector Map · [ ] M6.4 Swing Lab · [ ] M6.5 Money Flow · [ ] M6.6 options · [ ] M6.7 order flow · [ ] M6.8 strategies · [ ] M6.9 learn
 - [ ] M7.1 smoke · [ ] M7.2 parity (user) · [ ] M7.3 five sessions: ____ ____ ____ ____ ____
 - [ ] M8.1 library runs · [ ] M8.2 flow composite · [ ] M8.3 RESULTS-M · [ ] M8.4 verdicts in UI
