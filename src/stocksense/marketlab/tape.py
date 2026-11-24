@@ -366,6 +366,7 @@ class TapeEngine:
                 "prev": r["prev"],
                 "ltp": r["ltp"],
                 "value_cr": round(r["value_cr"], 1),
+                "volume": r.get("volume"),
                 "ffmc": r["ffmc"],
             }
             for s, r in rows.items()

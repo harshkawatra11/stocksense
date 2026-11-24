@@ -79,6 +79,11 @@ class PreopenEngine:
     ) -> None:
         self.clock, self.cal, self.src, self.store, self.capture = clock, cal, sources, store, capture
 
+    def in_window(self) -> bool:
+        """True on a session between 09:00:30 and 09:14:30."""
+        now = self.clock.now()
+        return self.cal.is_session(now.date()) and WINDOW_START <= now.time() <= WINDOW_END
+
     def _state(self, today: str) -> dict[str, Any]:
         with self.store.lock:
             st = self.store.flow.get("preopen")
