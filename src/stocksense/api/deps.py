@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 
 from stocksense.core.clock import Clock
 from stocksense.core.config import Settings
+from stocksense.marketlab.sectors import SectorEngine
 from stocksense.marketlab.store import LabStore
 from stocksense.marketlab.tape import TapeEngine
 
@@ -30,4 +31,12 @@ def get_tape(request: Request) -> TapeEngine:
     eng = request.app.state.tape
     if eng is None:
         raise HTTPException(status_code=503, detail="tape not running")
+    return eng
+
+
+def get_sector(request: Request) -> SectorEngine:
+    """The Sector Map engine; 503 when the server runs without feeds."""
+    eng = request.app.state.sector
+    if eng is None:
+        raise HTTPException(status_code=503, detail="sector map not running")
     return eng

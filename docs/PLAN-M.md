@@ -2924,9 +2924,9 @@ Every number must be traceable to `reports/m/strategies/*/eval.json` and the reg
   - **Note:** inside a worktree the `.venv` junction resolves `stocksense` to the MAIN repo's `src`. To test worktree code, set `PYTHONPATH=<worktree>\src`.
   - **Note:** `pytest -q` twice suppresses the summary line (pyproject `addopts` already has `-q`). Use plain `pytest tests` when a "N passed" line is needed.
 
-- [ ] M0.0 housekeeping (done) · [ ] M0.1 G2-H merged (partly) · [ ] M0.2 G2-D7 merged · [ ] M0.3 plan/sources/licence
-- [ ] M1.1 learning notes
-- [ ] M2.0 API skeleton · [ ] M2.1 sources/clock/store/npx · [ ] M2.2 structure/smc golden · [ ] M2.3 tape · [ ] M2.4 sectors · [ ] M2.5 research note · [ ] M2.6 lab endpoints · [ ] M2.7 one-command start · [ ] M2.8 parity script · [ ] M2.9 resources
+- [x] M0.0 housekeeping · [x] M0.1 G2-H merged and pushed · [ ] M0.2 G2-D7 merged (waiting for 6 GB free RAM; 4.2 GB on 2026-11-23) · [x] M0.3 plan/sources/licence
+- [x] M1.1 learning notes (19 files; 151 map covers all 176 sections)
+- [x] M2.0 API skeleton · [x] M2.1 sources/clock/store/npx · [x] M2.2 structure/smc golden · [x] M2.3 tape (suite green) · [x] M2.4 sectors · [ ] M2.5 research note · [ ] M2.6 lab endpoints · [ ] M2.7 one-command start · [ ] M2.8 parity script · [ ] M2.9 resources
 - [ ] M3.1 OI + NFO · [ ] M3.2 delivery/deals · [ ] M3.3 participants · [ ] M3.4 options/GEX · [ ] M3.5 pre-open · [ ] M3.6 sector flow · [ ] M3.7 composite + endpoints
 - [ ] M4.1 vwap · [ ] M4.2 profile/TPO · [ ] M4.3 delta/CVD · [ ] M4.4 footprint · [ ] M4.5 big trades/absorption · [ ] M4.6 heatmap · [ ] M4.7 timescales · [ ] M4.8 endpoints
 - [ ] M5.0 pre-registration · [ ] M5.1 indicators/exits/base · [ ] M5.2 Market Lab strategies · [ ] M5.3 tiers · [ ] M5.4 151 · [ ] M5.5 flow strategies · [ ] M5.6 explore/scan/profile · [ ] M5.7 gated runner · [ ] M5.8 journal · [ ] M5.9 daily picks

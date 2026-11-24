@@ -67,7 +67,14 @@ class LabStore:
                 "state": self.catchup.get("state"),
                 "steps": [dict(x) for x in self.catchup.get("steps", [])],
             }
-            return {"ready": bool(self.tape), "feeds": feeds, "catchup": catchup}
+            return {
+                "ready": bool(self.tape) or bool(self.sx.get("indices")),
+                "feeds": feeds,
+                "catchup": catchup,
+                "progress": self.univ.get("progress", ""),
+                "classified": len(self.univ.get("cls", {})),
+                "history": len(self.univ.get("hist", {})),
+            }
 
 
 class TTLCache:

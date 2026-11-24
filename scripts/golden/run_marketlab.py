@@ -72,6 +72,61 @@ def tape_snapshot(clone: Path, fx: Path, daily_frame: pd.DataFrame) -> dict:
     return snap
 
 
+def sector_goldens(clone: Path, fx: Path) -> dict:
+    """Market Lab's horizon, sector_view, stock_view, search and tick on a recorded universe (no network)."""
+    import time
+
+    import app
+    from sx import live as L
+    from sx import market as M
+    from sx import news as N
+    from sx import universe as U
+
+    inp = json.loads((fx / "inputs_sector.json").read_text(encoding="utf-8"))
+    dates = pd.to_datetime(inp["dates"])
+    hist = {}
+    for sym, h in inp["hist"].items():
+        hist[sym] = pd.DataFrame({k: h[k] for k in ("close", "high", "volume")}, index=dates[-h["n"] :])
+    for name, h in inp["idx_hist"].items():
+        hist["IDX:" + name] = pd.DataFrame(
+            {"close": h["close"], "high": h["close"], "volume": 0.0}, index=dates
+        )
+    U.U["list"], U.U["cls"], U.U["hist"] = inp["list"], inp["cls"], hist
+    L.S["indices"], L.S["stocks"], L.S["members"], L.S["spark"] = (
+        inp["indices"],
+        inp["stocks"],
+        inp["members"],
+        {},
+    )
+    L.S["day"], L.S["time"] = {"snaps": inp["snaps"]}, "2026-11-19T09:00:00+00:00"
+    for sec in U.SECTORS:
+        N._CACHE[(N.QUERY[sec["name"]], 30)] = (time.time(), inp["news"][sec["name"]])
+    app._C["mk"] = (time.time(), inp["mk"])
+    N.stock = lambda sym, company: inp["stock_news"]
+
+    def quote(sym):
+        if sym == "BNK02" or sym not in inp["quotes"]:
+            raise RuntimeError("no quote")
+        return inp["quotes"][sym]
+
+    U.quote = quote
+    M.market_status = lambda t=None: "open"
+    out = {f"horizon_{r}": app.horizon(r) for r in ("today", "w1", "m1", "m3")}
+    for name, rng in (
+        ("Energy", "today"),
+        ("Pharma", "w1"),
+        ("Bank", "m3"),
+        ("Fin Services", "today"),
+        ("Healthcare", "today"),
+    ):
+        out[f"sector_{name.lower().replace(' ', '_')}_{rng}"] = app.sector_view(name, rng)
+    for sym in ("ENG03", "BNK02", "ZZZ"):
+        out[f"stock_{sym.lower()}"] = app.stock_view(sym)
+    out["search_en"], out["search_bank"] = app.search("EN"), app.search("bank")
+    out["tick"] = app.tick(["ENG01", "ENG02", "NOPE"])
+    return out
+
+
 def main(clone: Path, fx: Path) -> None:
     sys.path.insert(0, str(clone))
     from sm import smc, structure  # noqa: PLC0415 (Market Lab's own modules)
@@ -104,6 +159,7 @@ def main(clone: Path, fx: Path) -> None:
         }
     out["session_levels_15m"] = structure.session_levels(m15)
     out["tape_snapshot"] = tape_snapshot(clone, fx, s1)
+    out["sector"] = sector_goldens(clone, fx)
     for name, val in out.items():
         (fx / f"golden_{name}.json").write_text(json.dumps(clean(val)), encoding="utf-8")
         print(name, "None" if val is None else "ok")

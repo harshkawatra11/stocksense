@@ -178,6 +178,215 @@ def make_tape(out_dir: Path) -> None:
     print("inputs_tape", len(spark))
 
 
+SECTOR_INDEX = {
+    "Railways": "NIFTY INDIA RAILWAYS PSU",
+    "Energy": "NIFTY ENERGY",
+    "Infra": "NIFTY INFRASTRUCTURE",
+    "Cons Durables": "NIFTY CONSUMER DURABLES",
+    "Metal": "NIFTY METAL",
+    "Tourism": "NIFTY INDIA TOURISM",
+    "Defence": "NIFTY INDIA DEFENCE",
+    "Auto": "NIFTY AUTO",
+    "Chemicals": "NIFTY CHEMICALS",
+    "PSU Bank": "NIFTY PSU BANK",
+    "Cap Markets": "NIFTY CAPITAL MARKETS",
+    "Realty": "NIFTY REALTY",
+    "FMCG": "NIFTY FMCG",
+    "Fin Services": "NIFTY FINANCIAL SERVICES",
+    "Healthcare": "NIFTY HEALTHCARE INDEX",
+    "IT": "NIFTY IT",
+    "Bank": "NIFTY BANK",
+    "Pharma": "NIFTY PHARMA",
+    "Media": "NIFTY MEDIA",
+    "Cement": "NIFTY CEMENT",
+}
+# indices Yahoo carried in Market Lab get a stored history; the other sectors use the median of members
+HIST_INDEX = [
+    "NIFTY 50",
+    "NIFTY BANK",
+    "NIFTY IT",
+    "NIFTY AUTO",
+    "NIFTY PHARMA",
+    "NIFTY FMCG",
+    "NIFTY METAL",
+    "NIFTY REALTY",
+    "NIFTY ENERGY",
+    "NIFTY PSU BANK",
+    "NIFTY MEDIA",
+    "NIFTY INFRASTRUCTURE",
+    "NIFTY FINANCIAL SERVICES",
+    "NIFTY HEALTHCARE INDEX",
+    "NIFTY CONSUMER DURABLES",
+]
+SECTOR_PLAN = [
+    (
+        "ENG",
+        14,
+        "Oil Gas & Consumable Fuels",
+        "Oil Gas & Consumable Fuels",
+        ["Refineries & Marketing", "Gas Distribution"],
+    ),
+    ("ITS", 14, "Information Technology", "IT - Software", ["Computers - Software & Consulting"]),
+    ("PHM", 14, "Healthcare", "Pharmaceuticals & Biotechnology", ["Pharmaceuticals"]),
+    ("BNK", 14, "Financial Services", "Banks", ["Private Sector Bank", "Public Sector Bank"]),
+    ("NBF", 6, "Financial Services", "Finance", ["Non Banking Financial Company (NBFC)"]),
+    ("HOS", 6, "Healthcare", "Healthcare Services", ["Hospital"]),
+]
+
+
+def make_sector(out_dir: Path) -> None:
+    """Universe, daily history, live state and headlines for the Sector Map golden tests (seed 21)."""
+    rng = np.random.default_rng(21)
+    days = sessions(date(2025, 9, 1), 300)
+    dates = [d.isoformat() for d in days]
+    hist, cls, lst, stocks = {}, {}, {}, {}
+    for prefix, n, sector, industry, basics in SECTOR_PLAN:
+        for i in range(1, n + 1):
+            sym = f"{prefix}{i:02d}"
+            m = 45 if sym in ("ENG14", "ITS14") else 300
+            c = rng.uniform(100, 2000) * np.exp(np.cumsum(rng.normal(0.0004, 0.015, m)))
+            h = c * (1 + np.abs(rng.normal(0, 0.01, m)))
+            v = np.exp(rng.normal(12.0, 0.5, m)).round()
+            hist[sym] = {
+                "n": m,
+                "close": [round(float(x), 4) for x in c],
+                "high": [round(float(x), 4) for x in h],
+                "volume": [float(x) for x in v],
+            }
+            ltp = float(c[-1] * (1 + rng.normal(0, 0.01)))
+            prev = float(c[-1])
+            name = f"{sym.title()} Limited"
+            lst[sym] = {"name": name, "industry": industry}
+            stocks[sym] = {
+                "sym": sym,
+                "ltp": round(ltp, 2),
+                "pct": round((ltp / prev - 1) * 100, 2),
+                "prev": round(prev, 2),
+                "open": round(prev, 2),
+                "high": round(max(ltp, prev) * 1.004, 2),
+                "low": round(min(ltp, prev) * 0.996, 2),
+                "volume": int(float(v[-60:].mean()) * rng.uniform(0.5, 2.5)),
+                "value_cr": round(float(rng.uniform(5, 500)), 2),
+                "ffmc": float(rng.integers(5000, 90000)) * 1e7,
+                "high52": round(float(h.max()), 2),
+                "low52": round(float(c.min()), 2),
+                "name": name,
+            }
+            cls[sym] = {
+                "macro": "Macro",
+                "sector": sector,
+                "industry": industry,
+                "basic": basics[i % len(basics)],
+                "index": "NIFTY 500",
+                "pe": round(float(rng.uniform(8, 45)), 2),
+                "sector_pe": 20.5,
+                "mcap": float(rng.integers(8000, 400000)) * 1e7,
+                "ffmc": stocks[sym]["ffmc"],
+                "delivery": round(float(rng.uniform(20, 70)), 2),
+                "volume": stocks[sym]["volume"],
+                "high52": round(float(h.max()), 2),
+                "low52": round(float(c.min()), 2),
+                "name": name,
+                "ltp": stocks[sym]["ltp"],
+                "pct": stocks[sym]["pct"],
+                "fetched": 1.7e9,
+            }
+    for sym in ("OTH1", "OTH2"):  # in the Nifty 500 list but never classified
+        lst[sym] = {"name": f"{sym} Limited", "industry": "Other"}
+    idx_hist = {}
+    for k, name in enumerate(HIST_INDEX):
+        c = 10000 * (1 + k * 0.3) * np.exp(np.cumsum(rng.normal(0.0003, 0.008, 300)))
+        idx_hist[name] = {"close": [round(float(x), 4) for x in c]}
+    indices = {}
+    for k, (_sec, name) in enumerate({**SECTOR_INDEX, "Nifty": "NIFTY 50"}.items()):
+        last = 10000.0 + 500 * k
+        indices[name] = {
+            "name": name,
+            "last": last,
+            "pct": round(float(rng.normal(0.3, 1.0)), 2),
+            "chg": 10.0,
+            "prev": last - 10,
+            "w1": round(float(rng.normal(0.5, 2)), 2) if k % 3 else None,
+            "m1": round(float(rng.normal(1, 4)), 2) if k % 2 else None,
+            "y1": 12.0,
+            "pe": 22.5 + k,
+            "adv": 30,
+            "dec": 20,
+            "high52": last * 1.1,
+            "low52": last * 0.8,
+            "open": last - 5,
+        }
+    members = {}
+    for index, prefix, extra in (
+        ("NIFTY ENERGY", "ENG", ["ITS01"]),
+        ("NIFTY IT", "ITS", []),
+        ("NIFTY PHARMA", "PHM", []),
+        ("NIFTY BANK", "BNK", ["NBF01"]),
+    ):
+        syms = [s for s in stocks if s.startswith(prefix)] + extra
+        members[index] = {s: stocks[s] for s in syms}
+    snaps = []
+    for k in range(14):
+        sec = {n: round(float(rng.normal(0, 0.6)), 3) for n in SECTOR_INDEX if rng.random() > 0.15}
+        snaps.append({"m": 5 * k, "nifty": round(float(rng.normal(0, 0.3)), 3), "sec": sec})
+
+    def items(n: int, seed: int) -> list[dict]:
+        r = np.random.default_rng(seed)
+        tags = ["RESULTS", "POLICY", "NEWS"]
+        out = []
+        for j in range(n):
+            d = days[-1 - int(r.integers(1, 40))]
+            out.append(
+                {
+                    "time": f"{d.isoformat()}T0{int(r.integers(1, 9))}:30:00+00:00",
+                    "title": f"Headline {seed}-{j}",
+                    "source": "Wire",
+                    "link": f"https://example.invalid/{seed}/{j}",
+                    "tag": tags[j % 3],
+                }
+            )
+        return sorted(out, key=lambda x: x["time"], reverse=True)
+
+    news = {
+        n: items(5 if n == "Energy" else 4 if n == "IT" else 0, 100 + k) for k, n in enumerate(SECTOR_INDEX)
+    }
+    quotes = {
+        "ENG03": {
+            "macro": "Macro",
+            "sector": "Oil Gas & Consumable Fuels",
+            "industry": "Oil Gas & Consumable Fuels",
+            "basic": "Gas Distribution",
+            "pe": 12.5,
+            "delivery": 44.4,
+            "volume": 1234567,
+            "high52": 2100.0,
+            "low52": 900.0,
+            "mcap": 2.5e12,
+            "name": "Eng03 Limited",
+            "sector_pe": 18.0,
+        },
+        "BNK02": {},
+        "ZZZ": {},
+    }
+    out = {
+        "dates": dates,
+        "hist": hist,
+        "idx_hist": idx_hist,
+        "cls": cls,
+        "list": lst,
+        "indices": indices,
+        "stocks": stocks,
+        "members": members,
+        "snaps": snaps,
+        "news": news,
+        "mk": items(6, 7),
+        "stock_news": items(3, 8),
+        "quotes": quotes,
+    }
+    (out_dir / "inputs_sector.json").write_text(json.dumps(out), encoding="utf-8")
+    print("inputs_sector", len(hist))
+
+
 def main(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     s5 = sessions(date(2025, 1, 1), 40)
@@ -197,6 +406,7 @@ def main(out_dir: Path) -> None:
         (out_dir / f"{name}.json").write_text(json.dumps(b), encoding="utf-8")
         print(name, len(b["ts"]))
     make_tape(out_dir)
+    make_sector(out_dir)
 
 
 if __name__ == "__main__":
