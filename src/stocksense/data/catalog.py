@@ -740,6 +740,25 @@ _FLOW = [
         },
         path="flow/options_strikes",
     ),
+    _spec(
+        "flow_sector_daily",
+        "derived",
+        "date, sector",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "sector": _S,
+            "flow_dir": _F,
+            "value_cr": _F,
+            "turnover_share": _F,
+            "n": _I64,
+            "up": _I64,
+            "down": _I64,
+            "deliv_spikes": _I64,
+        },
+        path="flow/sector_daily",
+    ),
 ]
 
 CATALOG: dict[str, DatasetSpec] = {s.name: s for s in (*_RAW_ADOPTED, *_RAW_NEW, *_DERIVED, *_FLOW)}

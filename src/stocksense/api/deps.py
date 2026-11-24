@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 
 from stocksense.core.clock import Clock
 from stocksense.core.config import Settings
+from stocksense.flow.engine import FlowEngine
 from stocksense.marketlab.research import ResearchEngine
 from stocksense.marketlab.sectors import SectorEngine
 from stocksense.marketlab.store import LabStore
@@ -48,4 +49,12 @@ def get_research(request: Request) -> ResearchEngine:
     eng = request.app.state.research
     if eng is None:
         raise HTTPException(status_code=503, detail="research not running")
+    return eng
+
+
+def get_flow(request: Request) -> FlowEngine:
+    """The money-flow engine; 503 when the server runs without feeds."""
+    eng = request.app.state.flow
+    if eng is None:
+        raise HTTPException(status_code=503, detail="flow not running")
     return eng
