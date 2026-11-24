@@ -47,6 +47,9 @@ class StrategySpec:
     forming: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
     description: str = ""
     reference: str = ""
+    status: Literal["ready", "await_data"] = (
+        "ready"  # await_data: built and tested, its data is not stored yet
+    )
 
 
 REGISTRY: dict[str, StrategySpec] = {}
