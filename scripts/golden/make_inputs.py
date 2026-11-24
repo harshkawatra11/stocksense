@@ -387,6 +387,136 @@ def make_sector(out_dir: Path) -> None:
     print("inputs_sector", len(hist))
 
 
+def make_research(out_dir: Path) -> None:
+    """Raw NSE payloads, quotes, macro readings and wiki summaries for the research-note golden (seed 31)."""
+    rng = np.random.default_rng(31)
+    ends = [
+        "30 Jun 2024",
+        "30 Sep 2024",
+        "31 Dec 2024",
+        "31 Mar 2025",
+        "30 Jun 2025",
+        "30 Sep 2025",
+        "31 Dec 2025",
+        "31 Mar 2026",
+        "30 Jun 2026",
+        "30 Sep 2026",
+    ]
+    filings, cmp_ = {}, {}
+    plan = {"ENG03": (5.0e6, 0.08, 1.04), "BNK02": (2.0e6, 0.20, 1.03), "ENG14": (4.0e5, 0.01, 1.00)}
+    for sym, (base, margin, growth) in plan.items():
+        rows = []
+        for k, q in enumerate(ends):
+            inc = base * growth**k * (1 + rng.normal(0, 0.03))
+            pat = inc * margin * (1 + rng.normal(0, 0.1))
+            if sym == "ENG14" and k in (2, 5, 9):
+                pat = -abs(pat) * 3
+            std = {
+                "gfrsymbol": sym,
+                "gfrQuaterEnded": q,
+                "gfrConsolidated": "Standalone",
+                "gfrTotalIncome": f"{inc:,.0f}",
+                "gfrProBefTax": f"{pat * 1.3:.0f}",
+                "gfrNetProLoss": f"{pat:.0f}",
+                "gfrErnPerShare": "1.5",
+            }
+            rows.append(std)
+            if k != 3:  # one quarter has only the standalone filing
+                con = dict(
+                    std,
+                    gfrConsolidated="Consolidated",
+                    gfrTotalIncome=f"{inc * 1.2:.0f}",
+                    gfrNetProLoss=f"{pat * 1.2:.0f}",
+                )
+                if k == 5:
+                    con["gfrNetProLoss"] = (
+                        None  # consolidated without a profit figure: the standalone one stays
+                    )
+                rows.insert(0, con) if k % 2 else rows.append(con)
+        rows.append({"gfrsymbol": sym, "gfrQuaterEnded": None})
+        filings[sym] = rows
+        cmp_[sym] = (
+            None
+            if sym == "ENG14"
+            else {
+                "resCmpData": [
+                    {
+                        "re_debt_eqt_rat": "0.25" if sym == "ENG03" else "9.0",
+                        "re_int_ser_cov": "8.1",
+                        "re_to_dt": "30-SEP-2026",
+                        "re_int_new": "123400",
+                        "re_depr_und_exp": "445900",
+                    }
+                ]
+            }
+        )
+    base_q = {
+        "index": "NIFTY 500",
+        "ffmc": 1.0e11,
+        "delivery": 44.4,
+        "volume": 1234567,
+        "ltp": 1500.0,
+        "pct": 0.5,
+    }
+    quotes = {
+        "ENG03": {
+            **base_q,
+            "macro": "Energy",
+            "sector": "Oil Gas & Consumable Fuels",
+            "industry": "Oil Gas & Consumable Fuels",
+            "basic": "Gas Distribution",
+            "pe": 12.5,
+            "sector_pe": 18.0,
+            "mcap": 2.5e12,
+            "high52": 2100.0,
+            "low52": 900.0,
+            "name": "Eng03 Limited",
+        },
+        "BNK02": {
+            **base_q,
+            "macro": "Financial Services",
+            "sector": "Financial Services",
+            "industry": "Banks",
+            "basic": "Private Sector Bank",
+            "pe": None,
+            "sector_pe": 14.0,
+            "mcap": 8.0e11,
+            "high52": 1800.0,
+            "low52": 1100.0,
+            "name": "Bnk02 Limited",
+        },
+        "ENG14": {
+            **base_q,
+            "macro": "Energy",
+            "sector": "Oil Gas & Consumable Fuels",
+            "industry": "Oil Gas & Consumable Fuels",
+            "basic": "Refineries & Marketing",
+            "pe": None,
+            "sector_pe": 18.0,
+            "mcap": 2.0e10,
+            "high52": 300.0,
+            "low52": 120.0,
+            "name": "Eng14 Limited",
+        },
+    }
+    macro = {
+        "oil": {"now": 82.5, "chg3m": 6.2},
+        "inr": {"now": 88.1, "chg3m": -2.0},
+        "metals": {"now": 4.4, "chg3m": 12.0},
+        "us": {"now": 6100.0, "chg3m": 1.0},
+    }
+    wiki = {
+        "Eng03 Limited": {
+            "text": "Eng03 is an energy company. It sells gas.",
+            "url": "https://example.invalid/e3",
+            "title": "Eng03",
+        }
+    }
+    out = {"filings": filings, "cmp": cmp_, "quotes": quotes, "macro": macro, "wiki": wiki}
+    (out_dir / "inputs_research.json").write_text(json.dumps(out), encoding="utf-8")
+    print("inputs_research", len(filings))
+
+
 def main(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     s5 = sessions(date(2025, 1, 1), 40)
@@ -407,6 +537,7 @@ def main(out_dir: Path) -> None:
         print(name, len(b["ts"]))
     make_tape(out_dir)
     make_sector(out_dir)
+    make_research(out_dir)
 
 
 if __name__ == "__main__":

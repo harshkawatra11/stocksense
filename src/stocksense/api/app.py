@@ -10,13 +10,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from stocksense import __version__
-from stocksense.api import routes_sector, routes_sm, routes_status
+from stocksense.api import routes_research, routes_sector, routes_sm, routes_status
 from stocksense.api.readonly import ReadOnlyMiddleware
 from stocksense.api.static import mount_web
 from stocksense.core.clock import Clock, SystemClock
 from stocksense.core.config import Settings
 from stocksense.marketlab.feeds import FeedManager, build_tape
+from stocksense.marketlab.research import ResearchEngine, build_research_engine
 from stocksense.marketlab.sectors import SectorEngine, build_sector_engine
+from stocksense.marketlab.sources import Sources
 from stocksense.marketlab.store import LabStore
 from stocksense.marketlab.tape import TapeEngine
 
@@ -32,6 +34,7 @@ def create_app(
     web_out: Path = WEB_OUT,
     tape: TapeEngine | None = None,
     sector: SectorEngine | None = None,
+    research: ResearchEngine | None = None,
 ) -> FastAPI:
     """FastAPI app: GET-only JSON under /api, /health, and the static dashboard at /."""
     clock = clock or SystemClock()
@@ -53,6 +56,10 @@ def create_app(
                 mgr.add("sector", eng.step, 5.0)
                 mgr.add("sector_slow", eng.slow_step, 3600.0)
                 mgr.add("news", eng.news_step, 600.0)
+            if app.state.research is None:
+                app.state.research = build_research_engine(
+                    settings, clock, store, Sources(settings, clock, store)
+                )
             mgr.start()
         app.state.feeds = mgr
         yield
@@ -63,6 +70,7 @@ def create_app(
     app.state.catchup_enabled = True
     app.state.tape = tape
     app.state.sector = sector
+    app.state.research = research
     app.add_middleware(ReadOnlyMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -73,6 +81,7 @@ def create_app(
     app.include_router(routes_status.router)
     app.include_router(routes_sm.router)
     app.include_router(routes_sector.router)
+    app.include_router(routes_research.router)
     # later cards add their own include_router line here, before the static mount
     mount_web(app, web_out)
     return app

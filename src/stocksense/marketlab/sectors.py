@@ -189,6 +189,7 @@ class Hist:
     close: np.ndarray
     high: np.ndarray
     volume: np.ndarray
+    low: np.ndarray | None = None  # adjusted lows when stored (the research note's ATR)
 
     def __len__(self) -> int:
         return int(len(self.dates))
@@ -359,7 +360,7 @@ def load_hist(
             "panel_daily",
             start=start,
             end=end,
-            columns=["symbol", "date", "series", "adj_close", "adj_high", "adj_volume"],
+            columns=["symbol", "date", "series", "adj_close", "adj_high", "adj_low", "adj_volume"],
         )
         .filter(
             (pl.col("series") == "EQ") & pl.col("symbol").is_in(symbols) & pl.col("adj_close").is_not_null()
@@ -373,6 +374,7 @@ def load_hist(
             g["adj_close"].to_numpy().astype(float),
             g["adj_high"].fill_null(strategy="forward").to_numpy().astype(float),
             g["adj_volume"].fill_null(0.0).to_numpy().astype(float),
+            g["adj_low"].fill_null(strategy="forward").to_numpy().astype(float),
         )
     ix = (
         io.read(settings, "index_daily", start=start, end=end, columns=["index_name", "date", "close"])

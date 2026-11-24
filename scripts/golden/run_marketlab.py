@@ -127,6 +127,57 @@ def sector_goldens(clone: Path, fx: Path) -> dict:
     return out
 
 
+def research_goldens(clone: Path, fx: Path) -> dict:
+    """Market Lab's research-note build() for three stocks on recorded payloads (no network)."""
+    import tempfile
+    import types
+
+    from lab import bars as B
+    from lab import research as RS
+
+    inp = json.loads((fx / "inputs_research.json").read_text(encoding="utf-8"))
+    sec = json.loads((fx / "inputs_sector.json").read_text(encoding="utf-8"))
+    dates = pd.to_datetime(sec["dates"])
+    frames = {}
+    for sym, h in sec["hist"].items():
+        frames[sym] = pd.DataFrame(
+            {
+                "open": h["close"],
+                "high": h["high"],
+                "low": h["close"],
+                "close": h["close"],
+                "volume": h["volume"],
+            },
+            index=dates[-h["n"] :],
+        )
+    nx = sec["idx_hist"]["NIFTY 50"]["close"]
+    frames["NIFTY"] = pd.DataFrame(
+        {"open": nx, "high": nx, "low": nx, "close": nx, "volume": 1.0}, index=dates
+    )
+    B.load = lambda sym, tf="1d", *a, **k: frames.get(sym)
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "classification.json").write_text(json.dumps(sec["cls"]), encoding="utf-8")
+
+    def get_json(url, timeout=20):
+        sym = url.rsplit("symbol=", 1)[1]
+        if "getIntegratedFilingData" in url:
+            return inp["filings"][sym]
+        if inp["cmp"][sym] is None:
+            raise RuntimeError("no filing")
+        return inp["cmp"][sym]
+
+    RS.M = types.SimpleNamespace(DATA=tmp, get_json=get_json)
+    RS.U.quote = lambda sym: inp["quotes"][sym]
+    RS.wiki = lambda name: inp["wiki"].get(name)
+    RS.macro = lambda: inp["macro"]
+    out = {}
+    for sym in ("ENG03", "BNK02", "ENG14"):
+        r = RS.build(sym)
+        r.pop("built")
+        out[sym] = r
+    return out
+
+
 def main(clone: Path, fx: Path) -> None:
     sys.path.insert(0, str(clone))
     from sm import smc, structure  # noqa: PLC0415 (Market Lab's own modules)
@@ -160,6 +211,7 @@ def main(clone: Path, fx: Path) -> None:
     out["session_levels_15m"] = structure.session_levels(m15)
     out["tape_snapshot"] = tape_snapshot(clone, fx, s1)
     out["sector"] = sector_goldens(clone, fx)
+    out["research"] = research_goldens(clone, fx)
     for name, val in out.items():
         (fx / f"golden_{name}.json").write_text(json.dumps(clean(val)), encoding="utf-8")
         print(name, "None" if val is None else "ok")
