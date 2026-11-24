@@ -1,0 +1,20 @@
+html,body{margin:0;background:#edf0f3}
+.section{display:block}
+.divider{height:1px;background:#d9dee6;margin:8px 22px 6px}
+#disc{position:sticky;top:0;z-index:50;background:#fff7e0;border-bottom:1px solid #f1d58a;color:#6b4e00;font:12px Inter,system-ui,sans-serif;padding:7px 22px;text-align:center}
+#boot{font:13px Inter,system-ui,sans-serif;color:#6b7487;padding:40px;text-align:center}
+/* top navigation (StockSense addition, sits under the disclaimer bar) */
+#topnav{display:flex;flex-wrap:wrap;gap:4px 18px;background:#fff;border-bottom:1px solid #d9dee6;padding:8px 22px;font:600 13px Inter,system-ui,sans-serif}
+#topnav a{color:#141a26;text-decoration:none}
+#topnav a:hover{color:#2563eb}
+.page-plain{font:14px/1.6 Inter,system-ui,sans-serif;color:#141a26;max-width:960px;margin:0 auto;padding:18px 22px 60px}
+.page-plain h1{font:700 26px "Barlow Condensed",Inter,sans-serif}
+.page-plain h2{font:700 20px "Barlow Condensed",Inter,sans-serif;margin-top:28px}
+.page-plain table{border-collapse:collapse;margin:12px 0}
+.page-plain th,.page-plain td{border:1px solid #d9dee6;padding:4px 10px;text-align:left}
+.page-plain code{font:12px "JetBrains Mono",monospace;background:#e7ebf0;padding:1px 4px;border-radius:3px}
+.page-plain pre{background:#fff;border:1px solid #d9dee6;padding:10px;overflow:auto}
+.page-plain pre code{background:none;padding:0}
+.page-plain a{color:#2563eb}
+.learn-list{columns:2;column-gap:28px;padding-left:18px}
+@media (max-width:700px){.learn-list{columns:1}}
