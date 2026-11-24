@@ -531,6 +531,10 @@ def main(out_dir: Path) -> None:
         "inputs_1d_stock": stock1,
         "inputs_15m_stock": aggregate(stock5, 3),
         "inputs_1d_from5m": daily_from(stock5),
+        "inputs_1d_nifty": make_bars([epoch(d, OPEN_MIN) for d in s1], 0.010, 20000.0, 14, True),
+        "inputs_1d_ctx": make_bars(
+            [epoch(d, OPEN_MIN) for d in sessions(date(2024, 9, 2), 250)], 0.015, 1000.0, 15, True
+        ),
     }
     for name, b in files.items():
         (out_dir / f"{name}.json").write_text(json.dumps(b), encoding="utf-8")

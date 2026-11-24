@@ -178,6 +178,84 @@ def research_goldens(clone: Path, fx: Path) -> dict:
     return out
 
 
+def digest(a) -> dict:
+    """Compact fingerprint of an array: length, NaN count, sums and 40 evenly spaced samples (NaN as None)."""
+    x = np.asarray(a)
+    x = x.astype(float)
+    ok = np.isfinite(x)
+    idx = np.unique(np.linspace(0, len(x) - 1, 40).round().astype(int)) if len(x) else []
+    return {
+        "n": int(len(x)),
+        "nan": int((~ok).sum()),
+        "sum": float(x[ok].sum()),
+        "abs": float(np.abs(x[ok]).sum()),
+        "at": [None if not ok[i] else float(x[i]) for i in idx],
+    }
+
+
+def digest_all(f: dict) -> dict:
+    """Digest of every array in a feature dict (scalars and date objects are skipped)."""
+    out = {}
+    for k, v in f.items():
+        if isinstance(v, np.ndarray) and v.dtype != object and v.dtype.kind in "fiub":
+            out[k] = digest(v)
+    return out
+
+
+def features_goldens(clone: Path, fx: Path) -> dict:
+    """Market Lab's daily and intraday feature builders, exits and trading windows on the synthetic bars."""
+    from lab import engine as E
+    from lab import features as F
+    from lab import swing as S
+
+    def ist(df):
+        df = df.copy()
+        df.index = df.index.tz_convert("Asia/Kolkata")
+        return df
+
+    d1, nf = ist(frame(fx / "inputs_1d_stock.json")), ist(frame(fx / "inputs_1d_nifty.json"))
+    nc = nf["close"]
+    nifty = pd.DataFrame(
+        {"c": nc.values, "sma200": nc.rolling(200).mean().values, "roc63": nc.pct_change(63).values * 100},
+        index=[x.date() for x in nf.index],
+    )
+    f1 = S.features(d1, nifty)
+    out = {"d1": digest_all(f1)}
+    follows = []
+    for ie in range(300, f1["n"] - 2, 11):
+        stop = float(f1["c"][ie - 1] - 2 * f1["atr"][ie - 1])
+        for mode in S.EXITS:
+            j, px = S.follow(f1, ie, stop, mode)
+            follows.append([ie, stop, mode, int(j), float(px)])
+    out["follow_1d"] = follows
+    s5, ix5 = ist(frame(fx / "inputs_5m_stock.json")), ist(frame(fx / "inputs_5m_index.json"))
+    dctx = ist(frame(fx / "inputs_1d_ctx.json"))
+    ixf = F.build(ix5, None, 5, None, 1)
+    ixm = F.build(F.mirror(ix5), None, 5, None, -1)
+    ctx, ctxm = F.index_context(ixf), F.index_context(ixm)
+    out["ix"] = digest_all(ixf)
+    out["ix_ctx"] = {k: digest(v) for k, v in ctx.items()}
+    f5 = F.build(s5, dctx, 5, ctx, 1)
+    fm = F.build(F.mirror(s5), F.mirror(dctx), 5, ctxm, -1)
+    out["m5"], out["m5_mirror"] = digest_all(f5), digest_all(fm)
+    out["m5_nodaily"] = digest_all(F.build(s5, None, 5, None, 1))
+    entry_ok, exit_idx = E.windows(f5)
+    out["windows"] = {"entry_ok": digest(entry_ok), "exit_idx": digest(exit_idx)}
+    out["trend"] = {k: digest(E.trend_mask(f5, k)) for k in ("D", "I", "DI", "DIX")}
+    fi = []
+    for i in range(80, f5["n"] - 80, 37):
+        ie = i + 1
+        if f5["day"][ie] != f5["day"][i] or exit_idx[f5["day"][i]] < ie:
+            continue
+        s, e = float(f5["l"][i] - 0.3 * f5["atr"][i]), float(f5["o"][ie])
+        if e - s <= 0:
+            continue
+        o = E.follow(f5, ie, s, e, e - s, int(exit_idx[f5["day"][i]]))
+        fi.append([ie, s, e, int(exit_idx[f5["day"][i]]), {k: float(v) for k, v in o.items()}])
+    out["follow_intra"] = fi
+    return out
+
+
 def main(clone: Path, fx: Path) -> None:
     sys.path.insert(0, str(clone))
     from sm import smc, structure  # noqa: PLC0415 (Market Lab's own modules)
@@ -212,6 +290,7 @@ def main(clone: Path, fx: Path) -> None:
     out["tape_snapshot"] = tape_snapshot(clone, fx, s1)
     out["sector"] = sector_goldens(clone, fx)
     out["research"] = research_goldens(clone, fx)
+    out["features"] = features_goldens(clone, fx)
     for name, val in out.items():
         (fx / f"golden_{name}.json").write_text(json.dumps(clean(val)), encoding="utf-8")
         print(name, "None" if val is None else "ok")
