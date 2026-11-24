@@ -1392,6 +1392,9 @@ STOCK_RULES: dict[str, tuple[str, Callable[[Feat], Out], str, str]] = {
 }
 
 
+AWAIT_DATA = {"k151_implied_vol", "k151_roll_yield", "k151_fut_contrarian_act"}  # their datasets are empty
+
+
 def _register_all() -> None:
     for key, (name, fn, kind, sec) in STOCK_RULES.items():
         doc = (STATE_RULES[key].exit_fn.__doc__ or "").strip()
@@ -1427,6 +1430,7 @@ def _register_all() -> None:
                 default_exit="",
                 signal=None,
                 score=_score_fn(key),
+                status="await_data" if key in AWAIT_DATA else "ready",
                 description=desc,
                 reference=f"151 Trading Strategies sec {sec}",
             )
@@ -1445,7 +1449,8 @@ def _register_all() -> None:
             default_exit="",
             signal=None,
             score=_nb_news_score,
-            description="await_data: needs 250 sessions of stored headlines (news_headlines).",
+            status="await_data",
+            description="Needs 250 sessions of stored headlines (news_headlines).",
             reference="151 Trading Strategies sec 18.3",
         )
     )
