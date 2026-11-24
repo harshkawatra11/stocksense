@@ -669,6 +669,26 @@ _FLOW = [
         },
         path="flow/participants_daily",
     ),
+    _spec(
+        "flow_oi_daily",
+        "derived",
+        "date, symbol",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "symbol": _S,
+            "fut_close": _F,
+            "fut_oi": _F,
+            "oi_chg_pct": _F,
+            "price_chg_pct": _F,
+            "basis_pct": _F,
+            "rollover_pct": _F,
+            "quad": _F,
+            "quad_label": _S,
+        },
+        path="flow/oi_daily",
+    ),
 ]
 
 CATALOG: dict[str, DatasetSpec] = {s.name: s for s in (*_RAW_ADOPTED, *_RAW_NEW, *_DERIVED, *_FLOW)}
