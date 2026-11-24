@@ -2,7 +2,8 @@ import "@/styles/ml-smart.css";
 import "@/styles/ml-sector.css";
 import "@/styles/ml-lab.css";
 import { ChartModal } from "@/components/ChartModal";
-import { LabActionsProvider } from "@/lib/ml/actions";
+import { ChartHost } from "@/components/smart/ChartHost";
+import { SmartSection } from "@/components/smart/SmartSection";
 
 function Placeholder({ name, card }: { name: string; card: string }) {
   return (
@@ -14,9 +15,9 @@ function Placeholder({ name, card }: { name: string; card: string }) {
 
 export default function Home() {
   return (
-    <LabActionsProvider>
+    <ChartHost>
       <section className="ml-smart section" id="smart">
-        <Placeholder name="Smart Money" card="M6.2" />
+        <SmartSection />
         <ChartModal />
       </section>
       <div className="divider" />
@@ -27,6 +28,6 @@ export default function Home() {
       <section className="ml-lab section" id="lab">
         <Placeholder name="Swing Lab" card="M6.4" />
       </section>
-    </LabActionsProvider>
+    </ChartHost>
   );
 }

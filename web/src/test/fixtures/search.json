@@ -1,0 +1,86 @@
+[
+ {
+  "type": "sector",
+  "name": "Energy"
+ },
+ {
+  "type": "sector",
+  "name": "Defence"
+ },
+ {
+  "type": "sector",
+  "name": "Cement"
+ },
+ {
+  "type": "stock",
+  "sym": "ENG01",
+  "name": "Eng01 Limited",
+  "pct": 0.03
+ },
+ {
+  "type": "stock",
+  "sym": "ENG02",
+  "name": "Eng02 Limited",
+  "pct": 0.15
+ },
+ {
+  "type": "stock",
+  "sym": "ENG03",
+  "name": "Eng03 Limited",
+  "pct": -0.68
+ },
+ {
+  "type": "stock",
+  "sym": "ENG04",
+  "name": "Eng04 Limited",
+  "pct": 0.73
+ },
+ {
+  "type": "stock",
+  "sym": "ENG05",
+  "name": "Eng05 Limited",
+  "pct": -0.73
+ },
+ {
+  "type": "stock",
+  "sym": "ENG06",
+  "name": "Eng06 Limited",
+  "pct": 2.22
+ },
+ {
+  "type": "stock",
+  "sym": "ENG07",
+  "name": "Eng07 Limited",
+  "pct": 0.6
+ },
+ {
+  "type": "stock",
+  "sym": "ENG08",
+  "name": "Eng08 Limited",
+  "pct": -0.34
+ },
+ {
+  "type": "stock",
+  "sym": "ENG09",
+  "name": "Eng09 Limited",
+  "pct": 0.43
+ },
+ {
+  "type": "stock",
+  "sym": "ENG10",
+  "name": "Eng10 Limited",
+  "pct": 0.82
+ },
+ {
+  "type": "stock",
+  "sym": "ENG11",
+  "name": "Eng11 Limited",
+  "pct": -0.38
+ },
+ {
+  "type": "stock",
+  "sym": "ENG12",
+  "name": "Eng12 Limited",
+  "pct": -1.9
+ }
+]

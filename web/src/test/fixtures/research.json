@@ -1,0 +1,242 @@
+{
+ "sym": "ENG03",
+ "name": "Eng03 Limited",
+ "built": 1795062600,
+ "macro": "Energy",
+ "sector": "Oil Gas & Consumable Fuels",
+ "industry": "Oil Gas & Consumable Fuels",
+ "basic": "Gas Distribution",
+ "index": "NIFTY 500",
+ "what": "Energy company.",
+ "summary": [
+  "Eng03 Limited: Energy company.",
+  "It is a very large company: the market values the whole business at about \u20b9250,000 crore.",
+  "In the last 12 months it brought in \u20b9322,901 crore and kept \u20b924,308 crore as profit, about \u20b97.5 of profit on every \u20b9100 of sales.",
+  "Compared with the 12 months before, income is up 18%, profit is up 16%.",
+  "At today's price you pay about 12\u00d7 one year's profit \u2014 cheaper than its sector (~18\u00d7)."
+ ],
+ "wiki": {
+  "text": "Eng03 is an energy company. It sells gas.",
+  "url": "https://example.invalid/e3",
+  "title": "Eng03"
+ },
+ "mcap_cr": 250000,
+ "pe": 12.5,
+ "sector_pe": 18.0,
+ "delivery": 44.4,
+ "high52": 2100.0,
+ "low52": 900.0,
+ "ltp": 1500.0,
+ "results": [
+  {
+   "q": "31 Dec 2024",
+   "kind": "Consolidated",
+   "income": 66390.55,
+   "pbt": 5900.6,
+   "profit": 5446.71,
+   "eps": 1.5,
+   "date": "2024-12-31",
+   "label": "Dec 24"
+  },
+  {
+   "q": "31 Mar 2025",
+   "kind": "Standalone",
+   "income": 57564.32,
+   "pbt": 6149.78,
+   "profit": 4730.6,
+   "eps": 1.5,
+   "date": "2025-03-31",
+   "label": "Mar 25"
+  },
+  {
+   "q": "30 Jun 2025",
+   "kind": "Consolidated",
+   "income": 72638.41,
+   "pbt": 5704.98,
+   "profit": 5266.14,
+   "eps": 1.5,
+   "date": "2025-06-30",
+   "label": "Jun 25"
+  },
+  {
+   "q": "30 Sep 2025",
+   "kind": "Consolidated",
+   "income": 76888.79,
+   "pbt": 7464.93,
+   "profit": null,
+   "eps": 1.5,
+   "date": "2025-09-30",
+   "label": "Sep 25"
+  },
+  {
+   "q": "31 Dec 2025",
+   "kind": "Consolidated",
+   "income": 74552.69,
+   "pbt": 6887.78,
+   "profit": 6357.95,
+   "eps": 1.5,
+   "date": "2025-12-31",
+   "label": "Dec 25"
+  },
+  {
+   "q": "31 Mar 2026",
+   "kind": "Consolidated",
+   "income": 80009.42,
+   "pbt": 5723.61,
+   "profit": 5283.33,
+   "eps": 1.5,
+   "date": "2026-03-31",
+   "label": "Mar 26"
+  },
+  {
+   "q": "30 Jun 2026",
+   "kind": "Consolidated",
+   "income": 83580.41,
+   "pbt": 6819.59,
+   "profit": 6295.01,
+   "eps": 1.5,
+   "date": "2026-06-30",
+   "label": "Jun 26"
+  },
+  {
+   "q": "30 Sep 2026",
+   "kind": "Consolidated",
+   "income": 84758.18,
+   "pbt": 6903.21,
+   "profit": 6372.2,
+   "eps": 1.5,
+   "date": "2026-09-30",
+   "label": "Sep 26"
+  }
+ ],
+ "ttm": {
+  "income": 322900.7,
+  "profit": 24308.489999999998,
+  "margin": 7.5,
+  "g_inc": 18.1,
+  "g_pat": 16.1,
+  "q_yoy": null,
+  "norm": 5,
+  "pairs": 4,
+  "profit_q": 7,
+  "n_q": 7
+ },
+ "balance": {
+  "de": 0.25,
+  "icr": 8.1,
+  "as_of": "30-SEP-2026",
+  "interest": 1234.0,
+  "dep": 4459.0
+ },
+ "financial": false,
+ "peers": [
+  {
+   "sym": "ENG01",
+   "name": "Eng01 Limited",
+   "mcap_cr": 377862,
+   "pe": 17.69
+  },
+  {
+   "sym": "ENG05",
+   "name": "Eng05 Limited",
+   "mcap_cr": 332052,
+   "pe": 9.45
+  },
+  {
+   "sym": "ENG09",
+   "name": "Eng09 Limited",
+   "mcap_cr": 325532,
+   "pe": 26.93
+  },
+  {
+   "sym": "ENG07",
+   "name": "Eng07 Limited",
+   "mcap_cr": 219247,
+   "pe": 43.07
+  },
+  {
+   "sym": "ENG13",
+   "name": "Eng13 Limited",
+   "mcap_cr": 202264,
+   "pe": 12.39
+  },
+  {
+   "sym": "ENG11",
+   "name": "Eng11 Limited",
+   "mcap_cr": 192743,
+   "pe": 42.15
+  }
+ ],
+ "sector_strength": {
+  "sector": "Oil Gas & Consumable Fuels",
+  "sector_3m": -6.1,
+  "nifty_3m": 4.0,
+  "rel": -10.1,
+  "n": 13
+ },
+ "economy": [
+  {
+   "factor": "oil",
+   "name": "Crude oil price",
+   "effect": 0,
+   "why": "energy prices",
+   "reading": {
+    "now": 82.5,
+    "chg3m": 6.2
+   },
+   "push": null
+  }
+ ],
+ "tech": {
+  "uptrend": true,
+  "rs63": 14.3,
+  "from_high": -5.1,
+  "atr_pct": 1.78,
+  "ret1y": 84.9,
+  "ret3m": 18.3
+ },
+ "scores": {
+  "Business": 10.0,
+  "Growth": 7.0,
+  "Profitability": 7.5,
+  "Financial health": 10.0,
+  "Valuation": 9,
+  "Industry & economy": 0,
+  "Momentum": 9.5
+ },
+ "weights": {
+  "Business": 15,
+  "Growth": 20,
+  "Profitability": 15,
+  "Financial health": 15,
+  "Valuation": 15,
+  "Industry & economy": 10,
+  "Momentum": 10
+ },
+ "total": 78,
+ "grade": "Strong",
+ "swot": {
+  "Strengths": [
+   "Sales are growing: up 18% on a year earlier.",
+   "Keeps a healthy share of sales as profit (7.5%, typical for its kind is ~5%).",
+   "Made a profit in every one of the last 7 quarters.",
+   "Very little debt in its last detailed filing (30-SEP-2026, own business only).",
+   "The share has beaten Nifty by 14 points over 3 months."
+  ],
+  "Weaknesses": [
+   "No obvious weak spot in the numbers."
+  ],
+  "Opportunities": [
+   "Cheaper than its sector (12\u00d7 vs ~18\u00d7 profit) while profit is still growing.",
+   "Share is in an uptrend and close to its 52-week high."
+  ],
+  "Threats": [
+   "Its sector has lagged Nifty by 10 points over 3 months."
+  ]
+ },
+ "sources": [
+  "NSE quarterly filings & quote page",
+  "Wikipedia",
+  "Yahoo (crude, dollar-rupee, copper, S&P 500)"
+ ]
+}

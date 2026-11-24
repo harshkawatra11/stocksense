@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { installFakeCanvas } from "@/test/canvas";
 
 vi.mock("@/lib/api", () => ({
   API_BASE: "",
@@ -11,6 +12,8 @@ import Home from "@/app/page";
 import { Nav } from "@/components/Nav";
 
 describe("shell", () => {
+  beforeEach(installFakeCanvas);
+  afterEach(cleanup); // the sections are live now: a leftover render would add its own links
   it("renders the three section ids with their scope classes", () => {
     const { container } = render(<Home />);
     for (const id of ["smart", "sector", "lab"]) {

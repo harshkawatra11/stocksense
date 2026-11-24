@@ -8,7 +8,7 @@ header h1{margin:0;font:700 19px "Barlow Condensed";letter-spacing:.6px}
 header .sub{color:var(--muted);font-size:11.5px}
 header .sp{flex:1}
 .live{font-size:11.5px;font-weight:700;display:flex;align-items:center;gap:6px}
-.dot{width:7px;height:7px;border-radius:50%;background:var(--up);animation:pl 1.2s infinite}@keyframes pl{50%{opacity:.25}}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--up);animation:sm-pl 1.2s infinite}@keyframes sm-pl{50%{opacity:.25}}
 header a{font-size:11.5px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:4px 10px;color:var(--ink);text-decoration:none}
 main{padding:4px 22px 24px}
 /* index cards */
@@ -59,8 +59,8 @@ main{padding:4px 22px 24px}
 #tip{position:fixed;pointer-events:none;background:#fff;border:1px solid var(--line);box-shadow:0 6px 20px rgba(20,26,38,.15);padding:7px 9px;font-size:10.5px;line-height:1.55;z-index:50;display:none;min-width:200px}
 #tip b{font:700 13px "Barlow Condensed";letter-spacing:.3px}
 .note{color:var(--muted);font-size:10.5px;margin-top:8px}
-@keyframes fu{0%{box-shadow:inset 0 0 0 2px var(--up)}100%{box-shadow:none}}@keyframes fd{0%{box-shadow:inset 0 0 0 2px var(--down)}100%{box-shadow:none}}
-.flash-up{animation:fu 1.2s}.flash-down{animation:fd 1.2s}
+@keyframes sm-fu{0%{box-shadow:inset 0 0 0 2px var(--up)}100%{box-shadow:none}}@keyframes sm-fd{0%{box-shadow:inset 0 0 0 2px var(--down)}100%{box-shadow:none}}
+.flash-up{animation:sm-fu 1.2s}.flash-down{animation:sm-fd 1.2s}
 /* pop-up chart */
 #modal{position:fixed;inset:0;background:rgba(20,26,38,.45);display:none;z-index:60;align-items:center;justify-content:center;padding:18px}
 #modal .box{background:#fff;border-radius:10px;width:min(1240px,100%);max-height:94vh;overflow:auto;padding:14px 16px;border-left:4px solid var(--up)}
