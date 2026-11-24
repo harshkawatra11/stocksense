@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from stocksense.api.deps import get_tape
+from stocksense.flow.composite import attach_flow
 from stocksense.marketlab.sources import SourceError
 from stocksense.marketlab.tape import TapeEngine
 
@@ -15,9 +16,14 @@ TFS = {"1m", "5m", "15m", "60m", "1d"}
 
 
 @router.get("/live")
-def live(tape: Annotated[TapeEngine, Depends(get_tape)], paths: str = "1") -> dict[str, Any]:
-    """The tape: indices, every F&O stock row, sector chips and the bull/bear orders."""
-    return tape.snapshot(paths == "1")
+def live(
+    request: Request, tape: Annotated[TapeEngine, Depends(get_tape)], paths: str = "1"
+) -> dict[str, Any]:
+    """The tape: indices, every F&O stock row (with its `flow` card, null if unavailable), sector chips."""
+    snap = tape.snapshot(paths == "1")
+    flow = request.app.state.flow
+    snap["stocks"] = attach_flow(snap["stocks"], request.app.state.store, flow.eod() if flow else None)
+    return snap
 
 
 @router.get("/chart")
