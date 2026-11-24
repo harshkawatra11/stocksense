@@ -4,7 +4,8 @@ import prefixer from "postcss-prefix-selector";
 const config = {
   plugins: [
     prefixer({
-      prefix: "",
+      prefix: ".ml",
+      includeFiles: [/ml-(smart|sector|lab)\.css$/],
       transform(prefix, selector, prefixed, file) {
         const m = /ml-(smart|sector|lab)\.css$/.exec(file || "");
         if (!m) return selector;
