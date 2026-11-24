@@ -622,7 +622,127 @@ _DERIVED = [
     ),
 ]
 
-CATALOG: dict[str, DatasetSpec] = {s.name: s for s in (*_RAW_ADOPTED, *_RAW_NEW, *_DERIVED)}
+# Program M3 money-flow datasets (flow/): every EOD job upserts on (date, key), so reruns are idempotent.
+_FLOW = [
+    _spec(
+        "flow_delivery_daily",
+        "derived",
+        "date, sid",
+        "date",
+        "year",
+        {"date": _D, "sid": _I32, "deliv_pct": _F, "deliv_z20": _F, "deliv_value_cr": _F, "deliv_spike": _B},
+        path="flow/delivery_daily",
+    ),
+    _spec(
+        "flow_deals_daily",
+        "derived",
+        "date, symbol",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "symbol": _S,
+            "buy_value_cr": _F,
+            "sell_value_cr": _F,
+            "net_value_cr": _F,
+            "n_deals": _I64,
+            "top_client": _S,
+            "flagged": _B,
+        },
+        path="flow/deals_daily",
+    ),
+    _spec(
+        "flow_participants_daily",
+        "derived",
+        "date",
+        "date",
+        "year",
+        {
+            "date": _D,
+            **{
+                f"{c}_{m}": _F
+                for c in ("fii", "dii", "pro", "client")
+                for m in ("ratio", "ratio_chg1", "ratio_chg5", "call_net", "put_net")
+            },
+            "fii_cash_net": _F,
+            "dii_cash_net": _F,
+        },
+        path="flow/participants_daily",
+    ),
+    _spec(
+        "flow_oi_daily",
+        "derived",
+        "date, symbol",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "symbol": _S,
+            "fut_close": _F,
+            "fut_oi": _F,
+            "oi_chg_pct": _F,
+            "price_chg_pct": _F,
+            "basis_pct": _F,
+            "rollover_pct": _F,
+            "quad": _F,
+            "quad_label": _S,
+        },
+        path="flow/oi_daily",
+    ),
+    _spec(
+        "flow_options_daily",
+        "derived",
+        "date, underlying",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "underlying": _S,
+            **dict.fromkeys(
+                [
+                    "spot",
+                    "atm_iv",
+                    "skew",
+                    "pcr_oi",
+                    "pcr_doi",
+                    "max_pain",
+                    "max_pain_dist_pct",
+                    "call_wall",
+                    "put_wall",
+                    "gex_total_cr",
+                    "zero_gamma",
+                    "zero_gamma_dist_pct",
+                ],
+                _F,
+            ),
+            "near_expiry": _D,
+        },
+        path="flow/options_daily",
+    ),
+    _spec(
+        "flow_options_strikes",
+        "derived",
+        "date, underlying, expiry, strike",
+        "date",
+        "year",
+        {
+            "date": _D,
+            "underlying": _S,
+            "expiry": _D,
+            "strike": _F,
+            "call_oi": _I64,
+            "put_oi": _I64,
+            "call_doi": _I64,
+            "put_doi": _I64,
+            "call_iv": _F,
+            "put_iv": _F,
+            "gex_cr": _F,
+        },
+        path="flow/options_strikes",
+    ),
+]
+
+CATALOG: dict[str, DatasetSpec] = {s.name: s for s in (*_RAW_ADOPTED, *_RAW_NEW, *_DERIVED, *_FLOW)}
 
 
 def get_spec(dataset: str) -> DatasetSpec:

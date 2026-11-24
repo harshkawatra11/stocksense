@@ -1,0 +1,2 @@
+# Optional: names of deal clients to highlight (exact NSE spelling). Leave empty to highlight none.
+clients = []

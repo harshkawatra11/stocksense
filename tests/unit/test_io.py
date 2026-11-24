@@ -62,7 +62,7 @@ def test_catalog_covers_every_d5_dataset():
         "security_master", "panel_daily", "panel_universe", "panel_market", "adj_events", "features",
         "labels", "preds",
     }  # fmt: skip
-    assert set(CATALOG) == expected
+    assert {n for n in CATALOG if not n.startswith("flow_")} == expected  # flow_* are Program M3 datasets
     # partition rule names
     assert {s.partition for s in CATALOG.values()} <= {"month", "year", "all", "day"}
     eq = CATALOG["bhavcopy_eq"]
