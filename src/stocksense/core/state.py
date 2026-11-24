@@ -67,6 +67,22 @@ CREATE TABLE corrections(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, fill_id 
 CREATE TABLE mark_prices(book TEXT, date TEXT, sid INTEGER, price REAL, PRIMARY KEY(book, date, sid));
 """,
     ),
+    # Version 5 stays reserved for `drift` (PLAN D.6). PLAN-M M5.8: the append-only lab journal.
+    (
+        6,
+        """
+CREATE TABLE lab_journal(id INTEGER PRIMARY KEY AUTOINCREMENT, created_ts TEXT NOT NULL,
+  trade_date TEXT NOT NULL, strat TEXT NOT NULL, sym TEXT NOT NULL, side INTEGER NOT NULL,
+  ref_price REAL NOT NULL, stop REAL, target REAL,
+  status TEXT NOT NULL CHECK(status IN('planned','open','closed','expired')),
+  closed_ts TEXT, close_price REAL, reason TEXT, UNIQUE(trade_date, strat, sym));
+CREATE TRIGGER lab_journal_immutable BEFORE UPDATE ON lab_journal
+  WHEN NEW.created_ts IS NOT OLD.created_ts OR NEW.trade_date IS NOT OLD.trade_date
+    OR NEW.strat IS NOT OLD.strat OR NEW.sym IS NOT OLD.sym OR NEW.side IS NOT OLD.side
+    OR NEW.ref_price IS NOT OLD.ref_price OR NEW.stop IS NOT OLD.stop OR NEW.target IS NOT OLD.target
+  BEGIN SELECT RAISE(ABORT, 'lab_journal rows are append-only'); END;
+""",
+    ),
 ]
 
 _STALE_RUNNING = timedelta(hours=6)
