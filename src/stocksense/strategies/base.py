@@ -19,7 +19,7 @@ import polars as pl
 Kind = Literal["trend", "mr", "breakout", "flow", "event", "xs_factor", "index_timing", "options"]
 Source = Literal["marketlab_swing", "marketlab_intraday", "tier", "k151", "flow"]
 Family = Literal["m-swing", "m-intra", "m-xs", "m-index", "m-opt"]
-LIBRARY_MODULES = ("swing", "intraday", "tiers", "k151", "flowstrats")
+LIBRARY_MODULES = ("swing", "intraday", "tiers", "k151", "flowstrats", "k151_opt")
 
 
 @dataclass(frozen=True)
