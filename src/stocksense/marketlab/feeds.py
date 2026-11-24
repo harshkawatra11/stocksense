@@ -63,7 +63,7 @@ class FeedManager:
 
 
 def build_tape(settings: Settings, clock: Clock, store: LabStore):  # noqa: ANN201 (lazy import)
-    """Real TapeEngine from stored data and live sources, or None (logged) when the calendar data is missing."""
+    """Real TapeEngine from stored data and live sources, or None (logged) when calendar data is missing."""
     from stocksense.core.calendar import TradingCalendar
     from stocksense.core.errors import DataNotAvailable
     from stocksense.marketlab.sources import Sources
