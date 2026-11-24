@@ -57,7 +57,7 @@ def test_catalog_covers_every_d5_dataset():
         # RAW new
         "index_daily", "symbol_changes", "listed_equities", "etf_list", "sectors", "price_bands",
         "holidays", "announcements", "board_meetings", "results_index", "macro_daily", "participant_oi",
-        "fii_dii", "deals", "spreads", "preopen", "quotes_1m", "bars_1m", "news_items",
+        "fii_dii", "deals", "spreads", "preopen", "quotes_1m", "bars_1m", "news_items", "news_headlines",
         # DERIVED
         "security_master", "panel_daily", "panel_universe", "panel_market", "adj_events", "features",
         "labels", "preds",

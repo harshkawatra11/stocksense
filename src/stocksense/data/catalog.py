@@ -447,6 +447,15 @@ _RAW_NEW = [
         },
         freshness=2,
     ),
+    # Headlines the Market Lab news service fetched (forward-only research log for k151_nb_news, PLAN-M M5.4)
+    _spec(
+        "news_headlines",
+        "raw_new",
+        "ts, query, title",
+        "ts",
+        "month",
+        {"ts": _TS, "query": _S, "symbol": _S, "title": _S, "source": _S, "link": _S},
+    ),
 ]
 
 _ADJ = {"adj_open": _F, "adj_high": _F, "adj_low": _F, "adj_close": _F}
