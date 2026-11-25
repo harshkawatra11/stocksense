@@ -24,7 +24,7 @@ from stocksense.api.static import mount_web
 from stocksense.core.clock import Clock, SystemClock
 from stocksense.core.config import Settings
 from stocksense.flow.engine import FlowEngine, build_flow_engine
-from stocksense.marketlab.feeds import FeedManager, build_tape
+from stocksense.marketlab.feeds import CatchUp, FeedManager, build_tape
 from stocksense.marketlab.research import ResearchEngine, build_research_engine
 from stocksense.marketlab.sectors import SectorEngine, build_sector_engine
 from stocksense.marketlab.sources import Sources
@@ -84,6 +84,8 @@ def create_app(
             if app.state.depth is not None:
                 mgr.add("depth", app.state.depth.step, 60.0)
             mgr.start()
+            if app.state.catchup_enabled:
+                CatchUp(settings, clock, store).start(mgr.stop_event)
         app.state.feeds = mgr
         yield
         mgr.stop()
