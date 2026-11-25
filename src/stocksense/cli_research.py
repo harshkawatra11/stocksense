@@ -516,6 +516,69 @@ def g2_table(ctx: typer.Context) -> None:
     typer.echo(table(rows) if rows else "no evaluated G2 trials")
 
 
+FAMILIES = ("m-swing", "m-intra", "m-xs", "m-index", "m-opt")
+
+
+@research_app.command("strat-run")
+def strat_run(
+    ctx: typer.Context,
+    family: Annotated[str, typer.Option(help="m-swing | m-intra | m-xs | m-index | m-opt.")],
+    keys: Annotated[
+        str | None, typer.Option(help="Comma-separated strategy keys (default: the family).")
+    ] = None,
+    max_hours: Annotated[
+        float, typer.Option(help="Stop after the current strategy past this wall time.")
+    ] = 6.0,
+) -> None:
+    """Gated walk-forward of the pre-registered library (PLAN-M M5.7): reports/m/strategies/<trial>/eval.json.
+
+    Registers every trial first, skips strategies that already have an eval.json, and skips `await_data` ones.
+    """
+    from stocksense.validation.strategy_eval import run_family, table
+
+    if family not in FAMILIES:
+        typer.echo(f"unknown family {family!r}; choose one of {', '.join(FAMILIES)}", err=True)
+        raise typer.Exit(2)
+    settings = _settings(ctx)
+    state = State(settings)
+    state.migrate()
+    clock = SystemClock()
+    cal = TradingCalendar.from_store(settings, clock)
+    try:
+        rows = run_family(
+            family, settings, state, cal, clock, keys=_csv_list(keys) if keys else None, max_hours=max_hours
+        )
+    except KeyError as e:
+        typer.echo(f"cannot run: {e}", err=True)
+        raise typer.Exit(1) from e
+    for r in rows:
+        why = r.get("skipped")
+        for t in r["trials"]:
+            typer.echo(f"{r['key']:<40} {t['trial_id']:<56} {t.get('verdict') or t.get('skipped')}")
+        if why:
+            typer.echo(f"{r['key']:<40} skipped ({why})")
+    typer.echo(table([e for e in _evals(settings) if e.get("family") == family]))
+
+
+def _evals(settings: Settings) -> list[dict]:
+    from stocksense.validation.strategy_eval import load_evals
+
+    return load_evals(settings)
+
+
+def _csv_list(text: str) -> list[str]:
+    return [p.strip() for p in text.split(",") if p.strip()]
+
+
+@research_app.command("strat-table")
+def strat_table(ctx: typer.Context) -> None:
+    """Print every eval.json row of the strategy library (verdict, gate lines passed, Sharpe, drawdown)."""
+    from stocksense.validation.strategy_eval import table
+
+    rows = _evals(_settings(ctx))
+    typer.echo(table(rows) if rows else "no evaluated strategies")
+
+
 @research_app.command("wf-run")
 def wf_run(
     ctx: typer.Context,

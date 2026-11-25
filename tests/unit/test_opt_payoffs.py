@@ -86,7 +86,7 @@ def test_registry_counts_and_keys():
     reg = load_library()
     opt = [s for s in reg.values() if s.family == "m-opt"]
     assert len(COMBOS) == 57
-    assert len(opt) == 2 * 57 + 3
+    assert len(opt) == 2 * 57 + 3 + 1  # the combos, the three 7.x trades and k151_dispersion (M5.0b)
     assert "k151_opt_nifty_covered_call" in REGISTRY and "k151_opt_banknifty_long_iron_condor" in REGISTRY
     assert all(s.kind == "options" and s.timing is not None for s in opt)
     assert {"k151_vrp_straddle", "k151_vrp_straddle_dh", "k151_risk_reversal"} <= set(REGISTRY)

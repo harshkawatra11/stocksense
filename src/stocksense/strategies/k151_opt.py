@@ -3,7 +3,7 @@ monthly options, plus the section 7.4/7.5 index-option trades (PLAN-M M5.4c, fam
 
 Every combo is entered every monthly cycle (the paper's unconditional description); only the VRP pair
 adds a condition. The legs, strikes and costs are run by `options_bt.run_combo`. Section 2.52 (the box)
-is an informational arbitrage check and has no trial; k151_dispersion waits for `strategies/riskmodel.py`.
+is an informational arbitrage check and has no trial; k151_dispersion lives in `k151_disp.py`.
 The spec `timing` of an m-opt strategy returns `(date, ret)`: net daily return as a fraction of each
 cycle's entry spot (zero on flat days), the m-opt convention (return on underlying notional, cash benchmark).
 """
@@ -19,7 +19,7 @@ import polars as pl
 from stocksense.core.config import Settings
 from stocksense.data import io
 from stocksense.strategies.base import StrategySpec, register
-from stocksense.strategies.options_bt import EntryRule, Leg, run_combo
+from stocksense.strategies.options_bt import ComboResult, EntryRule, Leg, run_combo
 
 F, C, P = "FUT", "CE", "PE"
 RV_WINDOW = 21
@@ -135,6 +135,20 @@ def _vrp_rule(settings: Settings, hedge: bool) -> EntryRule:
     return EntryRule(condition=cond, delta_hedge=hedge)
 
 
+def option_run(settings: Settings, legs: tuple[Leg, ...], und: str, vrp: str | None = None) -> ComboResult:
+    """The full combo run (cycles and daily series) of `legs` on `und`, optionally with the VRP condition."""
+    rule = EntryRule() if vrp is None else _vrp_rule(settings, hedge=vrp == "dh")
+    return run_combo(legs, rule, settings, und)
+
+
+def _clip(df: pl.DataFrame, start: date | None, end: date | None) -> pl.DataFrame:
+    if start is not None:
+        df = df.filter(pl.col("date") >= start)
+    if end is not None:
+        df = df.filter(pl.col("date") <= end)
+    return df
+
+
 def option_returns(
     settings: Settings,
     legs: tuple[Leg, ...],
@@ -144,13 +158,23 @@ def option_returns(
     vrp: str | None = None,
 ) -> pl.DataFrame:
     """Daily `(date, ret)` of a combo on `und` (net of costs, fraction of entry spot), optionally clipped."""
-    rule = EntryRule() if vrp is None else _vrp_rule(settings, hedge=vrp == "dh")
-    out = run_combo(legs, rule, settings, und).daily
-    if start is not None:
-        out = out.filter(pl.col("date") >= start)
-    if end is not None:
-        out = out.filter(pl.col("date") <= end)
-    return out
+    return _clip(option_run(settings, legs, und, vrp).daily, start, end)
+
+
+def option_returns_cost(
+    settings: Settings,
+    legs: tuple[Leg, ...],
+    und: str,
+    start: date | None,
+    end: date | None,
+    vrp: str | None = None,
+) -> pl.DataFrame:
+    """Daily `(date, ret, cost)`: `ret` as in `option_returns`; `cost` is the cycle's round-trip charge
+    (a fraction of entry spot, already inside `ret`) on its exit date and 0 elsewhere (the 2x-cost line)."""
+    res = option_run(settings, legs, und, vrp)
+    cost = res.cycles.select(pl.col("exit_date").alias("date"), "cost")
+    out = res.daily.join(cost, on="date", how="left").with_columns(pl.col("cost").fill_null(0.0))
+    return _clip(out, start, end)
 
 
 def _reg(
@@ -158,6 +182,11 @@ def _reg(
 ) -> None:
     def timing(settings: Settings, start: date | None = None, end: date | None = None) -> pl.DataFrame:
         return option_returns(settings, legs, und, start, end, vrp)
+
+    def with_cost(settings: Settings, start: date | None = None, end: date | None = None) -> pl.DataFrame:
+        return option_returns_cost(settings, legs, und, start, end, vrp)
+
+    timing.with_cost = with_cost  # type: ignore[attr-defined]
 
     register(
         StrategySpec(

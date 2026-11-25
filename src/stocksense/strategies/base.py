@@ -29,6 +29,7 @@ LIBRARY_MODULES = (
     "k151_ann",
     "flowstrats",
     "k151_opt",
+    "k151_disp",
 )
 
 
