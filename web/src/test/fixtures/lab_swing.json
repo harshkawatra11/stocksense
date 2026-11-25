@@ -1,10 +1,10 @@
 {
- "built": "2026-11-25T05:37:42+05:30",
+ "built": "2026-11-25T05:37:40+05:30",
  "asof": "2025-06-16",
  "cost_pct": 0.603,
  "stocks": 8,
  "trades": 367,
- "peak_rss_mb": 187.1,
+ "peak_rss_mb": 187.0,
  "strategies": {
   "20-day breakout": {
    "key": "ml_swing_breakout20",
@@ -334,7 +334,7 @@
   }
  },
  "live": {
-  "time": 1795565262,
+  "time": 1795565260,
   "asof": "2025-06-16",
   "nifty": 11801.4,
   "nifty_200": 11580.6,

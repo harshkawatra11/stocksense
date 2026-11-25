@@ -1,0 +1,62 @@
+{
+ "descriptive": true,
+ "asof": "2026-11-11",
+ "live": true,
+ "fii": {
+  "cash_net": 250.0,
+  "cash_net_5d": 150.0,
+  "idx_fut_ratio": 0.45,
+  "ratio_chg5": 0.45
+ },
+ "dii": {
+  "cash_net": 120.0,
+  "cash_net_5d": 200.0,
+  "idx_fut_ratio": 0.45,
+  "ratio_chg5": 0.45
+ },
+ "pro": {
+  "cash_net": null,
+  "cash_net_5d": null,
+  "idx_fut_ratio": 0.45,
+  "ratio_chg5": 0.45
+ },
+ "client": {
+  "cash_net": null,
+  "cash_net_5d": null,
+  "idx_fut_ratio": 0.45,
+  "ratio_chg5": 0.45
+ },
+ "indices": {
+  "NIFTY": {
+   "spot": 24000.0,
+   "pcr_oi": 1.5,
+   "gex_total_cr": 12.5,
+   "regime": "positive",
+   "zero_gamma": 1.0,
+   "call_wall": 1.0,
+   "put_wall": 1.0,
+   "max_pain": 1.0,
+   "atm_iv": 1.0
+  },
+  "BANKNIFTY": {
+   "spot": 52000.0,
+   "pcr_oi": 1.5,
+   "gex_total_cr": 12.5,
+   "regime": "positive",
+   "zero_gamma": 1.0,
+   "call_wall": 1.0,
+   "put_wall": 1.0,
+   "max_pain": 1.0,
+   "atm_iv": 1.0
+  }
+ },
+ "vix": {
+  "close": 14.5,
+  "chg1": 1.5
+ },
+ "breadth": {
+  "adv": 7,
+  "dec": 7
+ },
+ "preopen": null
+}

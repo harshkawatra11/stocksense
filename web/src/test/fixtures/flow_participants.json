@@ -1,0 +1,23 @@
+{
+ "descriptive": true,
+ "rows": [
+  {
+   "date": "2026-11-10",
+   "fii_ratio": 0.4,
+   "dii_ratio": 0.4,
+   "pro_ratio": 0.4,
+   "client_ratio": 0.4,
+   "fii_cash_net": -100.0,
+   "dii_cash_net": 80.0
+  },
+  {
+   "date": "2026-11-11",
+   "fii_ratio": 0.45,
+   "dii_ratio": 0.45,
+   "pro_ratio": 0.45,
+   "client_ratio": 0.45,
+   "fii_cash_net": 250.0,
+   "dii_cash_net": 120.0
+  }
+ ]
+}

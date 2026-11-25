@@ -1,0 +1,55 @@
+{
+ "descriptive": true,
+ "und": "NIFTY",
+ "spot": 24000.0,
+ "expiry": "2026-11-17",
+ "expiries": [
+  "2026-11-17",
+  "2026-11-24"
+ ],
+ "strikes": [
+  {
+   "strike": 23900.0,
+   "call_oi": 100,
+   "put_oi": 200,
+   "call_doi": 1,
+   "put_doi": -1,
+   "call_iv": 0.15,
+   "put_iv": 0.16,
+   "gex_cr": 0.5
+  },
+  {
+   "strike": 24000.0,
+   "call_oi": 100,
+   "put_oi": 200,
+   "call_doi": 1,
+   "put_doi": -1,
+   "call_iv": 0.15,
+   "put_iv": 0.16,
+   "gex_cr": 0.5
+  }
+ ],
+ "totals": {
+  "gex_total_cr": 12.5,
+  "zero_gamma": 1.0,
+  "call_wall": 1.0,
+  "put_wall": 1.0,
+  "max_pain": 1.0,
+  "pcr_oi": 1.5,
+  "pcr_doi": 1.0
+ },
+ "history": [
+  {
+   "date": "2026-11-10",
+   "gex_total_cr": 12.5,
+   "pcr_oi": 1.5,
+   "spot": 24000.0
+  },
+  {
+   "date": "2026-11-11",
+   "gex_total_cr": 12.5,
+   "pcr_oi": 1.5,
+   "spot": 24000.0
+  }
+ ]
+}
