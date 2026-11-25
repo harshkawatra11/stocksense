@@ -1065,4 +1065,6 @@ def build_sector_engine(settings: Settings, clock: Clock, store: LabStore) -> Se
         log.warning("sector_disabled_no_calendar")
         return None
     live, slow = Sources(settings, clock, store), Sources(settings, clock, store)
-    return SectorEngine(settings, clock, cal, live, store, NewsService(live, clock), slow_sources=slow)
+    return SectorEngine(
+        settings, clock, cal, live, store, NewsService(live, clock, settings), slow_sources=slow
+    )

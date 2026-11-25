@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import datetime
 from typing import Any
 
 import httpx
+import polars as pl
 
-from stocksense.core.clock import Clock
+from stocksense.core.clock import IST, Clock
+from stocksense.core.config import Settings
+from stocksense.core.errors import DataValidationError
 from stocksense.core.log import get_logger
+from stocksense.data import io
 from stocksense.marketlab.sources import SourceError
 
 log = get_logger(__name__)
@@ -60,16 +65,51 @@ def tag(title: str) -> str:
 class NewsService:
     """Tagged headline search with a 15-minute cache; `sector(name, wait=False)` reads the warmed cache."""
 
-    def __init__(self, sources: Any, clock: Clock) -> None:
-        self.src, self.clock = sources, clock
+    def __init__(self, sources: Any, clock: Clock, settings: Settings | None = None) -> None:
+        self.src, self.clock, self.settings = sources, clock, settings
         self._lock = threading.Lock()
+        self._rec_lock = threading.Lock()
         self._cache: dict[tuple[str, int], tuple[float, list[dict[str, Any]]]] = {}
 
     def _get(self, key: tuple[str, int]) -> tuple[float, list[dict[str, Any]]] | None:
         with self._lock:
             return self._cache.get(key)
 
-    def search(self, q: str, days: int = 30, limit: int = 20) -> list[dict[str, Any]]:
+    def _record(self, q: str, items: list[dict[str, Any]], symbol: str) -> None:
+        """Append every fetched headline to the `news_headlines` dataset (idempotent on ts, query, title).
+
+        This is the forward-only log that k151_nb_news needs (PLAN-M M5.4). A write failure is logged and
+        never breaks the dashboard.
+        """
+        if self.settings is None or not items:
+            return
+        rows = []
+        for h in items:
+            try:
+                ts = datetime.fromisoformat(h["time"]).astimezone(IST)
+            except (KeyError, ValueError):
+                continue
+            rows.append((ts, q, symbol, h["title"], h.get("source", ""), h.get("link", "")))
+        if not rows:
+            return
+        cols = list(zip(*rows, strict=True))
+        df = pl.DataFrame(
+            {
+                "ts": pl.Series(cols[0], dtype=pl.Datetime("us", "Asia/Kolkata")),
+                "query": list(cols[1]),
+                "symbol": list(cols[2]),
+                "title": list(cols[3]),
+                "source": list(cols[4]),
+                "link": list(cols[5]),
+            }
+        )
+        try:
+            with self._rec_lock:
+                io.upsert(self.settings, "news_headlines", df, clock=self.clock)
+        except (OSError, DataValidationError):
+            log.exception("news_headlines_write_failed", query=q[:40])
+
+    def search(self, q: str, days: int = 30, limit: int = 20, symbol: str = "") -> list[dict[str, Any]]:
         """Headlines for a query, newest first, each with a tag; a failing source returns the stale copy."""
         key = (q, days)
         now = self.clock.now().timestamp()
@@ -84,6 +124,7 @@ class NewsService:
         tagged = [{**h, "tag": tag(h["title"])} for h in items]
         with self._lock:
             self._cache[key] = (now, tagged)
+        self._record(q, tagged, symbol)
         return [dict(h) for h in tagged]
 
     def sector(self, name: str, wait: bool = True) -> list[dict[str, Any]]:
@@ -97,7 +138,7 @@ class NewsService:
     def stock(self, sym: str, company: str | None) -> list[dict[str, Any]]:
         """Headlines for one company over 60 days (name without Ltd/India/Industries, or the symbol)."""
         short = _SUFFIX.sub("", company or sym).strip(" .,")
-        return self.search(f'"{short}" OR {sym}', days=60, limit=12)
+        return self.search(f'"{short}" OR {sym}', days=60, limit=12, symbol=sym)
 
     def market(self) -> list[dict[str, Any]]:
         """Market-wide headlines (Sensex, Nifty) over 30 days."""

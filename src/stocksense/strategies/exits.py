@@ -52,6 +52,46 @@ def follow_1d(f: dict[str, Any], ie: int, stop: float, mode: str) -> tuple[int, 
     return j, float(c[j]), "time"
 
 
+EXIT_STATE = "state_exit"  # PLAN-M M5.4: exit is a condition on the closes, not a price or a count of days
+
+
+def follow_state(
+    f: dict[str, Any],
+    ie: int,
+    stop: float,
+    exit_state: np.ndarray,
+    target: float = np.nan,
+    use_stop: bool = True,
+    max_days: int = 250,
+) -> tuple[int, float, str]:
+    """Long from day `ie`'s open until the exit condition is true at a close, then out at the NEXT open.
+
+    `exit_state[j]` is the exit condition evaluated at the close of day j. A hit-tested `stop` (gap through
+    it fills at the open, else at the stop) and a `target` (fills at max(target, open)) are checked first,
+    the stop before the target, as in follow_1d. Returns (exit day index, price, reason) with reason one of
+    gap_stop, stop, target, state, end (data ends with the condition true) or time (max_days reached).
+    """
+    o, h, l, c = f["o"], f["h"], f["l"], f["c"]  # noqa: E741
+    n = f["n"]
+    has_stop = use_stop and bool(np.isfinite(stop))
+    has_tgt = bool(np.isfinite(target))
+    last = min(n, ie + max_days)
+    for j in range(ie, last):
+        if has_stop:
+            if j > ie and o[j] <= stop:
+                return j, float(o[j]), "gap_stop"
+            if l[j] <= stop:
+                return j, float(stop), "stop"
+        if has_tgt and h[j] >= target:
+            return j, float(max(target, o[j])), "target"
+        if exit_state[j]:
+            if j + 1 < n:
+                return j + 1, float(o[j + 1]), "state"
+            return j, float(c[j]), "end"
+    j = last - 1
+    return j, float(c[j]), "time"
+
+
 def trend_mask(f: dict[str, Any], kind: str) -> np.ndarray:
     """Which bars agree with the trend filter: D (daily), I (intraday), DI, DIX (plus the index)."""
     intra = (f["c"] > f["vwap"]) & (f["ema21"] > f["ema50"])
