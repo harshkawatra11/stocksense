@@ -6,14 +6,7 @@ import { ChartModal } from "@/components/ChartModal";
 import { ChartHost } from "@/components/smart/ChartHost";
 import { SmartSection } from "@/components/smart/SmartSection";
 import { SectorSection } from "@/components/sector/SectorSection";
-
-function Placeholder({ name, card }: { name: string; card: string }) {
-  return (
-    <div id="boot">
-      {name} loads here (card {card}).
-    </div>
-  );
-}
+import { LabSection } from "@/components/lab/LabSection";
 
 export default function Home() {
   return (
@@ -31,7 +24,7 @@ export default function Home() {
       </section>
       <div className="divider" />
       <section className="ml-lab section" id="lab">
-        <Placeholder name="Swing Lab" card="M6.4" />
+        <LabSection />
       </section>
     </ChartHost>
   );
