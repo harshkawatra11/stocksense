@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Any
 
 import polars as pl
 
 from stocksense.core.calendar import TradingCalendar
-from stocksense.core.clock import SystemClock
+from stocksense.core.clock import Clock, SystemClock
 from stocksense.core.config import Settings
+from stocksense.core.log import get_logger
 from stocksense.data import io
 from stocksense.features.derivs import oi_price_quad
+from stocksense.marketlab.clock import market_status
+from stocksense.marketlab.store import LabStore
+
+log = get_logger(__name__)
 
 ROLL_WINDOW = 5  # rollover % is reported in the last 5 sessions before the nearest expiry
 WARMUP_DAYS = 10  # calendar days read before `start` for the previous session's OI and settle
@@ -115,3 +121,109 @@ def build_oi_daily(
     if out.height:
         io.upsert(settings, "flow_oi_daily", out)
     return out.height
+
+
+# ---- live futures OI (Angel NFO FULL quotes) -----------------------------------------------------------
+
+LIVE_EVERY_S = 60.0
+LIVE_IDLE_S = 120.0
+LIVE_TOP = 50
+OI_RATIO_BOUNDS = (0.2, 5.0)  # a live/previous OI ratio outside this looks like a unit mismatch, not a move
+
+
+class FuturesOiLive:
+    """Live quad of the near-month futures of the top F&O names: `step()` fills `store.flow["oi_live"]`.
+
+    Price change is the futures LTP against the previous EOD near-month close; OI change is the quote's OI
+    against the previous EOD total futures OI (both in shares: the Angel OI unit is unverified, so a ratio
+    outside 0.2..5 is reported as a unit mismatch instead of a move).
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        clock: Clock,
+        calendar: TradingCalendar,
+        store: LabStore,
+        angel: Any,
+        instruments: Any,
+        top: int = LIVE_TOP,
+    ) -> None:
+        self.settings, self.clock, self.cal, self.store = settings, clock, calendar, store
+        self.angel, self.inst, self.top = angel, instruments, top
+
+    def _previous(self, today: date) -> dict[str, tuple[float, float]]:
+        df = (
+            io.read(
+                self.settings, "flow_oi_daily", today - timedelta(days=WARMUP_DAYS), today - timedelta(days=1)
+            )
+            .sort("date")
+            .collect()
+            .group_by("symbol", maintain_order=True)
+            .last()
+        )
+        return {r["symbol"]: (r["fut_close"], r["fut_oi"]) for r in df.iter_rows(named=True)}
+
+    def _ranked(self, tokens: dict[str, str]) -> list[str]:
+        with self.store.lock:
+            stocks = dict(self.store.tape.get("stocks", {}))
+        by_value = sorted(
+            (s for s in stocks if s in tokens), key=lambda s: -(stocks[s].get("value_cr") or 0.0)
+        )
+        return by_value[: self.top]
+
+    def step(self) -> float:
+        """One iteration; seconds to wait (120 s outside the open market, else 60 s)."""
+        if market_status(self.clock, self.cal) != "open":
+            return LIVE_IDLE_S
+        today = self.clock.today()
+        tokens = self.inst.angel_nfo_futures(today)
+        names = self._ranked(tokens)
+        if not names:
+            return LIVE_EVERY_S
+        by_symbol = self.inst.angel_nfo_trading_symbols(today)
+        under = {by_symbol[n]: n for n in names if n in by_symbol}
+        prev = self._previous(today)
+        rows: list[dict[str, Any]] = []
+        for q in self.angel.quote_full([tokens[n] for n in names], exchange="NFO"):
+            name = under.get(q.symbol)
+            if name is None or name not in prev or q.ltp is None or q.oi is None:
+                continue
+            p_close, p_oi = prev[name]
+            ratio = q.oi / p_oi if p_oi else float("nan")
+            row: dict[str, Any] = {"symbol": name, "ltp": q.ltp, "oi": q.oi, "price_chg_pct": None}
+            if p_close:
+                row["price_chg_pct"] = round((q.ltp / p_close - 1.0) * 100.0, 3)
+            if OI_RATIO_BOUNDS[0] <= ratio <= OI_RATIO_BOUNDS[1]:
+                row["oi_chg_pct"] = round((ratio - 1.0) * 100.0, 3)
+            else:
+                row |= {"oi_chg_pct": None, "note": "oi unit mismatch"}
+            rows.append(row)
+        if rows:
+            quad = (
+                pl.DataFrame(rows, schema_overrides={"price_chg_pct": pl.Float64, "oi_chg_pct": pl.Float64})
+                .select(oi_price_quad(pl.col("price_chg_pct"), pl.col("oi_chg_pct")).alias("quad"))["quad"]
+                .to_list()
+            )
+            for r, qd in zip(rows, quad, strict=True):
+                r["quad_label"] = LABELS.get(qd) if qd is not None else None
+        with self.store.lock:
+            self.store.flow["oi_live"] = {"time": self.clock.now().isoformat(), "rows": rows}
+        return LIVE_EVERY_S
+
+
+def build_futures_oi_live(settings: Settings, clock: Clock, store: LabStore) -> FuturesOiLive | None:
+    """The real loop (Angel read-only NFO quotes), or None (logged) without Angel secrets or a calendar."""
+    from stocksense.brokers.angel import AngelClient
+    from stocksense.brokers.instruments import InstrumentMap
+    from stocksense.core.errors import ConfigError, DataNotAvailable
+
+    try:
+        settings.require("angel_api_key", "angel_client_id", "angel_pin", "angel_totp_secret")
+        cal = TradingCalendar.from_store(settings, clock)
+    except (ConfigError, DataNotAvailable):
+        log.warning("oi_live_disabled")
+        return None
+    return FuturesOiLive(
+        settings, clock, cal, store, AngelClient(settings, clock), InstrumentMap(settings, clock)
+    )

@@ -11,6 +11,7 @@ from stocksense.marketlab.research import ResearchEngine
 from stocksense.marketlab.sectors import SectorEngine
 from stocksense.marketlab.store import LabStore
 from stocksense.marketlab.tape import TapeEngine
+from stocksense.orderflow.engine import OrderflowEngine
 
 
 def get_store(request: Request) -> LabStore:
@@ -57,4 +58,12 @@ def get_flow(request: Request) -> FlowEngine:
     eng = request.app.state.flow
     if eng is None:
         raise HTTPException(status_code=503, detail="flow not running")
+    return eng
+
+
+def get_orderflow(request: Request) -> OrderflowEngine:
+    """The order-flow engine; 503 when the server runs without feeds."""
+    eng = request.app.state.orderflow
+    if eng is None:
+        raise HTTPException(status_code=503, detail="order flow not running")
     return eng
