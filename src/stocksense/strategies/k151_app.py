@@ -84,7 +84,7 @@ def five_minute_open(settings: Settings, w: Wide, start: date, end: date) -> np.
         return out
     m = df.with_columns(
         pl.col("ts").dt.date().alias("d"),
-        (pl.col("ts").dt.hour() * 60 + pl.col("ts").dt.minute()).alias("mod"),
+        (pl.col("ts").dt.hour().cast(pl.Int64) * 60 + pl.col("ts").dt.minute().cast(pl.Int64)).alias("mod"),
     ).filter(pl.col("mod") == FIVE_MIN_FILL.hour * 60 + FIVE_MIN_FILL.minute)
     pos = {s: i for i, s in enumerate(w.symbols.astype(str).tolist())}
     for sym, d, op in zip(m["symbol"].to_list(), m["d"].to_list(), m["open"].to_list(), strict=True):
@@ -179,7 +179,7 @@ def appa_run(
 def _timing(delay: Delay, five_min: bool = False):
     def run(settings: Settings, start: date, end: date, capital_inr: float | None = None) -> pl.DataFrame:
         w = load_wide(settings, start, end, pad_days=120)
-        cap = settings.costs.reference_capital_inr if capital_inr is None else capital_inr
+        cap = settings.gate.research.reference_capital_inr if capital_inr is None else capital_inr
         entry = five_minute_open(settings, w, start, end) if five_min else None
         out = appa_run(w, delay, cap, settings, entry_open=entry)
         return out.filter((pl.col("date") >= start) & (pl.col("date") <= end))
