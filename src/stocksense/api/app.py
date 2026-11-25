@@ -24,6 +24,7 @@ from stocksense.api.static import mount_web
 from stocksense.core.clock import Clock, SystemClock
 from stocksense.core.config import Settings
 from stocksense.flow.engine import FlowEngine, build_flow_engine
+from stocksense.flow.oi import build_futures_oi_live
 from stocksense.marketlab.feeds import CatchUp, FeedManager, build_tape
 from stocksense.marketlab.research import ResearchEngine, build_research_engine
 from stocksense.marketlab.sectors import SectorEngine, build_sector_engine
@@ -79,6 +80,13 @@ def create_app(
                 mgr.add("flow", app.state.flow.step, 30.0)
             if app.state.orderflow is None:
                 app.state.orderflow = build_orderflow_engine(settings, clock, store)
+            if app.state.oi_live is None:
+                app.state.oi_live = build_futures_oi_live(settings, clock, store)
+            if app.state.oi_live is not None:
+                mgr.add("oi_live", app.state.oi_live.step, 60.0)
+            else:
+                store.set_interval("oi_live", 0.0)
+                store.feeds["oi_live"].last_err = "skipped: no angel secrets"
             if app.state.depth is None:
                 app.state.depth = build_depth_capture(settings, clock, store)
             if app.state.depth is not None:
@@ -98,6 +106,7 @@ def create_app(
     app.state.research = research
     app.state.flow = flow
     app.state.depth = None
+    app.state.oi_live = None
     app.state.orderflow = orderflow
     app.add_middleware(ReadOnlyMiddleware)
     app.add_middleware(

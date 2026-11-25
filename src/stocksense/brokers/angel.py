@@ -248,14 +248,14 @@ class AngelClient:
             for p in rows
         ]
 
-    def quote_full(self, tokens: list[str]) -> list[Quote]:
-        """FULL quotes for NSE tokens, 50 per call, one call per second."""
+    def quote_full(self, tokens: list[str], exchange: str = "NSE") -> list[Quote]:
+        """FULL quotes for tokens of one exchange (NSE or NFO), 50 per call, one call per second."""
         self._ensure()
         out: list[Quote] = []
         for i in range(0, len(tokens), QUOTE_CHUNK):
             chunk = tokens[i : i + QUOTE_CHUNK]
             j = self._call(
-                "POST", _QUOTE, {"mode": "FULL", "exchangeTokens": {"NSE": chunk}}, spacing=QUOTE_SPACING_S
+                "POST", _QUOTE, {"mode": "FULL", "exchangeTokens": {exchange: chunk}}, spacing=QUOTE_SPACING_S
             )
             now = self._clock.now()
             out += [parse_quote(q, now) for q in (j.get("data") or {}).get("fetched") or []]
