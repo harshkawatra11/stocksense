@@ -13,6 +13,7 @@ from stocksense import __version__
 from stocksense.api import (
     routes_flow,
     routes_lab,
+    routes_picks,
     routes_research,
     routes_sector,
     routes_sm,
@@ -98,6 +99,7 @@ def create_app(
     app.include_router(routes_research.router)
     app.include_router(routes_flow.router)
     app.include_router(routes_lab.router)
+    app.include_router(routes_picks.router)
     # later cards add their own include_router line here, before the static mount
     mount_web(app, web_out)
     return app
