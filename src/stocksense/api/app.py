@@ -13,6 +13,7 @@ from stocksense import __version__
 from stocksense.api import (
     routes_flow,
     routes_lab,
+    routes_orderflow,
     routes_research,
     routes_sector,
     routes_sm,
@@ -29,6 +30,7 @@ from stocksense.marketlab.sectors import SectorEngine, build_sector_engine
 from stocksense.marketlab.sources import Sources
 from stocksense.marketlab.store import LabStore
 from stocksense.marketlab.tape import TapeEngine
+from stocksense.orderflow.engine import OrderflowEngine, build_orderflow_engine
 from stocksense.orderflow.heatmap import build_depth_capture
 
 WEB_OUT = Path(__file__).resolve().parents[3] / "web" / "out"
@@ -45,6 +47,7 @@ def create_app(
     sector: SectorEngine | None = None,
     research: ResearchEngine | None = None,
     flow: FlowEngine | None = None,
+    orderflow: OrderflowEngine | None = None,
 ) -> FastAPI:
     """FastAPI app: GET-only JSON under /api, /health, and the static dashboard at /."""
     clock = clock or SystemClock()
@@ -74,6 +77,8 @@ def create_app(
                 app.state.flow = build_flow_engine(settings, clock, store, app.state.tape)
             if app.state.flow is not None:
                 mgr.add("flow", app.state.flow.step, 30.0)
+            if app.state.orderflow is None:
+                app.state.orderflow = build_orderflow_engine(settings, clock, store)
             if app.state.depth is None:
                 app.state.depth = build_depth_capture(settings, clock, store)
             if app.state.depth is not None:
@@ -91,6 +96,7 @@ def create_app(
     app.state.research = research
     app.state.flow = flow
     app.state.depth = None
+    app.state.orderflow = orderflow
     app.add_middleware(ReadOnlyMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -104,6 +110,7 @@ def create_app(
     app.include_router(routes_research.router)
     app.include_router(routes_flow.router)
     app.include_router(routes_lab.router)
+    app.include_router(routes_orderflow.router)
     # later cards add their own include_router line here, before the static mount
     mount_web(app, web_out)
     return app
