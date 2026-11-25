@@ -1,0 +1,64 @@
+{
+ "sym": "S00",
+ "tf": "1d",
+ "state": null,
+ "days_held": [
+  92
+ ],
+ "strat": "ml_swing_breakout20",
+ "exit": "trail3",
+ "exit_name": "3-ATR trailing stop",
+ "swing": true,
+ "candidate": false,
+ "cost_pct": 0.375,
+ "trades": [
+  {
+   "sym": "S00",
+   "side": 1,
+   "t_in": 1734912000,
+   "p_in": 144.28,
+   "stop": 140.25,
+   "target": null,
+   "t_out": 1745884800,
+   "p_out": 178.37,
+   "R": 8.32,
+   "pct": 23.25,
+   "gross_pct": 23.63,
+   "cost_pct": 0.375,
+   "days": 92,
+   "status": "CLOSED",
+   "reason": "stop",
+   "mkt_up": true,
+   "rs63": 3.7
+  },
+  {
+   "sym": "S00",
+   "side": 1,
+   "t_in": 1747267200,
+   "p_in": 191.28,
+   "stop": 183.2,
+   "target": null,
+   "t_out": 1754611200,
+   "p_out": 219.1,
+   "R": 3.35,
+   "pct": 14.14,
+   "gross_pct": 14.55,
+   "cost_pct": 0.402,
+   "days": 62,
+   "status": "OPEN",
+   "reason": "open",
+   "mkt_up": true,
+   "rs63": 21.1
+  }
+ ],
+ "summary": {
+  "n": 1,
+  "win": 100.0,
+  "avgR": 8.32,
+  "totR": 8.3,
+  "pct": 23.3
+ },
+ "exploratory": true,
+ "costs_model": "stocksense.costs (delivery) + slippage model",
+ "gated": null
+}

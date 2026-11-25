@@ -1,0 +1,1018 @@
+{
+ "list": [
+  "ORB 15m",
+  "ORB 30m",
+  "Gap & go",
+  "Opening drive",
+  "PDH breakout",
+  "CPR breakout",
+  "Pivot R1 break",
+  "Donchian 20",
+  "Keltner break",
+  "BB squeeze",
+  "NR7 + ORB",
+  "Bull flag (5m)",
+  "Inside bar break",
+  "Afternoon HOD",
+  "VWAP pullback",
+  "VWAP reclaim",
+  "EMA 9/21 cross",
+  "EMA20 pullback",
+  "Supertrend flip (5m)",
+  "MACD cross",
+  "RSI pullback",
+  "RSI2 dip",
+  "ADX trend",
+  "Heikin-Ashi",
+  "VWAP+EMA+RSI",
+  "ORB+VWAP+RVOL",
+  "RS pullback",
+  "Engulfing @EMA",
+  "Hammer @VWAP",
+  "3 soldiers",
+  "Morning star",
+  "Marubozu HOD",
+  "PDL sweep",
+  "OR-low sweep",
+  "BOS",
+  "Order block",
+  "FVG retest",
+  "BOS 50% pullback",
+  "Double bottom",
+  "ICT unicorn",
+  "VWAP mean reversion",
+  "ORB 15m (rvol)",
+  "ORB 30m (rvol)",
+  "Absorption reversal",
+  "CVD divergence",
+  "80% rule (value area)",
+  "Initial balance extension",
+  "Open drive away from value",
+  "Poor extreme repair",
+  "SMT divergence Nifty vs Bank Nifty",
+  "151 ANN on 15-minute bars",
+  "Pre-open imbalance follow",
+  "First-hour CVD trend",
+  "Dealer gamma regime on Nifty"
+ ],
+ "strategies": {
+  "ORB 15m": {
+   "key": "ml_intra_orb_15m",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "ORB 30m": {
+   "key": "ml_intra_orb_30m",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Gap & go": {
+   "key": "ml_intra_gap_and_go",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Opening drive": {
+   "key": "ml_intra_opening_drive",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "PDH breakout": {
+   "key": "ml_intra_pdh_breakout",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "CPR breakout": {
+   "key": "ml_intra_cpr_breakout",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Pivot R1 break": {
+   "key": "ml_intra_pivot_r1_break",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Donchian 20": {
+   "key": "ml_intra_donchian_20",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Keltner break": {
+   "key": "ml_intra_keltner_break",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "BB squeeze": {
+   "key": "ml_intra_bb_squeeze",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "NR7 + ORB": {
+   "key": "ml_intra_nr7_orb",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Bull flag (5m)": {
+   "key": "ml_intra_bull_flag",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Inside bar break": {
+   "key": "ml_intra_inside_bar_break",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Afternoon HOD": {
+   "key": "ml_intra_afternoon_hod",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "VWAP pullback": {
+   "key": "ml_intra_vwap_pullback",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "VWAP reclaim": {
+   "key": "ml_intra_vwap_reclaim",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "EMA 9/21 cross": {
+   "key": "ml_intra_ema_9_21_cross",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "EMA20 pullback": {
+   "key": "ml_intra_ema20_pullback",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Supertrend flip (5m)": {
+   "key": "ml_intra_supertrend_flip",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "MACD cross": {
+   "key": "ml_intra_macd_cross",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "RSI pullback": {
+   "key": "ml_intra_rsi_pullback",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "RSI2 dip": {
+   "key": "ml_intra_rsi2_dip",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "ADX trend": {
+   "key": "ml_intra_adx_trend",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Heikin-Ashi": {
+   "key": "ml_intra_heikin_ashi",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "VWAP+EMA+RSI": {
+   "key": "ml_intra_vwap_ema_rsi",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "ORB+VWAP+RVOL": {
+   "key": "ml_intra_orb_vwap_rvol",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "RS pullback": {
+   "key": "ml_intra_rs_pullback",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Engulfing @EMA": {
+   "key": "ml_intra_engulfing_ema",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Hammer @VWAP": {
+   "key": "ml_intra_hammer_vwap",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "3 soldiers": {
+   "key": "ml_intra_three_soldiers",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Morning star": {
+   "key": "ml_intra_morning_star",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Marubozu HOD": {
+   "key": "ml_intra_marubozu_hod",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "PDL sweep": {
+   "key": "ml_intra_pdl_sweep",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "OR-low sweep": {
+   "key": "ml_intra_or_low_sweep",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "BOS": {
+   "key": "ml_intra_bos",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Order block": {
+   "key": "ml_intra_order_block",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "FVG retest": {
+   "key": "ml_intra_fvg_retest",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "BOS 50% pullback": {
+   "key": "ml_intra_bos_50_pullback",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Double bottom": {
+   "key": "ml_intra_double_bottom",
+   "tier": "none",
+   "source": "marketlab_intraday",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "ICT unicorn": {
+   "key": "tier_f_ict_unicorn",
+   "tier": "F",
+   "source": "tier",
+   "kind": "trend",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "VWAP mean reversion": {
+   "key": "tier_c_vwap_mr",
+   "tier": "C",
+   "source": "tier",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "vwap_touch",
+    "rr1",
+    "eod"
+   ],
+   "default_exit": "vwap_touch",
+   "gated": null
+  },
+  "ORB 15m (rvol)": {
+   "key": "tier_c_orb_15",
+   "tier": "C",
+   "source": "tier",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "ORB 30m (rvol)": {
+   "key": "tier_c_orb_30",
+   "tier": "C",
+   "source": "tier",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "Absorption reversal": {
+   "key": "tier_b_absorption",
+   "tier": "B",
+   "source": "tier",
+   "kind": "flow",
+   "direction": "both",
+   "exits": [
+    "rr2",
+    "vwap_touch",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "CVD divergence": {
+   "key": "tier_b_cvd_divergence",
+   "tier": "B",
+   "source": "tier",
+   "kind": "flow",
+   "direction": "both",
+   "exits": [
+    "rr1",
+    "rr15",
+    "rr2",
+    "rr3",
+    "be2",
+    "trail",
+    "scale",
+    "eod"
+   ],
+   "default_exit": "rr2",
+   "gated": null
+  },
+  "80% rule (value area)": {
+   "key": "tier_b_amt_80",
+   "tier": "B",
+   "source": "tier",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "va_edge",
+    "eod"
+   ],
+   "default_exit": "va_edge",
+   "gated": null
+  },
+  "Initial balance extension": {
+   "key": "tier_b_ib_ext",
+   "tier": "B",
+   "source": "tier",
+   "kind": "breakout",
+   "direction": "both",
+   "exits": [
+    "ib_ext",
+    "eod"
+   ],
+   "default_exit": "ib_ext",
+   "gated": null
+  },
+  "Open drive away from value": {
+   "key": "tier_b_open_drive",
+   "tier": "B",
+   "source": "tier",
+   "kind": "trend",
+   "direction": "both",
+   "exits": [
+    "eod"
+   ],
+   "default_exit": "eod",
+   "gated": null
+  },
+  "Poor extreme repair": {
+   "key": "tier_b_poor_extreme",
+   "tier": "B",
+   "source": "tier",
+   "kind": "mr",
+   "direction": "both",
+   "exits": [
+    "poc_touch",
+    "eod"
+   ],
+   "default_exit": "poc_touch",
+   "gated": null
+  },
+  "SMT divergence Nifty vs Bank Nifty": {
+   "key": "tier_b_smt",
+   "tier": "B",
+   "source": "tier",
+   "kind": "index_timing",
+   "direction": "both",
+   "exits": [
+    "vwap_touch",
+    "eod"
+   ],
+   "default_exit": "vwap_touch",
+   "gated": null
+  },
+  "151 ANN on 15-minute bars": {
+   "key": "k151_ann_15m",
+   "tier": "none",
+   "source": "k151",
+   "kind": "event",
+   "direction": "long",
+   "exits": [
+    "eod"
+   ],
+   "default_exit": "eod",
+   "gated": null
+  },
+  "Pre-open imbalance follow": {
+   "key": "flow_preopen_imb",
+   "tier": "none",
+   "source": "flow",
+   "kind": "flow",
+   "direction": "both",
+   "exits": [
+    "eod"
+   ],
+   "default_exit": "eod",
+   "gated": null
+  },
+  "First-hour CVD trend": {
+   "key": "flow_cvd_trend",
+   "tier": "none",
+   "source": "flow",
+   "kind": "flow",
+   "direction": "both",
+   "exits": [
+    "eod"
+   ],
+   "default_exit": "eod",
+   "gated": null
+  },
+  "Dealer gamma regime on Nifty": {
+   "key": "flow_gex_regime",
+   "tier": "none",
+   "source": "flow",
+   "kind": "index_timing",
+   "direction": "both",
+   "exits": [
+    "eod"
+   ],
+   "default_exit": "eod",
+   "gated": null
+  }
+ },
+ "exploratory": true
+}

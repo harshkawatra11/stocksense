@@ -1,0 +1,91 @@
+{
+ "asof": "2026-11-24",
+ "gated": [
+  {
+   "side": 1,
+   "target": 165,
+   "strategies": [
+    "tier_b_vcp",
+    "flow_delivery_spike"
+   ],
+   "evidence": 0.93,
+   "best_trial": "tier_b_vcp-t07",
+   "net_sharpe_5l": 1.12,
+   "dsr": 0.71,
+   "pbo": 0.18,
+   "trades_oos": 142,
+   "qty": 158,
+   "notional_inr": 24079,
+   "risk_inr": 995,
+   "reason": "VCP break + delivery spike; 2 gated strategies",
+   "sym": "TATASTEEL",
+   "entry_ref": 152.4,
+   "stop": 146.1
+  },
+  {
+   "side": 1,
+   "target": null,
+   "strategies": [
+    "tier_b_vcp"
+   ],
+   "evidence": 0.52,
+   "best_trial": "tier_b_vcp-t07",
+   "net_sharpe_5l": 1.12,
+   "dsr": 0.71,
+   "pbo": 0.18,
+   "trades_oos": 142,
+   "qty": 19,
+   "notional_inr": 32537,
+   "risk_inr": 997,
+   "reason": "VCP break; 1 gated strategy",
+   "sym": "HDFCBANK",
+   "entry_ref": 1712.5,
+   "stop": 1660
+  }
+ ],
+ "exploratory": [
+  {
+   "side": 1,
+   "target": 280,
+   "strategies": [
+    "ml_swing_breakout20"
+   ],
+   "evidence": 0,
+   "best_trial": "",
+   "net_sharpe_5l": 0.6,
+   "dsr": 0,
+   "pbo": 0,
+   "trades_oos": 40,
+   "qty": 0,
+   "notional_inr": 0,
+   "risk_inr": 0,
+   "reason": "20-day breakout; exploratory",
+   "sym": "ZOMATO",
+   "entry_ref": 262.1,
+   "stop": 251
+  },
+  {
+   "side": 1,
+   "target": null,
+   "strategies": [
+    "k151_hp_mom"
+   ],
+   "evidence": 0,
+   "best_trial": "",
+   "net_sharpe_5l": 0.3,
+   "dsr": 0,
+   "pbo": 0,
+   "trades_oos": 22,
+   "qty": 0,
+   "notional_inr": 0,
+   "risk_inr": 0,
+   "reason": "momentum; exploratory",
+   "sym": "IRFC",
+   "entry_ref": 148.3,
+   "stop": 141
+  }
+ ],
+ "n_strategies_passing": 2,
+ "n_trials_total": 1840,
+ "note": ""
+}

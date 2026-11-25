@@ -1,0 +1,33 @@
+.of-page,.pk-page,.st-page{font:13px/1.5 Inter,system-ui,sans-serif;color:#141a26;padding:14px 22px 60px;max-width:1500px;margin:0 auto}
+.of-page h1,.pk-page h1,.st-page h1{font:700 28px "Barlow Condensed",Inter,sans-serif;margin:4px 0 8px}
+.of-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+.of-bar input,.st-page input,.st-page select{font:13px "JetBrains Mono",monospace;padding:4px 8px;border:1px solid #d9dee6;border-radius:6px;background:#fff}
+.of-bar button,.st-page button,.of-tog button{font:600 12px Inter,sans-serif;padding:4px 10px;border:1px solid #d9dee6;border-radius:6px;background:#fff;cursor:pointer}
+.of-tog button.on{background:#141a26;color:#fff}
+.of-badge{display:inline-block;font:600 11px Inter,sans-serif;padding:2px 8px;border-radius:10px;background:#e7ebf0;color:#3d4659;margin-right:6px}
+.of-grid{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+@media (max-width:900px){.of-grid{grid-template-columns:1fr}}
+.of-panel{background:#fff;border:1px solid #d9dee6;border-radius:10px;padding:10px 12px;margin-bottom:12px;min-width:0}
+.of-panel h2{font:700 15px "Barlow Condensed",Inter,sans-serif;letter-spacing:.02em;margin:0 0 6px;display:flex;gap:8px;align-items:center}
+.of-panel h2 a{font-weight:400;color:#2563eb;text-decoration:none}
+.of-panel canvas{width:100%;display:block}
+.of-chart{height:300px}
+.of-chart.sm{height:160px}
+.of-note{color:#6b7487;font-size:12px}
+.of-panel table,.st-page table{border-collapse:collapse;width:100%;font-size:12px}
+.of-panel th,.of-panel td,.st-page th,.st-page td{border-bottom:1px solid #e7ebf0;padding:3px 8px;text-align:left}
+.up{color:#2f9e5f}.down{color:#d6455d}
+.st-sec{background:#fff;border:1px solid #d9dee6;border-radius:10px;padding:10px 14px;margin-bottom:14px;overflow-x:auto}
+.st-sec h2,.pk-sec h2{font:700 18px "Barlow Condensed",Inter,sans-serif;margin:0 0 6px}
+.st-tierbar{height:12px;background:#2563eb;border-radius:3px}
+.st-warn{background:#fff7e0;border:1px solid #f1d58a;color:#6b4e00;padding:6px 10px;border-radius:6px;margin:6px 0;font-size:12px}
+.pk-strip{display:flex;flex-wrap:wrap;gap:16px;background:#fff;border:1px solid #d9dee6;border-radius:10px;padding:10px 14px;margin-bottom:12px}
+.pk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-bottom:18px}
+.pk-card{background:#fff;border:1px solid #d9dee6;border-left:4px solid #2f9e5f;border-radius:10px;padding:10px 12px}
+.pk-card.expl{border-left:4px dashed #98a1b3;border-color:#c5cad4;background:#f6f7f9}
+.pk-card h3{font:700 20px "Barlow Condensed",Inter,sans-serif;margin:0 0 4px;display:flex;justify-content:space-between}
+.pk-chip{display:inline-block;font:600 11px "JetBrains Mono",monospace;background:#e7ebf0;border-radius:10px;padding:1px 8px;margin:0 4px 4px 0}
+.pk-ev{height:6px;background:#e7ebf0;border-radius:3px;margin:4px 0 8px}
+.pk-ev i{display:block;height:6px;background:#2f9e5f;border-radius:3px}
+.pk-label{font:700 11px Inter,sans-serif;color:#6b7487;border:1px solid #98a1b3;border-radius:4px;padding:0 6px}
+.pk-foot{color:#6b7487;font-size:12px;margin-top:16px}

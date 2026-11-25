@@ -1,0 +1,9 @@
+{
+ "sym": "RELIANCE",
+ "date": "2026-11-24",
+ "method": "resting depth, 5 levels, captured forward-only",
+ "data_source": "depth_snaps",
+ "estimated": true,
+ "empty": true,
+ "reason": "depth not captured for this date"
+}
