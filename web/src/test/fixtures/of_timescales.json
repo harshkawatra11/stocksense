@@ -1,0 +1,45 @@
+{
+ "sym": "RELIANCE",
+ "date": "2026-11-24",
+ "method": "sign of structure, VWAP/SMA20, value area and 10-bar ROC per timeframe",
+ "data_source": "stored_5m",
+ "estimated": true,
+ "rows": [
+  {
+   "tf": "5m",
+   "trend": 1,
+   "vs_value": 1,
+   "vs_va": 0,
+   "roc": 1
+  },
+  {
+   "tf": "15m",
+   "trend": 1,
+   "vs_value": 1,
+   "vs_va": 1,
+   "roc": 1
+  },
+  {
+   "tf": "60m",
+   "trend": 0,
+   "vs_value": 1,
+   "vs_va": 1,
+   "roc": -1
+  },
+  {
+   "tf": "1d",
+   "trend": -1,
+   "vs_value": -1,
+   "vs_va": -1,
+   "roc": -1
+  },
+  {
+   "tf": "1w",
+   "trend": 1,
+   "vs_value": 1,
+   "vs_va": 1,
+   "roc": 1
+  }
+ ],
+ "score": 0.4
+}

@@ -1,0 +1,470 @@
+{
+ "sym": "RELIANCE",
+ "date": "2026-11-24",
+ "method": "BVC estimate from 1-minute bars",
+ "data_source": "stored_1m",
+ "estimated": true,
+ "tf": 5,
+ "bin": 1,
+ "bars": [
+  {
+   "ts": 1763956500,
+   "open": 1500,
+   "high": 1504.5,
+   "low": 1498.5,
+   "close": 1503,
+   "volume": 20000,
+   "rows": [
+    {
+     "price": 1498,
+     "buy": 1338,
+     "sell": 1374,
+     "delta": -36
+    },
+    {
+     "price": 1499,
+     "buy": 1369,
+     "sell": 1387,
+     "delta": -18
+    },
+    {
+     "price": 1500,
+     "buy": 1400,
+     "sell": 1400,
+     "delta": 0
+    },
+    {
+     "price": 1501,
+     "buy": 1431,
+     "sell": 1413,
+     "delta": 18
+    },
+    {
+     "price": 1502,
+     "buy": 1462,
+     "sell": 1426,
+     "delta": 36
+    },
+    {
+     "price": 1503,
+     "buy": 1493,
+     "sell": 1439,
+     "delta": 54
+    },
+    {
+     "price": 1504,
+     "buy": 1524,
+     "sell": 1452,
+     "delta": 72
+    },
+    {
+     "price": 1505,
+     "buy": 1555,
+     "sell": 1465,
+     "delta": 90
+    }
+   ],
+   "delta": 216,
+   "poc": 1505,
+   "stacked_imbalances": []
+  },
+  {
+   "ts": 1763956800,
+   "open": 1503,
+   "high": 1506.5,
+   "low": 1501.5,
+   "close": 1505,
+   "volume": 27919,
+   "rows": [
+    {
+     "price": 1501,
+     "buy": 1448,
+     "sell": 1442,
+     "delta": 6
+    },
+    {
+     "price": 1502,
+     "buy": 1479,
+     "sell": 1455,
+     "delta": 24
+    },
+    {
+     "price": 1503,
+     "buy": 1510,
+     "sell": 1468,
+     "delta": 42
+    },
+    {
+     "price": 1504,
+     "buy": 1541,
+     "sell": 1481,
+     "delta": 60
+    },
+    {
+     "price": 1505,
+     "buy": 1572,
+     "sell": 1494,
+     "delta": 78
+    },
+    {
+     "price": 1506,
+     "buy": 1603,
+     "sell": 1507,
+     "delta": 96
+    },
+    {
+     "price": 1507,
+     "buy": 1634,
+     "sell": 1520,
+     "delta": 114
+    }
+   ],
+   "delta": 420,
+   "poc": 1507,
+   "stacked_imbalances": []
+  },
+  {
+   "ts": 1763957100,
+   "open": 1505,
+   "high": 1506.5,
+   "low": 1502.5,
+   "close": 1504,
+   "volume": 20838,
+   "rows": [
+    {
+     "price": 1502,
+     "buy": 1496,
+     "sell": 1484,
+     "delta": 12
+    },
+    {
+     "price": 1503,
+     "buy": 1527,
+     "sell": 1497,
+     "delta": 30
+    },
+    {
+     "price": 1504,
+     "buy": 1558,
+     "sell": 1510,
+     "delta": 48
+    },
+    {
+     "price": 1505,
+     "buy": 1589,
+     "sell": 1523,
+     "delta": 66
+    },
+    {
+     "price": 1506,
+     "buy": 1620,
+     "sell": 1536,
+     "delta": 84
+    },
+    {
+     "price": 1507,
+     "buy": 1651,
+     "sell": 1549,
+     "delta": 102
+    }
+   ],
+   "delta": 342,
+   "poc": 1507,
+   "stacked_imbalances": []
+  },
+  {
+   "ts": 1763957400,
+   "open": 1504,
+   "high": 1509.5,
+   "low": 1502.5,
+   "close": 1508,
+   "volume": 28757,
+   "rows": [
+    {
+     "price": 1502,
+     "buy": 1513,
+     "sell": 1513,
+     "delta": 0
+    },
+    {
+     "price": 1503,
+     "buy": 1544,
+     "sell": 1526,
+     "delta": 18
+    },
+    {
+     "price": 1504,
+     "buy": 1575,
+     "sell": 1539,
+     "delta": 36
+    },
+    {
+     "price": 1505,
+     "buy": 1606,
+     "sell": 1552,
+     "delta": 54
+    },
+    {
+     "price": 1506,
+     "buy": 1637,
+     "sell": 1565,
+     "delta": 72
+    },
+    {
+     "price": 1507,
+     "buy": 1668,
+     "sell": 1578,
+     "delta": 90
+    },
+    {
+     "price": 1508,
+     "buy": 1699,
+     "sell": 1591,
+     "delta": 108
+    },
+    {
+     "price": 1509,
+     "buy": 830,
+     "sell": 1604,
+     "delta": -774
+    },
+    {
+     "price": 1510,
+     "buy": 861,
+     "sell": 1617,
+     "delta": -756
+    }
+   ],
+   "delta": -1152,
+   "poc": 1508,
+   "stacked_imbalances": [
+    {
+     "side": "buy",
+     "from_price": 1503,
+     "to_price": 1505,
+     "n": 3
+    }
+   ]
+  },
+  {
+   "ts": 1763957700,
+   "open": 1508,
+   "high": 1511.5,
+   "low": 1506.5,
+   "close": 1510,
+   "volume": 21676,
+   "rows": [
+    {
+     "price": 1506,
+     "buy": 1654,
+     "sell": 1594,
+     "delta": 60
+    },
+    {
+     "price": 1507,
+     "buy": 1685,
+     "sell": 1607,
+     "delta": 78
+    },
+    {
+     "price": 1508,
+     "buy": 816,
+     "sell": 1620,
+     "delta": -804
+    },
+    {
+     "price": 1509,
+     "buy": 847,
+     "sell": 1633,
+     "delta": -786
+    },
+    {
+     "price": 1510,
+     "buy": 878,
+     "sell": 1646,
+     "delta": -768
+    },
+    {
+     "price": 1511,
+     "buy": 909,
+     "sell": 1659,
+     "delta": -750
+    },
+    {
+     "price": 1512,
+     "buy": 940,
+     "sell": 1672,
+     "delta": -732
+    }
+   ],
+   "delta": -3702,
+   "poc": 1507,
+   "stacked_imbalances": []
+  },
+  {
+   "ts": 1763958000,
+   "open": 1510,
+   "high": 1511.5,
+   "low": 1506.5,
+   "close": 1508,
+   "volume": 29595,
+   "rows": [
+    {
+     "price": 1506,
+     "buy": 1671,
+     "sell": 1623,
+     "delta": 48
+    },
+    {
+     "price": 1507,
+     "buy": 802,
+     "sell": 1636,
+     "delta": -834
+    },
+    {
+     "price": 1508,
+     "buy": 833,
+     "sell": 1649,
+     "delta": -816
+    },
+    {
+     "price": 1509,
+     "buy": 864,
+     "sell": 1662,
+     "delta": -798
+    },
+    {
+     "price": 1510,
+     "buy": 895,
+     "sell": 1675,
+     "delta": -780
+    },
+    {
+     "price": 1511,
+     "buy": 926,
+     "sell": 1688,
+     "delta": -762
+    },
+    {
+     "price": 1512,
+     "buy": 957,
+     "sell": 601,
+     "delta": 356
+    }
+   ],
+   "delta": -3586,
+   "poc": 1506,
+   "stacked_imbalances": []
+  },
+  {
+   "ts": 1763958300,
+   "open": 1508,
+   "high": 1509.5,
+   "low": 1503.5,
+   "close": 1505,
+   "volume": 22514,
+   "rows": [
+    {
+     "price": 1503,
+     "buy": 1595,
+     "sell": 1613,
+     "delta": -18
+    },
+    {
+     "price": 1504,
+     "buy": 1626,
+     "sell": 1626,
+     "delta": 0
+    },
+    {
+     "price": 1505,
+     "buy": 1657,
+     "sell": 1639,
+     "delta": 18
+    },
+    {
+     "price": 1506,
+     "buy": 1688,
+     "sell": 1652,
+     "delta": 36
+    },
+    {
+     "price": 1507,
+     "buy": 819,
+     "sell": 1665,
+     "delta": -846
+    },
+    {
+     "price": 1508,
+     "buy": 850,
+     "sell": 1678,
+     "delta": -828
+    },
+    {
+     "price": 1509,
+     "buy": 881,
+     "sell": 1691,
+     "delta": -810
+    },
+    {
+     "price": 1510,
+     "buy": 912,
+     "sell": 604,
+     "delta": 308
+    }
+   ],
+   "delta": -2140,
+   "poc": 1506,
+   "stacked_imbalances": []
+  },
+  {
+   "ts": 1763958600,
+   "open": 1505,
+   "high": 1507.5,
+   "low": 1503.5,
+   "close": 1506,
+   "volume": 30433,
+   "rows": [
+    {
+     "price": 1503,
+     "buy": 1612,
+     "sell": 1642,
+     "delta": -30
+    },
+    {
+     "price": 1504,
+     "buy": 1643,
+     "sell": 1655,
+     "delta": -12
+    },
+    {
+     "price": 1505,
+     "buy": 1674,
+     "sell": 1668,
+     "delta": 6
+    },
+    {
+     "price": 1506,
+     "buy": 805,
+     "sell": 1681,
+     "delta": -876
+    },
+    {
+     "price": 1507,
+     "buy": 836,
+     "sell": 1694,
+     "delta": -858
+    },
+    {
+     "price": 1508,
+     "buy": 867,
+     "sell": 607,
+     "delta": 260
+    }
+   ],
+   "delta": -1510,
+   "poc": 1505,
+   "stacked_imbalances": []
+  }
+ ]
+}

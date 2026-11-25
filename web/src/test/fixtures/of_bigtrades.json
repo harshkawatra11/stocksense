@@ -1,0 +1,43 @@
+{
+ "sym": "RELIANCE",
+ "date": "2026-11-24",
+ "method": "volume above 5x its time-of-day median",
+ "data_source": "stored_1m",
+ "estimated": true,
+ "big": [
+  {
+   "ts": 1763959200,
+   "volume": 98000,
+   "baseline": 18000,
+   "ratio": 5.44,
+   "side": 1,
+   "ret_5m": 0.0004,
+   "ret_15m": 0.0011,
+   "ret_30m": -0.0003,
+   "mfe": 0.003,
+   "mae": -0.001
+  },
+  {
+   "ts": 1763960400,
+   "volume": 91000,
+   "baseline": 17000,
+   "ratio": 5.35,
+   "side": -1,
+   "ret_5m": null,
+   "ret_15m": null,
+   "ret_30m": null,
+   "mfe": null,
+   "mae": null
+  }
+ ],
+ "absorption": [
+  {
+   "ts": 1763960700,
+   "side": "bid",
+   "level": "day_low",
+   "price": 1514,
+   "volume_ratio": 3.4,
+   "range_ratio": 0.4
+  }
+ ]
+}
