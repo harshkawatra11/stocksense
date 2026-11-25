@@ -1,4 +1,2 @@
-// Placeholder: the single chart modal (smart.html's variant) is built by card M6.2.
-export function ChartModal() {
-  return <div id="chartModalHost" hidden />;
-}
+// The single shared chart modal (smart.html's variant) lives in components/smart; Market Lab's two variants were identical JS.
+export { ChartModal } from "./smart/ChartModal";

@@ -1,8 +1,11 @@
 import "@/styles/ml-smart.css";
 import "@/styles/ml-sector.css";
 import "@/styles/ml-lab.css";
+import { Suspense } from "react";
 import { ChartModal } from "@/components/ChartModal";
-import { LabActionsProvider } from "@/lib/ml/actions";
+import { ChartHost } from "@/components/smart/ChartHost";
+import { SmartSection } from "@/components/smart/SmartSection";
+import { SectorSection } from "@/components/sector/SectorSection";
 
 function Placeholder({ name, card }: { name: string; card: string }) {
   return (
@@ -14,19 +17,22 @@ function Placeholder({ name, card }: { name: string; card: string }) {
 
 export default function Home() {
   return (
-    <LabActionsProvider>
+    <ChartHost>
       <section className="ml-smart section" id="smart">
-        <Placeholder name="Smart Money" card="M6.2" />
+        <SmartSection />
         <ChartModal />
       </section>
       <div className="divider" />
       <section className="ml-sector section" id="sector">
-        <Placeholder name="Sector Map" card="M6.3" />
+        {/* useSearchParams needs a Suspense boundary in a static export */}
+        <Suspense fallback={<div id="boot">Sector Map loading…</div>}>
+          <SectorSection />
+        </Suspense>
       </section>
       <div className="divider" />
       <section className="ml-lab section" id="lab">
         <Placeholder name="Swing Lab" card="M6.4" />
       </section>
-    </LabActionsProvider>
+    </ChartHost>
   );
 }

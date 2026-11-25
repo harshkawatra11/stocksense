@@ -1,0 +1,692 @@
+{
+ "stocks": {
+  "S0": {
+   "ltp": null,
+   "pct": null
+  },
+  "S1": {
+   "ltp": null,
+   "pct": null
+  },
+  "S2": {
+   "ltp": null,
+   "pct": null
+  },
+  "S3": {
+   "ltp": null,
+   "pct": null
+  },
+  "S4": {
+   "ltp": null,
+   "pct": null
+  },
+  "S5": {
+   "ltp": null,
+   "pct": null
+  },
+  "S6": {
+   "ltp": null,
+   "pct": null
+  },
+  "S7": {
+   "ltp": null,
+   "pct": null
+  },
+  "S8": {
+   "ltp": null,
+   "pct": null
+  },
+  "S9": {
+   "ltp": null,
+   "pct": null
+  },
+  "S10": {
+   "ltp": null,
+   "pct": null
+  },
+  "S11": {
+   "ltp": null,
+   "pct": null
+  },
+  "S12": {
+   "ltp": null,
+   "pct": null
+  },
+  "S13": {
+   "ltp": null,
+   "pct": null
+  },
+  "S14": {
+   "ltp": null,
+   "pct": null
+  },
+  "S15": {
+   "ltp": null,
+   "pct": null
+  },
+  "S16": {
+   "ltp": null,
+   "pct": null
+  },
+  "S17": {
+   "ltp": null,
+   "pct": null
+  },
+  "S18": {
+   "ltp": null,
+   "pct": null
+  },
+  "S19": {
+   "ltp": null,
+   "pct": null
+  },
+  "S20": {
+   "ltp": null,
+   "pct": null
+  },
+  "S21": {
+   "ltp": null,
+   "pct": null
+  },
+  "S22": {
+   "ltp": null,
+   "pct": null
+  },
+  "S23": {
+   "ltp": null,
+   "pct": null
+  },
+  "S24": {
+   "ltp": null,
+   "pct": null
+  },
+  "S25": {
+   "ltp": null,
+   "pct": null
+  },
+  "S26": {
+   "ltp": null,
+   "pct": null
+  },
+  "S27": {
+   "ltp": null,
+   "pct": null
+  },
+  "S28": {
+   "ltp": null,
+   "pct": null
+  },
+  "S29": {
+   "ltp": null,
+   "pct": null
+  },
+  "S30": {
+   "ltp": null,
+   "pct": null
+  },
+  "S31": {
+   "ltp": null,
+   "pct": null
+  },
+  "S32": {
+   "ltp": null,
+   "pct": null
+  },
+  "S33": {
+   "ltp": null,
+   "pct": null
+  },
+  "S34": {
+   "ltp": null,
+   "pct": null
+  },
+  "S35": {
+   "ltp": null,
+   "pct": null
+  },
+  "S36": {
+   "ltp": null,
+   "pct": null
+  },
+  "S37": {
+   "ltp": null,
+   "pct": null
+  },
+  "S38": {
+   "ltp": null,
+   "pct": null
+  },
+  "S39": {
+   "ltp": null,
+   "pct": null
+  },
+  "S40": {
+   "ltp": null,
+   "pct": null
+  },
+  "S41": {
+   "ltp": null,
+   "pct": null
+  },
+  "S42": {
+   "ltp": null,
+   "pct": null
+  },
+  "S43": {
+   "ltp": null,
+   "pct": null
+  },
+  "S44": {
+   "ltp": null,
+   "pct": null
+  },
+  "S45": {
+   "ltp": null,
+   "pct": null
+  },
+  "S46": {
+   "ltp": null,
+   "pct": null
+  },
+  "S47": {
+   "ltp": null,
+   "pct": null
+  },
+  "S48": {
+   "ltp": null,
+   "pct": null
+  },
+  "S49": {
+   "ltp": null,
+   "pct": null
+  },
+  "S50": {
+   "ltp": null,
+   "pct": null
+  },
+  "S51": {
+   "ltp": null,
+   "pct": null
+  },
+  "S52": {
+   "ltp": null,
+   "pct": null
+  },
+  "S53": {
+   "ltp": null,
+   "pct": null
+  },
+  "S54": {
+   "ltp": null,
+   "pct": null
+  },
+  "S55": {
+   "ltp": null,
+   "pct": null
+  },
+  "S56": {
+   "ltp": null,
+   "pct": null
+  },
+  "S57": {
+   "ltp": null,
+   "pct": null
+  },
+  "S58": {
+   "ltp": null,
+   "pct": null
+  },
+  "S59": {
+   "ltp": null,
+   "pct": null
+  },
+  "S60": {
+   "ltp": null,
+   "pct": null
+  },
+  "S61": {
+   "ltp": null,
+   "pct": null
+  },
+  "S62": {
+   "ltp": null,
+   "pct": null
+  },
+  "S63": {
+   "ltp": null,
+   "pct": null
+  },
+  "S64": {
+   "ltp": null,
+   "pct": null
+  },
+  "S65": {
+   "ltp": null,
+   "pct": null
+  },
+  "S66": {
+   "ltp": null,
+   "pct": null
+  },
+  "S67": {
+   "ltp": null,
+   "pct": null
+  },
+  "S68": {
+   "ltp": null,
+   "pct": null
+  },
+  "S69": {
+   "ltp": null,
+   "pct": null
+  },
+  "S70": {
+   "ltp": null,
+   "pct": null
+  },
+  "S71": {
+   "ltp": null,
+   "pct": null
+  },
+  "S72": {
+   "ltp": null,
+   "pct": null
+  },
+  "S73": {
+   "ltp": null,
+   "pct": null
+  },
+  "S74": {
+   "ltp": null,
+   "pct": null
+  },
+  "S75": {
+   "ltp": null,
+   "pct": null
+  },
+  "S76": {
+   "ltp": null,
+   "pct": null
+  },
+  "S77": {
+   "ltp": null,
+   "pct": null
+  },
+  "S78": {
+   "ltp": null,
+   "pct": null
+  },
+  "S79": {
+   "ltp": null,
+   "pct": null
+  },
+  "S80": {
+   "ltp": null,
+   "pct": null
+  },
+  "S81": {
+   "ltp": null,
+   "pct": null
+  },
+  "S82": {
+   "ltp": null,
+   "pct": null
+  },
+  "S83": {
+   "ltp": null,
+   "pct": null
+  },
+  "S84": {
+   "ltp": null,
+   "pct": null
+  },
+  "S85": {
+   "ltp": null,
+   "pct": null
+  },
+  "S86": {
+   "ltp": null,
+   "pct": null
+  },
+  "S87": {
+   "ltp": null,
+   "pct": null
+  },
+  "S88": {
+   "ltp": null,
+   "pct": null
+  },
+  "S89": {
+   "ltp": null,
+   "pct": null
+  },
+  "S90": {
+   "ltp": null,
+   "pct": null
+  },
+  "S91": {
+   "ltp": null,
+   "pct": null
+  },
+  "S92": {
+   "ltp": null,
+   "pct": null
+  },
+  "S93": {
+   "ltp": null,
+   "pct": null
+  },
+  "S94": {
+   "ltp": null,
+   "pct": null
+  },
+  "S95": {
+   "ltp": null,
+   "pct": null
+  },
+  "S96": {
+   "ltp": null,
+   "pct": null
+  },
+  "S97": {
+   "ltp": null,
+   "pct": null
+  },
+  "S98": {
+   "ltp": null,
+   "pct": null
+  },
+  "S99": {
+   "ltp": null,
+   "pct": null
+  },
+  "S100": {
+   "ltp": null,
+   "pct": null
+  },
+  "S101": {
+   "ltp": null,
+   "pct": null
+  },
+  "S102": {
+   "ltp": null,
+   "pct": null
+  },
+  "S103": {
+   "ltp": null,
+   "pct": null
+  },
+  "S104": {
+   "ltp": null,
+   "pct": null
+  },
+  "S105": {
+   "ltp": null,
+   "pct": null
+  },
+  "S106": {
+   "ltp": null,
+   "pct": null
+  },
+  "S107": {
+   "ltp": null,
+   "pct": null
+  },
+  "S108": {
+   "ltp": null,
+   "pct": null
+  },
+  "S109": {
+   "ltp": null,
+   "pct": null
+  },
+  "S110": {
+   "ltp": null,
+   "pct": null
+  },
+  "S111": {
+   "ltp": null,
+   "pct": null
+  },
+  "S112": {
+   "ltp": null,
+   "pct": null
+  },
+  "S113": {
+   "ltp": null,
+   "pct": null
+  },
+  "S114": {
+   "ltp": null,
+   "pct": null
+  },
+  "S115": {
+   "ltp": null,
+   "pct": null
+  },
+  "S116": {
+   "ltp": null,
+   "pct": null
+  },
+  "S117": {
+   "ltp": null,
+   "pct": null
+  },
+  "S118": {
+   "ltp": null,
+   "pct": null
+  },
+  "S119": {
+   "ltp": null,
+   "pct": null
+  },
+  "S120": {
+   "ltp": null,
+   "pct": null
+  },
+  "S121": {
+   "ltp": null,
+   "pct": null
+  },
+  "S122": {
+   "ltp": null,
+   "pct": null
+  },
+  "S123": {
+   "ltp": null,
+   "pct": null
+  },
+  "S124": {
+   "ltp": null,
+   "pct": null
+  },
+  "S125": {
+   "ltp": null,
+   "pct": null
+  },
+  "S126": {
+   "ltp": null,
+   "pct": null
+  },
+  "S127": {
+   "ltp": null,
+   "pct": null
+  },
+  "S128": {
+   "ltp": null,
+   "pct": null
+  },
+  "S129": {
+   "ltp": null,
+   "pct": null
+  },
+  "S130": {
+   "ltp": null,
+   "pct": null
+  },
+  "S131": {
+   "ltp": null,
+   "pct": null
+  },
+  "S132": {
+   "ltp": null,
+   "pct": null
+  },
+  "S133": {
+   "ltp": null,
+   "pct": null
+  },
+  "S134": {
+   "ltp": null,
+   "pct": null
+  },
+  "S135": {
+   "ltp": null,
+   "pct": null
+  },
+  "S136": {
+   "ltp": null,
+   "pct": null
+  },
+  "S137": {
+   "ltp": null,
+   "pct": null
+  },
+  "S138": {
+   "ltp": null,
+   "pct": null
+  },
+  "S139": {
+   "ltp": null,
+   "pct": null
+  },
+  "S140": {
+   "ltp": null,
+   "pct": null
+  },
+  "S141": {
+   "ltp": null,
+   "pct": null
+  },
+  "S142": {
+   "ltp": null,
+   "pct": null
+  },
+  "S143": {
+   "ltp": null,
+   "pct": null
+  },
+  "S144": {
+   "ltp": null,
+   "pct": null
+  },
+  "S145": {
+   "ltp": null,
+   "pct": null
+  },
+  "S146": {
+   "ltp": null,
+   "pct": null
+  },
+  "S147": {
+   "ltp": null,
+   "pct": null
+  },
+  "S148": {
+   "ltp": null,
+   "pct": null
+  },
+  "S149": {
+   "ltp": null,
+   "pct": null
+  }
+ },
+ "sectors": {
+  "Railways": {
+   "v": 1.58,
+   "last": 10000.0
+  },
+  "Energy": {
+   "v": 1.98,
+   "last": 10500.0
+  },
+  "Infra": {
+   "v": -0.19,
+   "last": 11000.0
+  },
+  "Cons Durables": {
+   "v": -0.04,
+   "last": 11500.0
+  },
+  "Metal": {
+   "v": -0.27,
+   "last": 12000.0
+  },
+  "Tourism": {
+   "v": 1.79,
+   "last": 12500.0
+  },
+  "Defence": {
+   "v": -1.2,
+   "last": 13000.0
+  },
+  "Auto": {
+   "v": 2.4,
+   "last": 13500.0
+  },
+  "Chemicals": {
+   "v": 0.66,
+   "last": 14000.0
+  },
+  "PSU Bank": {
+   "v": -0.62,
+   "last": 14500.0
+  },
+  "Cap Markets": {
+   "v": -1.55,
+   "last": 15000.0
+  },
+  "Realty": {
+   "v": -1.34,
+   "last": 15500.0
+  },
+  "FMCG": {
+   "v": -2.11,
+   "last": 16000.0
+  },
+  "Fin Services": {
+   "v": 0.17,
+   "last": 16500.0
+  },
+  "Healthcare": {
+   "v": 2.14,
+   "last": 17000.0
+  },
+  "IT": {
+   "v": 1.26,
+   "last": 17500.0
+  },
+  "Bank": {
+   "v": -1.45,
+   "last": 18000.0
+  },
+  "Pharma": {
+   "v": 1.07,
+   "last": 18500.0
+  },
+  "Media": {
+   "v": 0.01,
+   "last": 19000.0
+  },
+  "Cement": {
+   "v": 0.94,
+   "last": 19500.0
+  }
+ },
+ "nifty": {
+  "v": -1.25,
+  "last": 20000.0
+ },
+ "time": "2026-11-19T09:00:00+00:00",
+ "market": "open"
+}
