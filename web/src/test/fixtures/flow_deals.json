@@ -1,0 +1,15 @@
+{
+ "descriptive": true,
+ "rows": [
+  {
+   "date": "2026-11-11",
+   "symbol": "RELIANCE",
+   "buy_value_cr": 9.0,
+   "sell_value_cr": 2.0,
+   "net_value_cr": 7.0,
+   "n_deals": 2,
+   "top_client": "Y",
+   "flagged": true
+  }
+ ]
+}

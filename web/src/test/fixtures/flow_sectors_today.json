@@ -1,0 +1,131 @@
+{
+ "descriptive": true,
+ "range": "today",
+ "rows": [
+  {
+   "name": "PSU BANK",
+   "flow_dir": 1.0,
+   "turnover_share": 0.1438,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 1,
+   "down": 0,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "METAL",
+   "flow_dir": 1.0,
+   "turnover_share": 0.0525,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 1,
+   "down": 0,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "REALTY",
+   "flow_dir": 1.0,
+   "turnover_share": 0.0075,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 1,
+   "down": 0,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "POWER",
+   "flow_dir": 1.0,
+   "turnover_share": 0.0029,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 1,
+   "down": 0,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "OIL & GAS",
+   "flow_dir": 0.2688,
+   "turnover_share": 0.2397,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 1,
+   "down": 1,
+   "oi_quads": {
+    "long buildup": 1
+   },
+   "deliv_spikes": 1
+  },
+  {
+   "name": "BANK",
+   "flow_dir": 0.07,
+   "turnover_share": 0.112,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 1,
+   "down": 1,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "IT",
+   "flow_dir": -1.0,
+   "turnover_share": 0.1793,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 0,
+   "down": 2,
+   "oi_quads": {
+    "short buildup": 1
+   },
+   "deliv_spikes": 0
+  },
+  {
+   "name": "NBFC",
+   "flow_dir": -1.0,
+   "turnover_share": 0.0912,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 0,
+   "down": 1,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "PHARMA",
+   "flow_dir": -1.0,
+   "turnover_share": 0.0484,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 0,
+   "down": 1,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "HEALTHCARE",
+   "flow_dir": -1.0,
+   "turnover_share": 0.0969,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 0,
+   "down": 1,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  },
+  {
+   "name": "AUTO",
+   "flow_dir": -1.0,
+   "turnover_share": 0.0257,
+   "share_ratio": null,
+   "rotation": "neutral",
+   "up": 0,
+   "down": 1,
+   "oi_quads": {},
+   "deliv_spikes": 0
+  }
+ ]
+}

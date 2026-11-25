@@ -1,0 +1,22 @@
+{
+ "descriptive": true,
+ "scope": "stocks",
+ "rows": [
+  {
+   "symbol": "RELIANCE",
+   "quad_label": "long buildup",
+   "oi_chg_pct": 5.0,
+   "price_chg_pct": 1.0,
+   "basis_pct": 0.2,
+   "rollover_pct": 10.0
+  },
+  {
+   "symbol": "TCS",
+   "quad_label": "short buildup",
+   "oi_chg_pct": 3.0,
+   "price_chg_pct": 1.0,
+   "basis_pct": 0.2,
+   "rollover_pct": 10.0
+  }
+ ]
+}

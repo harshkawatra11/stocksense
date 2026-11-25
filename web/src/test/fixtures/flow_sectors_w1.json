@@ -1,0 +1,28 @@
+{
+ "descriptive": true,
+ "range": "w1",
+ "rows": [
+  {
+   "name": "IT",
+   "flow_dir": 0.5,
+   "turnover_share": 0.7,
+   "share_ratio": 1.75,
+   "rotation": "in",
+   "up": 15,
+   "down": 10,
+   "oi_quads": {},
+   "deliv_spikes": 5
+  },
+  {
+   "name": "BANK",
+   "flow_dir": -0.1,
+   "turnover_share": 0.3,
+   "share_ratio": 1.0,
+   "rotation": "neutral",
+   "up": 15,
+   "down": 10,
+   "oi_quads": {},
+   "deliv_spikes": 5
+  }
+ ]
+}
