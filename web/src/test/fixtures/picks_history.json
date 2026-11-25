@@ -1,0 +1,35 @@
+{
+ "days": 30,
+ "rows": [
+  {
+   "asof": "2026-11-20",
+   "sym": "SBIN",
+   "strat": "picks:tier_b_vcp-t07",
+   "status": "closed",
+   "entry": 801,
+   "exit": 818,
+   "r": 1.4,
+   "net_pct": 1.9
+  },
+  {
+   "asof": "2026-11-21",
+   "sym": "INFY",
+   "strat": "picks:tier_b_vcp-t07",
+   "status": "closed",
+   "entry": 1520,
+   "exit": 1498,
+   "r": -0.8,
+   "net_pct": -1.6
+  },
+  {
+   "asof": "2026-11-24",
+   "sym": "TATASTEEL",
+   "strat": "picks:tier_b_vcp-t07",
+   "status": "open",
+   "entry": 152.4,
+   "exit": null,
+   "r": null,
+   "net_pct": null
+  }
+ ]
+}
