@@ -29,6 +29,7 @@ from stocksense.marketlab.sectors import SectorEngine, build_sector_engine
 from stocksense.marketlab.sources import Sources
 from stocksense.marketlab.store import LabStore
 from stocksense.marketlab.tape import TapeEngine
+from stocksense.orderflow.heatmap import build_depth_capture
 
 WEB_OUT = Path(__file__).resolve().parents[3] / "web" / "out"
 
@@ -73,6 +74,10 @@ def create_app(
                 app.state.flow = build_flow_engine(settings, clock, store, app.state.tape)
             if app.state.flow is not None:
                 mgr.add("flow", app.state.flow.step, 30.0)
+            if app.state.depth is None:
+                app.state.depth = build_depth_capture(settings, clock, store)
+            if app.state.depth is not None:
+                mgr.add("depth", app.state.depth.step, 60.0)
             mgr.start()
         app.state.feeds = mgr
         yield
@@ -85,6 +90,7 @@ def create_app(
     app.state.sector = sector
     app.state.research = research
     app.state.flow = flow
+    app.state.depth = None
     app.add_middleware(ReadOnlyMiddleware)
     app.add_middleware(
         CORSMiddleware,

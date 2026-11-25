@@ -423,6 +423,14 @@ _RAW_NEW = [
         },
     ),
     _spec(
+        "depth_snaps",
+        "raw_new",
+        "symbol, ts, side, level",
+        "ts",
+        "day",
+        {"symbol": _S, "ts": _TS, "side": _S, "level": _I32, "price": _F, "qty": _F},
+    ),
+    _spec(
         "bars_1m",
         "raw_new",
         "symbol, ts",
@@ -779,3 +787,4 @@ def get_spec(dataset: str) -> DatasetSpec:
         return CATALOG[dataset]
     except KeyError:
         raise DataValidationError(f"unknown dataset: {dataset!r}") from None
+
